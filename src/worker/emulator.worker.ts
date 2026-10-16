@@ -68,7 +68,6 @@ import { MSS32 } from "./modules/mss32";
 import { SmackW32 } from "./modules/smackw32";
 import { BinkW32 } from "./modules/binkw32";
 import { Lgvid } from "./modules/lgvid";
-import { D3dim700 } from "./modules/d3dim700";
 import { Glide2x } from "./modules/glide2x";
 import { OpenGL32 } from "./modules/opengl32";
 import { Glu32 } from "./modules/glu32";
@@ -2544,7 +2543,6 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const smackw32 = new SmackW32();
       const binkw32 = new BinkW32();
       const lgvid = new Lgvid();
-      const d3dim700 = new D3dim700();
       const quartz = new Quartz();
       const dmusic = new DMusic();
       const amstream = new Amstream();
@@ -2621,7 +2619,6 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         smackw32.initialize(process);
         binkw32.initialize(process);
         lgvid.initialize(process);
-        d3dim700.initialize(process);
       }
       quartz.initialize(process);
       dmusic.initialize(process);
@@ -2702,7 +2699,6 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.registerModule(smackw32.name, smackw32);
         process.registerModule(binkw32.name, binkw32);
         process.registerModule(lgvid.name, lgvid);
-        process.registerModule(d3dim700.name, d3dim700);
       }
       process.registerModule(quartz.name, quartz);
       process.registerModule(dmusic.name, dmusic);
@@ -2781,7 +2777,6 @@ const initV86 = async (canvas: OffscreenCanvas) => {
         process.dispatcher.registerModule(smackw32.name, smackw32.exports);
         process.dispatcher.registerModule(binkw32.name, binkw32.exports);
         process.dispatcher.registerModule(lgvid.name, lgvid.exports);
-        process.dispatcher.registerModule(d3dim700.name, d3dim700.exports);
       }
       process.dispatcher.registerModule(quartz.name, quartz.exports);
       process.dispatcher.registerModule(dmusic.name, dmusic.exports);
