@@ -10,6 +10,7 @@ import { Process } from "../core/process";
 import { ThunkImplementation, ThunkResult } from "../core/thunking/thunk-dispatcher";
 import { Logger, LogCategory } from "../core/logger";
 import { Mem } from "../core/memory/mem-accessor";
+import type { Vc6LocaleSnapshot } from "./crt-cpp-locale-vc6";
 import { System } from "../core/system";
 import { shutdownProcess } from "./kernel32/process/process";
 import { VfsFileHandle } from "../runtime/filesystem/vfs";
@@ -2735,6 +2736,16 @@ export class Msvcrt implements IModule {
     }
 
     private localeAddr = 0;
+    /** The C++ library's locale view of the CRT's current locale (VC6 _Locinfo). */
+    getCppLocaleSnapshot(): Vc6LocaleSnapshot {
+        if (this.currentLocale !== "C") {
+            throw new Error(`msvcrt: non-C locale snapshot is not implemented (${this.currentLocale})`);
+        }
+        this.ensureRuntimeStorage();
+        return { collateHandle: 0, collateCodePage: 0, ctypeHandle: 0, ctypeCodePage: 0,
+            ctypeTable: this.pctypeTableAddr };
+    }
+
     private currentLocale = "C";
     private setlocale(_category: number, localePtr: number): number {
         if (localePtr) {
