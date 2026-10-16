@@ -13,7 +13,7 @@ import { Mem } from "../core/memory/mem-accessor";
 import type { Vc6LocaleSnapshot } from "./crt-cpp-locale-vc6";
 import { System } from "../core/system";
 import { shutdownProcess } from "./kernel32/process/process";
-import { VfsFileHandle } from "../runtime/filesystem/vfs";
+import { VfsFileHandle, type VirtualFileSystem } from "../runtime/filesystem/vfs";
 import {
     fpuGetST, fpuPop, fpuPush, fpuSetST0,
     getFpuControlWord, setFpuControlWord, getFpuStatusWord, setFpuStatusWord,
@@ -41,6 +41,11 @@ import { registerCrtMathExports } from "./crt-math";
 import { registerCrtTimeExports, resetCrtTimeStatics } from "./crt-time";
 import { registerCrtStringExports } from "./crt-string";
 import { registerCrtMbExports } from "./crt-mb";
+import { registerLegacyCrtStringExports } from "./crt-legacy-strings";
+import { registerMsvcrtTimeLocaleExports } from "./msvcrt-time-locale";
+import { MsvcrtTimezoneState } from "./msvcrt-timezone";
+import { readWindowsTimezoneSnapshot } from "../runtime/windows-timezone";
+import { crtFileCharBytes, decodeCrtFileChar, encodeCrtFileChar } from "./crt-file-codec";
 import { registerCrtConvExports } from "./crt-conv";
 import { registerCrtPathExports } from "./crt-path";
 import { registerCrtSeh3Exports } from "./crt-seh3";
@@ -59,6 +64,10 @@ interface MsvcrtFileStream {
     fd: number;
     handle: VfsFileHandle;
     ungetChar: number;
+    /** A wide character pushed back by ungetwc, returned before any byte is read. */
+    ungetWide?: number;
+    /** ungetwc only accepts a push-back after a successful fgetwc. */
+    wideRead?: boolean;
     text: boolean;
     eof: boolean;
     err: boolean;
@@ -109,6 +118,9 @@ export class Msvcrt implements IModule {
     private newHandlerPtr = 0;
     private newMode = 0;
     private strerrorBuf = 0;
+    private timezoneState: MsvcrtTimezoneState | null = null;
+    /** tmpfile() streams: the file is deleted when that stream closes or the process exits. */
+    private temporaryFiles = new Map<string, { vfs: VirtualFileSystem; owner: MsvcrtFileStream; deleting?: Promise<void> }>();
     private crtDbgFlag = 0;
     /** Last x87 control-word write the CRT made, plus a call/mismatch tally. Preallocated and
      *  mutated in place: `controlfp` is on the UI render path. */
@@ -571,6 +583,13 @@ export class Msvcrt implements IModule {
         exports["fputc"] = (ctx, mem, args) => this.fputc(args[0] ?? 0, args[1] ?? 0);
         exports["putc"] = exports["fputc"];
         exports["ungetc"] = (ctx, mem, args) => this.ungetc(args[0] ?? 0, args[1] ?? 0);
+        exports["_getw"] = (ctx, mem, args) => this.readFileValue(args[0] ?? 0, false);
+        exports["_putw"] = (ctx, mem, args) => this.writeFileValue(args[0] ?? 0, args[1] ?? 0, false);
+        exports["fgetwc"] = (ctx, mem, args) => this.readFileValue(args[0] ?? 0, true);
+        exports["fputwc"] = (ctx, mem, args) => this.writeFileValue(args[0] ?? 0, args[1] ?? 0, true);
+        exports["ungetwc"] = (ctx, mem, args) => this.ungetwc(args[0] ?? 0, args[1] ?? 0);
+        exports["tmpfile"] = () => this.tmpfile();
+        exports["_strerror"] = (ctx, mem, args) => this.strerrorWithPrefix(args[0] ?? 0);
         exports["strerror"] = (ctx, mem, args) => this.strerror(args[0] ?? 0);
 
         // --- Character classification ---
@@ -630,7 +649,12 @@ export class Msvcrt implements IModule {
         exports["@$bdla$qpv"] = (ctx, mem, args) => this.free(args[0] ?? 0);
 
         // --- String formatting ---
-        exports["strftime"] = () => 0;
+        registerMsvcrtTimeLocaleExports(exports, {
+            alloc: size => this.malloc(size),
+            hasCLocale: () => this.currentLocale === "C",
+            timezoneName: isDst => { this.timezoneState!.tzset(); return this.timezoneState!.name(isDst); },
+            setErrno: value => { this.setErrno(value); },
+        });
         exports["_snwprintf"] = (ctx, mem, args) =>
             this.vsnwprintf(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0);
         exports["swprintf"] = (ctx, mem, args) => this.swprintf(args);
@@ -758,6 +782,7 @@ export class Msvcrt implements IModule {
             setNewMode: (mode) => { const prev = this.newMode; this.newMode = mode; return prev; },
         });
         registerVc9SetjmpExports(exports, { process: this.process });
+        registerLegacyCrtStringExports(exports);
     }
 
     reset(): void {
@@ -770,6 +795,7 @@ export class Msvcrt implements IModule {
         this.exitHandlers.length = 0;
         this.exitChainRunning = false;
         this.fds.clear();
+        this.temporaryFiles.clear();
         this.fdHandles.clear();
         this.handleFds.clear();
         this.fdNext = 3;
@@ -796,6 +822,7 @@ export class Msvcrt implements IModule {
         // — including the CRT's static time scratch, which lives in other modules.
         resetCrtTimeStatics();
         resetVc9TimeStatics();
+        this.timezoneState = null;
         this.errnoAddr = 0;
         this.pctypeVarAddr = 0;
         this.pctypeTableAddr = 0;
@@ -833,6 +860,13 @@ export class Msvcrt implements IModule {
     }
 
     private ensureRuntimeStorage(): void {
+        if (!this.timezoneState) {
+            this.timezoneState = new MsvcrtTimezoneState({
+                alloc: bytes => this.process.memory.alloc(bytes, "THUNK_DATA", "rw"),
+                environmentTZ: () => [...(this.process.environment ?? new Map())].find(([key]) => key.toUpperCase() === "TZ")?.[1],
+                windowsTimezone: readWindowsTimezoneSnapshot,
+            });
+        }
         if (this.errnoAddr === 0) {
             this.errnoAddr = this.process.memory.alloc(4, "THUNK_DATA", "rw");
             Mem.writeUint32(this.errnoAddr, 0);
@@ -1050,6 +1084,10 @@ export class Msvcrt implements IModule {
             Mem.writeUint32(this.hugeValAddr + 4, 0x7ff00000);
         }
         tg.registerDataExport("msvcrt", "_HUGE", this.hugeValAddr);
+        tg.registerDataExport("msvcrt", "_timezone", this.timezoneState!.timezone);
+        tg.registerDataExport("msvcrt", "_daylight", this.timezoneState!.daylight);
+        tg.registerDataExport("msvcrt", "_dstbias", this.timezoneState!.dstbias);
+        tg.registerDataExport("msvcrt", "_tzname", this.timezoneState!.tzname);
 
         // _environ aliases: exported CRT environment pointer.
         tg.registerDataExport("msvcrt", "_environ", this.environVarAddr);
@@ -3096,15 +3134,204 @@ export class Msvcrt implements IModule {
         };
     }
 
-    private fclose(filePtr: number): number {
+    private fclose(filePtr: number): number | Promise<ThunkResult> {
         const stream = this.fileStreams.get(filePtr);
         if (!stream) return -1;
         this.fds.delete(stream.fd);
         this.fileStreams.delete(filePtr);
         if (stream.bufPtr) { try { this.free(stream.bufPtr); } catch { /* best-effort */ } }
         if (stream.structPtr) { try { this.free(stream.structPtr); } catch { /* best-effort */ } }
+        if (this.temporaryFiles.get(stream.handle.path)?.owner === stream) {
+            return this.deleteTemporaryFile(stream.handle.path).then(
+                () => ({ value: 0, stackCleanup: 0 }),
+                (error) => {
+                    this.setErrno(5);
+                    Logger.warn(LogCategory.SYSTEM, `fclose temporary file: ${error}`);
+                    return { value: -1, stackCleanup: 0 };
+                },
+            );
+        }
         return 0;
     }
+
+    /** tmpfile: a new binary update stream on a unique file, deleted when it is closed. */
+    private tmpfile(): number {
+        const vfs = System.getInstance().fileSystem;
+        for (let attempt = 0; attempt < 32767; attempt++) {
+            const path = vfs.resolvePath(`\\s${(this.tempnamCounter++).toString(16)}.tmp`);
+            if (vfs.fileExists(path)) continue;
+            // CREATE_NEW: a candidate name must never truncate an existing file.
+            const handle = vfs.openSync(path, 0xc0000000, 1);
+            if (!handle) { this.setErrno(13); return 0; }
+            const fd = this.nextFd();
+            this.fds.set(fd, handle);
+            const fp = this.createFileStream(fd, handle, "w+b");
+            this.temporaryFiles.set(handle.path, { vfs, owner: this.fileStreams.get(fp)! });
+            return fp;
+        }
+        this.setErrno(24); // EMFILE
+        return 0;
+    }
+
+    private deleteTemporaryFile(path: string): Promise<void> {
+        const entry = this.temporaryFiles.get(path);
+        if (!entry) return Promise.resolve();
+        if (entry.deleting) return entry.deleting;
+        entry.deleting = (async () => {
+            const removed = await entry.vfs.deleteFile(path);
+            if (!removed && entry.vfs.fileExists(path)) throw new Error(`tmpfile cleanup failed: ${path}`);
+            if (this.temporaryFiles.get(path) === entry) this.temporaryFiles.delete(path);
+        })().catch((error) => { entry.deleting = undefined; throw error; });
+        return entry.deleting;
+    }
+
+    /** Normal termination removes the temporary files tmpfile created and nobody closed. */
+    async cleanupProcessFiles(): Promise<void> {
+        await Promise.all(Array.from(this.temporaryFiles.keys(), (path) => this.deleteTemporaryFile(path)));
+    }
+
+    /** _strerror: "<prefix>: <message>\n", or "<message>\n" for a NULL prefix (prefix <= 94 chars). */
+    private strerrorWithPrefix(prefixPtr: number): number {
+        const errnum = this.errnoAddr ? (Mem.readInt32(this.errnoAddr) ?? 0) : 0;
+        let prefix = "";
+        if (prefixPtr) {
+            prefix = this.readCString(prefixPtr, 95);
+            if (prefix.length > 94) throw new Error("_strerror: prefix exceeds 94 characters");
+        }
+        const text = `${prefix ? `${prefix}: ` : ""}${this.strerrorMessage(errnum)}\n`;
+        if (!this.strerrorBuf) this.strerrorBuf = this.process.memory.alloc(128, "THUNK_DATA", "rw");
+        this.writeCString(this.strerrorBuf, text);
+        return this.strerrorBuf >>> 0;
+    }
+
+    private readFileValue(filePtr: number, wide: boolean): number | Promise<ThunkResult> {
+        const failure = wide ? 0xffff : -1;
+        const stream = this.fileStreams.get(filePtr);
+        if (!stream) { this.setErrno(filePtr ? 9 : 22); return failure; }
+        if ((stream.handle.access & 0x80000000) === 0) { stream.err = true; this.setErrno(9); return failure; }
+        this.flushGetcBuffer(filePtr, stream.handle);
+        if (wide && stream.ungetWide !== undefined) {
+            const ch = stream.ungetWide;
+            stream.ungetWide = undefined;
+            return ch;
+        }
+        if (stream.eof) return failure;
+        const codePage = this.currentLocale === 'C' ? 0 : EmulatorConfig.getInstance().ansiCodePage;
+        const byte = function* (): Generator<number, number, Uint8Array> {
+            if (stream.ungetChar >= 0) { const b = stream.ungetChar; stream.ungetChar = -1; return b; }
+            const data = yield 1;
+            if (!data.length) { stream.eof = true; return -1; }
+            return data[0];
+        };
+        const textByte = function* (): Generator<number, number, Uint8Array> {
+            const b = yield* byte();
+            if (!stream.text || b < 0) return b;
+            if (b === 0x1a) { stream.eof = true; return -1; }
+            if (b === 0x0d) {
+                const next = yield* byte();
+                if (next === 0x0a) return next;
+                if (next >= 0) stream.ungetChar = next;
+            }
+            return b;
+        };
+        const readValue = function* (self: Msvcrt): Generator<number, number, Uint8Array> {
+            const first = yield* textByte();
+            if (first < 0) return failure;
+            const count = wide ? (stream.text ? crtFileCharBytes(first, codePage) : 2) : 4;
+            const bytes = new Uint8Array(Math.max(count, 1));
+            bytes[0] = first;
+            for (let i = 1; i < count; i++) {
+                const b = yield* textByte();
+                if (b < 0) {
+                    if (wide && stream.text) { stream.err = true; self.setErrno(42); }
+                    return failure;
+                }
+                bytes[i] = b;
+            }
+            if (!wide) return new DataView(bytes.buffer).getInt32(0, true);
+            const ch = stream.text ? (count ? decodeCrtFileChar(bytes, codePage) : null) : bytes[0] | (bytes[1] << 8);
+            if (ch === null) { stream.err = true; self.setErrno(42); return failure; }
+            stream.wideRead = true;
+            return ch;
+        };
+        const vfs = System.getInstance().fileSystem;
+        const loop = readValue(this);
+        let step = loop.next(EMPTY_BYTES);
+        const fail = (): number => { stream.err = true; this.setErrno(5); return failure; };
+        try {
+            while (!step.done) {
+                const data = vfs.readSync(stream.handle, step.value);
+                if (data === null) {
+                    return (async (): Promise<ThunkResult> => {
+                        try {
+                            while (!step.done) step = loop.next(await vfs.read(stream.handle, step.value));
+                            return { value: step.value, stackCleanup: 0 };
+                        } catch { return { value: fail(), stackCleanup: 0 }; }
+                    })();
+                }
+                step = loop.next(data);
+            }
+            return step.value;
+        } catch { return fail(); }
+    }
+
+    private writeFileValue(value: number, filePtr: number, wide: boolean): number | Promise<ThunkResult> {
+        const failure = wide ? 0xffff : -1;
+        const stream = this.fileStreams.get(filePtr);
+        if (!stream) { this.setErrno(filePtr ? 9 : 22); return failure; }
+        if ((stream.handle.access & 0x40000000) === 0) { stream.err = true; this.setErrno(9); return failure; }
+        this.flushGetcBuffer(filePtr, stream.handle);
+        const returned = wide ? value & 0xffff : value | 0;
+        let bytes: Uint8Array | null;
+        if (wide && stream.text) {
+            bytes = encodeCrtFileChar(returned, this.currentLocale === 'C' ? 0 : EmulatorConfig.getInstance().ansiCodePage);
+        } else {
+            bytes = new Uint8Array(wide ? 2 : 4);
+            if (wide) new DataView(bytes.buffer).setUint16(0, returned, true);
+            else new DataView(bytes.buffer).setInt32(0, returned, true);
+        }
+        if (!bytes) { stream.err = true; this.setErrno(42); return failure; }
+        if (stream.text && bytes.includes(10)) {
+            bytes = Uint8Array.from(Array.from(bytes).flatMap(b => b === 10 ? [13, 10] : [b]));
+        }
+        const vfs = System.getInstance().fileSystem;
+        const data = bytes;
+        const finish = (written: number): number => {
+            if (written === data.length) return returned;
+            stream.err = true; this.setErrno(5); return failure;
+        };
+        try {
+            const written = vfs.writeSync(stream.handle, data);
+            if (written >= 0) return finish(written);
+            return (async (): Promise<ThunkResult> => {
+                try { return { value: finish(await vfs.write(stream.handle, data)), stackCleanup: 0 }; }
+                catch { return { value: finish(-1), stackCleanup: 0 }; }
+            })();
+        } catch { return finish(-1); }
+    }
+
+    /** fseek/fsetpos/rewind clear the end-of-file indicator and discard an ungetwc push-back.
+     *  https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fseek-fseeki64 */
+    private discardWidePushback(stream: MsvcrtFileStream): void {
+        stream.eof = false;
+        stream.ungetWide = undefined;
+        stream.wideRead = false;
+    }
+
+    private ungetwc(ch: number, filePtr: number): number {
+        const stream = this.fileStreams.get(filePtr);
+        if (!stream) { this.setErrno(filePtr ? 9 : 22); return 0xffff; }
+        const code = ch & 0xffff;
+        if (code === 0xffff || !stream.wideRead || stream.ungetWide !== undefined || !(stream.handle.access & 0x80000000)) return 0xffff;
+        if (stream.text && !encodeCrtFileChar(code, this.currentLocale === 'C' ? 0 : EmulatorConfig.getInstance().ansiCodePage)) {
+            this.setErrno(42);
+            return 0xffff;
+        }
+        stream.ungetWide = code;
+        stream.eof = false;
+        return code;
+    }
+
 
     private fread(ctx: unknown, mem: Uint8Array, bufPtr: number, size: number, count: number, filePtr: number): number | Promise<ThunkResult> {
         const stream = this.fileStreams.get(filePtr);
@@ -3294,6 +3521,7 @@ export class Msvcrt implements IModule {
         const stream = this.fileStreams.get(filePtr);
         if (!stream) return -1;
         this.flushGetcBuffer(filePtr, stream.handle);
+        this.discardWidePushback(stream);
         const vfs = System.getInstance().fileSystem;
         vfs.setPosition(stream.handle, offset | 0, origin | 0);
         return 0;
@@ -3314,6 +3542,8 @@ export class Msvcrt implements IModule {
         // Ctrl-Z in fgets). Position alone is not sufficient — a file can be fully consumed
         // while eof is still clear until the next read attempt fails.
         if (stream.eof) return 1;
+        // A character pushed back by ungetc/ungetwc is still unread.
+        if (stream.ungetChar >= 0 || stream.ungetWide !== undefined) return 0;
         const size = System.getInstance().fileSystem.getFileSize(stream.handle.path);
         return stream.handle.position >= size ? 1 : 0;
     }
@@ -3398,6 +3628,7 @@ export class Msvcrt implements IModule {
         const stream = this.fileStreams.get(filePtr);
         if (!stream) return 0;
         this.flushGetcBuffer(filePtr, stream.handle);
+        this.discardWidePushback(stream);
         stream.handle.position = 0;
         return 0;
     }
@@ -3416,6 +3647,7 @@ export class Msvcrt implements IModule {
         const stream = this.fileStreams.get(filePtr);
         if (!stream || !posPtr) return -1;
         const pos = Mem.readUint32(posPtr) ?? 0;
+        this.discardWidePushback(stream);
         stream.handle.position = pos;
         return 0;
     }
