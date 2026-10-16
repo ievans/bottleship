@@ -3633,22 +3633,41 @@ export class Msvcrt implements IModule {
         return 0;
     }
 
-    // fgetpos(FILE*, fpos_t*) — fpos_t is a 32-bit value on MSVC (long long on newer, but 32-bit games use 32-bit)
+    /** fgetpos/fsetpos: fpos_t is a 64-bit file offset.
+     *  https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/fgetpos */
     private fgetpos(filePtr: number, posPtr: number): number {
+        const fail = (error: number): number => { this.setErrno(error); return -1; };
         const stream = this.fileStreams.get(filePtr);
-        if (!stream || !posPtr) return -1;
-        const pos = stream.handle.position | 0;
-        Mem.writeUint32(posPtr, pos);
-        return 0;
+        if (!stream || !posPtr) return fail(22);
+        // The logical position: a pushed-back character has not been read yet.
+        let pos = stream.handle.position;
+        if (stream.ungetChar >= 0) pos--;
+        if (stream.ungetWide !== undefined) {
+            const bytes = stream.text ? encodeCrtFileChar(stream.ungetWide,
+                this.currentLocale === "C" ? 0 : EmulatorConfig.getInstance().ansiCodePage) : new Uint8Array(2);
+            if (!bytes) return fail(42);
+            pos -= bytes.length + (stream.text && stream.ungetWide === 10 ? 1 : 0);
+        }
+        if (!Number.isSafeInteger(pos) || pos < 0) return fail(22);
+        const bytes = new Uint8Array(8);
+        new DataView(bytes.buffer).setBigInt64(0, BigInt(pos), true);
+        return Mem.writeBytes(posPtr, bytes) === 8 ? 0 : fail(22);
     }
 
     // fsetpos(FILE*, const fpos_t*)
     private fsetpos(filePtr: number, posPtr: number): number {
+        const fail = (error: number): number => { this.setErrno(error); return -1; };
         const stream = this.fileStreams.get(filePtr);
-        if (!stream || !posPtr) return -1;
-        const pos = Mem.readUint32(posPtr) ?? 0;
+        if (!stream || !posPtr) return fail(22);
+        const bytes = Mem.readBytes(posPtr, 8);
+        if (!bytes || bytes.length !== 8) return fail(22);
+        const position = new DataView(bytes.buffer, bytes.byteOffset, 8).getBigInt64(0, true);
+        // A negative or unrepresentable position fails without moving the stream.
+        if (position < 0n || position > BigInt(Number.MAX_SAFE_INTEGER)) return fail(22);
+        this.flushGetcBuffer(filePtr, stream.handle);
+        System.getInstance().fileSystem.setPosition(stream.handle, Number(position), 0);
+        stream.ungetChar = -1;
         this.discardWidePushback(stream);
-        stream.handle.position = pos;
         return 0;
     }
 
