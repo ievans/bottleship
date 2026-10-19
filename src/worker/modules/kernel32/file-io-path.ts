@@ -54,7 +54,7 @@ const joinWindowsPath = (dir: string, file: string): string => {
     return `${d}\\${f}`.replace(/\//g, '\\');
 };
 
-const collectDefaultSearchDirectories = (): string[] => {
+export const collectDefaultSearchDirectories = (): string[] => {
     const system = System.getInstance();
     const vfs = system.fileSystem;
     const dirs: string[] = [];

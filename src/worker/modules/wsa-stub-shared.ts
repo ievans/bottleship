@@ -68,14 +68,14 @@ const WSADATA_IMAXSOCKETS_OFF = 390;
 const WSADATA_IMAXUDPDG_OFF = 392;
 const WSADATA_LPVENDORINFO_OFF = 394;
 
-/** Negotiate Winsock version for stub (1.1 or 2.2). */
+/** wVersion must not exceed the requested version; wHighVersion advertises our ceiling. */
 export function negotiateWsaVersion(wVersionRequested: number): { wVersion: number; wHighVersion: number } {
-    const req = wVersionRequested & 0xffff;
-    const lo = req & 0xff;
-    if (lo >= 2) {
-        return { wVersion: 0x0202, wHighVersion: 0x0202 };
-    }
-    return { wVersion: 0x0101, wHighVersion: 0x0101 };
+    const major = wVersionRequested & 0xff;
+    const minor = (wVersionRequested >>> 8) & 0xff;
+    const wVersion = major >= 2
+        ? ((major > 2 ? 2 : Math.min(minor, 2)) << 8) | 2
+        : (Math.min(minor, 1) << 8) | 1;
+    return { wVersion, wHighVersion: 0x0202 };
 }
 
 function writeU16(mem: Uint8Array | null, addr: number, value: number): boolean {
