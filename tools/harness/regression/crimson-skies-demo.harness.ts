@@ -146,7 +146,7 @@ try {
 
         // Next Mission opens the voiced briefing; Go To Flight Check answers once it may.
         await step("next mission", moves(harness(), -16, 10, 16).sleep(400).clickHere(150).sleep(20_000));
-        await step("aim at flight check", moves(harness(), 15, 2, 21).moveRelative(0, 4).sleep(400));
+        await step("aim at flight check", moves(harness(), 15, 1, 26).moveRelative(0, 4).sleep(400));
         for (let waited = 0; ; waited += 10_000) {
             await step("go to flight check", harness().clickHere(150).sleep(10_000));
             note = objectives(await capture("flight-check"));
