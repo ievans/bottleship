@@ -5,7 +5,7 @@ BottleShip targets native Win32 games of roughly **1997–2004** — the DirectD
 not exhaustive, and "runs" means different things at different stages (boots to menu vs. fully
 playable). Your mileage will vary with the exact build/version you own.
 
-Updated **2026-10-08** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
+Updated **2026-10-20** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
 been retested for this release. Observed demo stages are listed separately below. Successful
 GOG extraction does not establish gameplay coverage for that installer edition.
 
@@ -43,6 +43,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Quake II | playable | ✓ |
 | Half-Life: Uplink / Day One (demos) | playable | |
 | Half-Life 2 | boots | |
+| Empires: Dawn of the Modern World (2003, GOG) | boots | ✓ |
 | Red Faction | playable | ✓ |
 | Grand Theft Auto III | playable | |
 | Grand Theft Auto: Vice City | playable | |
@@ -109,6 +110,13 @@ spanning render passes currently report unavailable.
 The original Bard's Tale and Worms World Party demos are older editions than the working
 remasters. The original Bard's Tale demo has now been checked independently (see below);
 Worms World Party's original demo reaches its startup splash; match entry remains unverified.
+
+Empires: Dawn of the Modern World (2003, GOG offline edition): startup is now confirmed
+by the maintainer (2026-10-20), following the resource-loading and x87 precision fixes
+in `7b25393`, now included in main. This updates the earlier startup failure reported in
+[issue #31](https://github.com/jenissimo/bottleship/issues/31). Gameplay, campaign completion
+and stability have not been established by this confirmation; the original macOS/Apple
+Silicon environment from the issue has not been independently retested.
 
 ## Demo coverage
 
