@@ -397,10 +397,11 @@ function cmdAddDir(wgbPath: string, entryPrefix: string, localDir: string) {
 
     const tmp = `${wgbPath}.wgbtmp`;
     const result = withArchive(wgbPath, (fd, _size, entries) => {
-        const byName = new Map(files.map(f => [f.name, f.data]));
-        const existing = new Set(entries.map(e => e.name));
-        const extra = files.filter(f => !existing.has(f.name));
-        return rebuildStreaming(fd, entries, tmp, (n) => byName.get(n) ?? null, extra);
+        const key = (name: string) => name.replace(/\\/g, "/").toLowerCase();
+        const byName = new Map(files.map(f => [key(f.name), f.data]));
+        const existing = new Set(entries.map(e => key(e.name)));
+        const extra = files.filter(f => !existing.has(key(f.name)));
+        return rebuildStreaming(fd, entries, tmp, (n) => byName.get(key(n)) ?? null, extra);
     });
     renameSync(tmp, wgbPath);
     const bytes = files.reduce((n, f) => n + f.data.length, 0);

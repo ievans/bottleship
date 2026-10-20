@@ -2759,6 +2759,11 @@ export class ThunkDispatcher {
             hypercallDataManager.refreshTimeAfterThunk(cpu);
         }
 
+        if (isAsync || (typeof result === 'object' && result !== null && result.suspendedForCallback)) {
+            // Suspended handlers retain these inputs while later guest calls run.
+            this.reusableContext = { ...this.reusableContext };
+            this.reusableArgs = this.reusableArgs.slice();
+        }
         this.notifySchedulerBoundary(cpu);
 
         if (!isAsync) {
