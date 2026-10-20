@@ -13,8 +13,10 @@
  * deletes a container or accepts a licence: the trial shows its licence before the video
  * device dialog, so handle it separately once and rerun. The game draws its own cursor
  * from DirectInput deltas, so the menus are driven by relative moves from where it parks
- * the cursor on each screen. Continue on the campaign screen starts a pilot under the
- * default name, or resumes the saved one.
+ * the cursor on each screen. CRIMSON_START_AT=campaign or flight-check resumes from a
+ * manually opened checkpoint; position the relative cursor for the following menu move.
+ * The campaign check edits a pilot name and verifies visible
+ * text before continuing, so a broken DrawText measurement cannot pass as working input.
  */
 import { mkdirSync } from "node:fs";
 import { resolve } from "node:path";
@@ -81,43 +83,83 @@ async function motion(h: Chain = harness()): Promise<number> {
     return (r.named.sceneProbe as { motion: number }).motion;
 }
 
-async function videoDeviceDialogShown(): Promise<boolean> {
-    const r = await harness().state(["windows"]).run();
+async function startupStage(): Promise<'device' | 'game' | 'waiting'> {
+    const r = await harness().state(["windows", "screen"]).run();
     if (!r.ok) throw new Error(`state: ${JSON.stringify(r.error)}`);
-    const windows = (r.named.state as { windows: Array<{ title: string; visible: boolean }> }).windows;
-    return windows.some(w => w.visible && w.title === "Select Video Device");
+    const state = r.named.state as { windows: Array<{ title: string; visible: boolean }>; screen?: {presenter?: string; presentSerial?: number} };
+    if (state.windows.some(w => w.visible && w.title === "Select Video Device")) return 'device';
+    if (state.windows.some(w => w.visible && w.title === "End User License Agreement")) return 'waiting';
+    if (state.screen?.presenter === 'ddraw' && (state.screen.presentSerial ?? 0) > 0) return 'game';
+    return 'waiting';
 }
 
 try {
-    await step("boot", harness().reload().sleep(1500).openWgb(wgb).sleep(8000));
-    const deadline = Date.now() + 90_000;
-    while (!await videoDeviceDialogShown()) {
-        if (Date.now() > deadline) {
-            await capture("no-video-dialog");
-            throw new Error("the video device dialog never appeared; if the licence is showing, handle it separately and rerun");
-        }
-        await harness().sleep(1000).run();
-    }
-    await step("pick the video device", harness().click("OK").sleep(25_000));
-
-    // Campaign, then Continue: the intro plays into the hangar.
-    await step("campaign", moves(harness(), 12, 9, 4).sleep(300).clickHere(150).sleep(6000));
-    await step("continue", moves(moves(harness(), 12, 0, 9), 0, 12, 2).sleep(400).clickHere(150).sleep(45_000));
-    await capture("hangar");
-
-    // Next Mission opens the voiced briefing; Go To Flight Check answers once it may.
-    await step("next mission", moves(harness(), -16, 10, 16).sleep(400).clickHere(150).sleep(20_000));
-    await step("aim at flight check", moves(harness(), 15, 2, 26).moveRelative(0, 4).sleep(400));
     let note = { written: 0, blank: 1 };
-    for (let waited = 0; ; waited += 10_000) {
-        await step("go to flight check", harness().clickHere(150).sleep(10_000));
-        note = objectives(await capture("flight-check"));
-        if (note.written > 0.08 && note.blank < 0.01) break;
-        if (waited >= 180_000) {
-            throw new Error(`no objectives on the Flight Check note after 3 min of briefing ` +
-                `(ink ${note.written.toFixed(3)} written / ${note.blank.toFixed(3)} blank)`);
+    if (process.env.CRIMSON_START_AT !== "flight-check") {
+        if (process.env.CRIMSON_START_AT !== "campaign") {
+            await step("boot", harness().reload().sleep(1500).openWgb(wgb).sleep(8000));
+            const deadline = Date.now() + 90_000;
+            let stage = await startupStage();
+            while (stage === 'waiting') {
+                if (Date.now() > deadline) {
+                    await capture("no-video-dialog");
+                    throw new Error("the video device dialog never appeared; if the licence is showing, handle it separately and rerun");
+                }
+                await harness().sleep(1000).run();
+                stage = await startupStage();
+            }
+            if (stage === 'device') await step("pick the video device", harness().click("OK").sleep(25_000));
+            else await step("wait for the menu", harness().sleep(25_000));
+
+            // Campaign: text must remain visible when the caret is at the end, without Home.
+            await step("campaign", moves(harness(), -16, -10, 5).sleep(300).clickHere(150).sleep(6000));
         }
+        const initialPilot = await capture("pilot-default");
+        let black = 0, fieldArea = 0;
+        for (let y = Math.floor(initialPilot.height * 0.50); y < initialPilot.height * 0.53; y++) {
+            for (let x = Math.floor(initialPilot.width * 0.31); x < initialPilot.width * 0.57; x++) {
+                const i = (y * initialPilot.width + x) * 4;
+                if (initialPilot.data[i]! < 30 && initialPilot.data[i + 1]! < 30 && initialPilot.data[i + 2]! < 30) black++;
+                fieldArea++;
+            }
+        }
+        if (black / fieldArea < 0.65) throw new Error("Campaign pilot field is not open; calibrate the relative menu move");
+
+        let nameInput = harness().key("Home");
+        for (let i = 0; i < 16; i++) nameInput = nameInput.key("Delete");
+        await step("enter pilot name", nameInput.type("crimson33").sleep(1000));
+        const pilot = await capture("pilot-name");
+        let red = 0, area = 0;
+        for (let y = Math.floor(pilot.height * 0.495); y < pilot.height * 0.533; y++) {
+            for (let x = Math.floor(pilot.width * 0.30); x < pilot.width * 0.58; x++) {
+                const i = (y * pilot.width + x) * 4;
+                if (pilot.data[i]! > 100 && pilot.data[i]! > pilot.data[i + 1]! * 1.5 && pilot.data[i]! > pilot.data[i + 2]! * 1.5) red++;
+                area++;
+            }
+        }
+        if (red / area < 0.01) throw new Error("the entered pilot name is not visible");
+        const found = await harness().call("memoryFind", "crimson33", {limit: 4, context: 8}).run();
+        if (!found.ok || !(found.named.memoryFind as {hits: unknown[]}).hits.length) throw new Error("pilot name did not reach the guest");
+        console.log("pilot name entered and visible");
+        await step("continue", moves(harness(), 16, 0, 6).sleep(400).clickHere(150).sleep(45_000));
+        await capture("hangar");
+
+        // Next Mission opens the voiced briefing; Go To Flight Check answers once it may.
+        await step("next mission", moves(harness(), -16, 10, 16).sleep(400).clickHere(150).sleep(20_000));
+        await step("aim at flight check", moves(harness(), 15, 2, 21).moveRelative(0, 4).sleep(400));
+        for (let waited = 0; ; waited += 10_000) {
+            await step("go to flight check", harness().clickHere(150).sleep(10_000));
+            note = objectives(await capture("flight-check"));
+            if (note.written > 0.08 && note.blank < 0.01) break;
+            if (waited >= 180_000) {
+                throw new Error(`no objectives on the Flight Check note after 3 min of briefing ` +
+                `(ink ${note.written.toFixed(3)} written / ${note.blank.toFixed(3)} blank)`);
+            }
+        }
+
     }
+    note = objectives(await capture("flight-check-verified"));
+    if (note.written <= 0.08 || note.blank >= 0.01) throw new Error("Flight Check objectives are not legible");
 
     // Fly Mission sits left of where the cursor is parked on the clipboard.
     await step("fly mission", moves(harness(), -14, 1, 4).sleep(400).clickHere(150));
@@ -153,8 +195,8 @@ try {
     }
 
     console.log(`OK — Crimson Skies trial showed its objectives on the Flight Check note ` +
-        `(ink ${note.written.toFixed(2)}) and flew (motion ${level.toFixed(1)} level, ${rolling.toFixed(1)} rolling); ` +
-        `evidence: ${out}`);
+    `(ink ${note.written.toFixed(2)}) and flew (motion ${level.toFixed(1)} level, ${rolling.toFixed(1)} rolling); ` +
+    `evidence: ${out}`);
 } finally {
     try {
         await harness().key(VK_LEFT, { up: true }).key(VK_RIGHT, { up: true }).pause().run();

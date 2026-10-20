@@ -81,6 +81,31 @@ test("DrawTextEx writes uiLengthDrawn, returns the height of the lines it laid o
     expect(exports["DrawTextExA"]!(null as never, mem, [1, TEXT, -1, RECT, DT_WORDBREAK, PARAMS])).toBe(0);
 });
 
+// Native Windows: tools/win32-drawtext-rect-oracle.ps1. Widths follow the selected font.
+test("CALCRECT shrinks wrapped text to its measured width and expands for an unbroken word", () => {
+    const gdi = fakeGdi();
+    (System as unknown as { instance: unknown }).instance = {
+        gdiContext: { drawText: (hdc: number, text: string, r: never, f: number) => drawText(gdi, hdc, text, r, f) },
+    };
+    const exports: Record<string, (ctx: never, mem: Uint8Array, args: number[]) => unknown> = {};
+    registerWindowDrawingExports(exports as never);
+    const mem = new Uint8Array(0x200), view = new DataView(mem.buffer);
+    for (const [text, width, measured, height] of [
+        ["x", 800, CHAR_WIDTH, LINE],
+        ["ab cd ef", 800, 8 * CHAR_WIDTH, LINE],
+        ["ab cd ef", 2 * CHAR_WIDTH, 2 * CHAR_WIDTH, 3 * LINE],
+        ["abcdefghij", 2 * CHAR_WIDTH, 10 * CHAR_WIDTH, LINE],
+    ] as const) {
+        mem.fill(0);
+        mem.set(new TextEncoder().encode(text), 0x10);
+        for (const [i, v] of [7, 3, 7 + width, 24].entries()) view.setInt32(0x80 + i * 4, v, true);
+        view.setUint32(0xa0, 20, true);
+        expect(exports["DrawTextExA"]!(null as never, mem, [1, 0x10, text.length, 0x80, 0xc10, 0xa0])).toBe(height);
+        expect([view.getInt32(0x88, true), view.getInt32(0x8c, true)]).toEqual([7 + measured, 3 + height]);
+        expect(view.getUint32(0xb0, true)).toBe(text.length);
+    }
+});
+
 test("a rect one tmHeight tall holds one line when the font's extents are fractional", () => {
     const gdi = fakeGdi() as unknown as { contexts: Map<number, { measureText: (t: string) => unknown }> };
     // GetTextMetrics reports tmHeight = ceil(9.4) + ceil(2.4) = 13; ceil(11.8) would be 12.

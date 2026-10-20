@@ -14,7 +14,6 @@ import { getSystemColorBrush } from './system';
 import { asArrayBufferView } from '../../../dom-buffer';
 
 const DT_CALCRECT = 0x00000400;
-const DT_SINGLELINE = 0x00000020;
 /** cbSize, iTabLength, iLeftMargin, iRightMargin, uiLengthDrawn. */
 const DRAWTEXTPARAMS_SIZE = 20;
 
@@ -50,10 +49,9 @@ function drawTextCommon(hdc: number, text: string, mem: Uint8Array, lpRect: numb
     if (lpParams) view.setUint32(lpParams + 16, layout.lengthDrawn, true);
 
     if (rect && lpRect && (format & DT_CALCRECT) !== 0) {
-        // A wrapped calc keeps the caller's width (it is the wrap limit); an unwrapped one
-        // reports the widest line.
-        const wrapped = (format & 0x10 /* DT_WORDBREAK */) !== 0 && (format & DT_SINGLELINE) === 0;
-        if (!wrapped) view.setInt32(lpRect + 8, rect.left + layout.width, true);
+        // The incoming width is a wrap limit, not the measured result. Native GDI
+        // shrinks even wrapped text to its widest line, or expands for a long word.
+        view.setInt32(lpRect + 8, rect.left + layout.width, true);
         view.setInt32(lpRect + 12, rect.top + layout.height, true);
     }
     return layout.height;

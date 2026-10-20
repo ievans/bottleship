@@ -364,9 +364,9 @@ function displaySourceIndices(raw: string, tabLen: number, processPrefix: boolea
     return out;
 }
 
-/** Greedy DT_WORDBREAK wrap: break at the last space that fits, and mid-word when a single
- *  word is wider than the rect (GDI does the same). Segment starts are kept so the access-key
- *  index can be mapped onto the segment that ends up holding it. */
+/** Greedy DT_WORDBREAK wrap: break at spaces; an unbroken word can exceed the rect.
+ *  Native GDI expands DT_CALCRECT for such a word. Segment starts map the access-key
+ *  index onto the segment that ends up holding it. */
 function wrapLine(ctx: TextCtx, line: string, maxWidth: number): Array<{ text: string; start: number }> {
     if (!line || maxWidth <= 0 || ctx.measureText(line).width <= maxWidth) {
         return [{ text: line, start: 0 }];
@@ -381,6 +381,12 @@ function wrapLine(ctx: TextCtx, line: string, maxWidth: number): Array<{ text: s
             if (brk > start) {
                 end = brk;
                 next = brk + 1; // GDI swallows the break space
+            } else {
+                // Do not split a word just because no prefix fits. Its advance may
+                // extend past the wrap limit (and becomes the measured CALCRECT width).
+                const afterWord = line.indexOf(' ', end);
+                end = afterWord < 0 ? line.length : afterWord;
+                next = afterWord < 0 ? end : end + 1;
             }
         }
         segs.push({ text: line.slice(start, end), start });
