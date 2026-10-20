@@ -95,9 +95,14 @@ async function startupStage(): Promise<'device' | 'game' | 'waiting'> {
 
 try {
     let note = { written: 0, blank: 1 };
-    if (process.env.CRIMSON_START_AT !== "flight-check") {
+    if (process.env.CRIMSON_START_AT !== "flight-check" && process.env.CRIMSON_START_AT !== "flight") {
         if (process.env.CRIMSON_START_AT !== "campaign") {
             await step("boot", harness().openWgb(wgb).sleep(8000));
+            // Per-frame verbose streaming can overwhelm the diagnostic channel.
+            // Crash, stub and GPU validation below uses report counters directly.
+            await step("bound diagnostic logging", harness().call("stopLogs")
+                .call("logLevel", "KERNEL32", "WARN").call("logLevel", "USER32", "WARN")
+                .call("logLevel", "GDI32", "WARN"));
             const deadline = Date.now() + 90_000;
             let stage = await startupStage();
             while (stage === 'waiting') {
@@ -158,11 +163,28 @@ try {
         }
 
     }
-    note = objectives(await capture("flight-check-verified"));
-    if (note.written <= 0.08 || note.blank >= 0.01) throw new Error("Flight Check objectives are not legible");
+    if (process.env.CRIMSON_START_AT !== "flight") {
+        note = objectives(await capture("flight-check-verified"));
+        if (note.written <= 0.08 || note.blank >= 0.01) throw new Error("Flight Check objectives are not legible");
 
-    // Fly Mission sits left of where the cursor is parked on the clipboard.
-    await step("fly mission", moves(harness(), -14, 1, 4).sleep(400).clickHere(150));
+        // The cursor hotspot must reach the button below the clipboard.
+        await step("fly mission", moves(harness(), -14, 4, 5).sleep(400).clickHere(300));
+    }
+    // The opening camera move is letterboxed; it must not count as keyboard flight.
+    for (let waited = 0; ; waited += 1000) {
+        await harness().sleep(1000).run();
+        const frame = await capture("flight-entry");
+        let black = 0, pixels = 0;
+        for (const y of [Math.floor(frame.height * 0.03), Math.floor(frame.height * 0.97)]) {
+            for (let x = 0; x < frame.width; x += 8) {
+                const i = (y * frame.width + x) * 4;
+                if (frame.data[i]! < 10 && frame.data[i + 1]! < 10 && frame.data[i + 2]! < 10) black++;
+                pixels++;
+            }
+        }
+        if (black / pixels < 0.8) break;
+        if (waited >= 120000) throw new Error("the flight introduction never ended");
+    }
     let level = 0;
     for (let waited = 0; level < 5; waited += 2000) {
         if (waited > 120_000) throw new Error("flight never started presenting a moving view");
@@ -177,7 +199,15 @@ try {
         await step("release", harness().key(vk, { up: true }));
         if (rolling > level * 1.5) break;
     }
-    await capture("flight");
+    const flight = await capture("flight");
+    let failureText = 0;
+    for (let y = Math.floor(flight.height * 0.19); y < flight.height * 0.22; y++) {
+        for (let x = Math.floor(flight.width * 0.44); x < flight.width * 0.56; x++) {
+            const i = (y * flight.width + x) * 4;
+            if (flight.data[i]! < 30 && flight.data[i + 1]! < 30 && flight.data[i + 2]! > 150) failureText++;
+        }
+    }
+    if (failureText > 6) throw new Error("the pilot crashed: the blue Fatal Crash overlay is visible");
 
     const done = await harness().call("report").run();
     if (!done.ok) throw new Error(`report: ${JSON.stringify(done.error)}`);
@@ -194,8 +224,8 @@ try {
         throw new Error(`the view did not answer the roll keys (motion ${rolling.toFixed(1)} rolling, ${level.toFixed(1)} level)`);
     }
 
-    console.log(`OK — Crimson Skies trial showed its objectives on the Flight Check note ` +
-    `(ink ${note.written.toFixed(2)}) and flew (motion ${level.toFixed(1)} level, ${rolling.toFixed(1)} rolling); ` +
+    console.log(`OK — Crimson Skies trial flew (motion ${level.toFixed(1)} level, ${rolling.toFixed(1)} rolling); ` +
+    (process.env.CRIMSON_START_AT === "flight" ? "" : `Flight Check ink ${note.written.toFixed(2)}; `) +
     `evidence: ${out}`);
 } finally {
     try {
