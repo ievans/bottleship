@@ -153,6 +153,7 @@ full playability.
 | [Carmageddon II demo](https://archive.org/details/Carmageddon2CarpocalypseNowDemo) | Rendered Controls screen; race entry remains unverified | ✓ |
 | [Painkiller Demo 2](https://archive.org/details/Painkiller_Demo_2_build_v1.0) | Rendered main menu; level entry remains unverified | ✓ |
 | [Worms World Party original demo](https://ftp.zx.net.nz/pub/archive/ftp.team17.com/pub/t17/goodies/wwp_demo.exe) | Rendered demo splash; match entry remains unverified | ✓ |
+| Crimson Skies trial | [Contributor bring-up (#33)](https://github.com/jenissimo/bottleship/issues/33), independently verified on 2026-10-20: visible pilot-name editing, campaign hangar, voiced briefing, legible Flight Check objectives and the Hawaii mission in flight with HUD and keyboard roll controls. Direct3D 6; graphical glitches remain. Repacked from the original CrimsonTrial.exe with its own TrueType fonts installed under Windows Fonts. Wrapped DrawTextEx measurement and text color after solid GDI blits were fixed against native Windows oracles. Force feedback and mission completion remain unverified | ✓ |
 
 Harry Potter 1 and Unreal Tournament demos also reach their rendered menus.
 
