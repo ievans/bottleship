@@ -46,6 +46,8 @@ import { Kernel32 } from "./modules/kernel32";
 import { adoptNamedObjects, namedObjects, type NamedObjectSpec } from "./modules/kernel32/named-objects";
 import { User32 } from "./modules/user32";
 import { GDI32 } from "./modules/gdi32";
+import { installWindowsFonts } from "./modules/gdi32/installed-fonts";
+import { ensureTempDirectories } from "./modules/kernel32/file-io-path";
 import { D3D9 } from "./modules/d3d9";
 import { Advapi32 } from "./modules/advapi32";
 import { Ntdll } from "./modules/ntdll";
@@ -115,6 +117,7 @@ import { D3dx9 } from "./modules/d3dx9";
 import { OpenAL, ALUT } from "./modules/openal/openal";
 import { Quartz } from "./modules/quartz";
 import { DMusic } from "./modules/dmusic";
+import { Amstream } from "./modules/amstream";
 import { A3d } from "./modules/a3d";
 import { Avifil32 } from "./modules/avifil32";
 import { Rpcrt4 } from "./modules/rpcrt4";
@@ -2000,6 +2003,8 @@ const loadBundleImpl = async (payload: { data?: Uint8Array; url?: string; blob?:
 
     // Always resize host canvas from config (ddraw may not be loaded yet → updateDisplayFromConfig no-op)
     await applyManifestWriteFiles();
+    if (system.process) ensureTempDirectories(system.process.environment, system.fileSystem);
+    await installWindowsFonts();
 
     // Generic UE1 first-run: detect engine + pin D3D render device in Default.ini.
     // After writeFiles so a manifest-shipped Default.ini override is the one we pin.
@@ -2540,6 +2545,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const lgvid = new Lgvid();
       const quartz = new Quartz();
       const dmusic = new DMusic();
+      const amstream = new Amstream();
       const a3d = new A3d();
       const avifil32 = new Avifil32();
       const rpcrt4 = new Rpcrt4();
@@ -2616,6 +2622,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       }
       quartz.initialize(process);
       dmusic.initialize(process);
+      amstream.initialize(process);
       a3d.initialize(process);
       avifil32.initialize(process);
       rpcrt4.initialize(process);
@@ -2695,6 +2702,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       }
       process.registerModule(quartz.name, quartz);
       process.registerModule(dmusic.name, dmusic);
+      process.registerModule(amstream.name, amstream);
       process.registerModule(a3d.name, a3d);
       process.registerModule(avifil32.name, avifil32);
       process.registerModule(rpcrt4.name, rpcrt4);
@@ -2772,6 +2780,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       }
       process.dispatcher.registerModule(quartz.name, quartz.exports);
       process.dispatcher.registerModule(dmusic.name, dmusic.exports);
+      process.dispatcher.registerModule(amstream.name, amstream.exports);
       process.dispatcher.registerModule(a3d.name, a3d.exports);
       process.dispatcher.registerModule(avifil32.name, avifil32.exports);
       process.dispatcher.registerModule(rpcrt4.name, rpcrt4.exports);
@@ -2817,7 +2826,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(netapi32.name, netapi32.exports);
       process.dispatcher.registerModule(imagehlp.name, imagehlp.exports);
       process.dispatcher.registerModule(dbghelp.name, dbghelp.exports);
-      process.dispatcher.registerModule(ifc20.name, ifc20.exports);
+      for (const dll of [ifc20.name, ...ifc20.aliases]) process.dispatcher.registerModule(dll, ifc20.exports);
       process.dispatcher.registerModule(gdiplus.name, gdiplus.exports);
       process.dispatcher.registerModule(bass.name, bass.exports);
       process.dispatcher.registerModule(galaxy.name, galaxy.exports);
