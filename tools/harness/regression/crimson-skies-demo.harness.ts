@@ -97,7 +97,7 @@ try {
     let note = { written: 0, blank: 1 };
     if (process.env.CRIMSON_START_AT !== "flight-check") {
         if (process.env.CRIMSON_START_AT !== "campaign") {
-            await step("boot", harness().reload().sleep(1500).openWgb(wgb).sleep(8000));
+            await step("boot", harness().openWgb(wgb).sleep(8000));
             const deadline = Date.now() + 90_000;
             let stage = await startupStage();
             while (stage === 'waiting') {
