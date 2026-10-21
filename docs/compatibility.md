@@ -80,8 +80,24 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Serious Sam: The First Encounter (Classic) | playable | ✓ |
 | KKND2: Krossfire | playable | ✓ |
 | Painkiller Black Edition | playable | ✓ |
+| Empire Earth (2.00, single player) | playable‡ | |
+| Empire Earth: The Art of Conquest (1.00, single player) | playable‡ | |
 
 \* retail has an intermittent mode-switch hiccup; the demo does not.
+
+‡ Single player only, checked 2026-10-21 with the unmodified Empire Earth 2.00
+(v2.00.3466) and The Art of Conquest 1.00 (v1.00.2657) game files: the first Learning
+Scenario's lit world, unit selection and movement, native saving, Quit to the post-game
+statistics, and loading the save in a fresh worker (Empire Earth also after a full browser
+restart). Multiplayer is not covered.
+`tools/harness/regression/empire-earth-single-player.harness.ts` re-checks that path for
+either game (`EE_ROOT` names the install folder). Bundles were packed
+with `tools/make-wgb.ts` from the installed folder kept under its own name: 1024 × 768 × 32,
+`--os winxp --ram 1536`, `--app-dir-dlls "binkw32.dll,mss32.dll"` (the game's own Bink and
+Miles) and the resolution/rasterizer values the installer writes under
+`HKCU\Software\SSSI\Empire Earth`. The Art of Conquest refuses to start without the base
+game, so its bundle carries both installed folders and also
+`HKCU\Software\Mad Doc Software\EE-AOC`.
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,
 with targeted stack, stream, lifetime and parser regressions. The October 12 integration

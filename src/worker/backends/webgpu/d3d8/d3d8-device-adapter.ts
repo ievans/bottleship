@@ -2345,6 +2345,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
         // primary), so it paces on the interval the device declared, exactly like d3d9.
         await framePacer.waitForPresentInterval(this.presentInterval);
         framePacer.reserveFrameSlot();
+        let detachedDrawEncoder: GPUCommandEncoder | null = null;
 
         try {
             this.flushProgrammablePending();
@@ -2395,6 +2396,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             // Two submits (endFrameForPresent then drawTexture) can flicker: the
             // compositor may read the swap-chain texture between submits.
             const drawEncoder = this.renderer.finalizePendingDraws();
+            detachedDrawEncoder = drawEncoder;
 
             // GPU error scopes for first 10 frames
             const useErrorScopes = this.presentCount < 10;
@@ -2472,7 +2474,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             // Post-submit cleanup: rotate ring buffers, destroy pending resources
             this.renderer.sampleFrameStats(); // per-frame draw/skip/ring-HW ring (dbg.fstats)
             this.renderer.ringBufferManager.nextFrame();
-            this.renderer.postSubmitCleanup();
+            this.renderer.postSubmitCleanup(encoder);
 
             // Pop error scopes and log any GPU errors
             if (useErrorScopes) {
@@ -2522,6 +2524,11 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
 
             return 0;
         } finally {
+            // finalizePendingDraws transfers ownership out of the renderer. Any
+            // subsequent swapchain/draw/finish/submit failure abandons that exact
+            // encoder; retire its clear uniforms even before post-submit cleanup.
+            // Normal submission already retired them, so this is idempotent.
+            if (detachedDrawEncoder) this.renderer.discardPendingDraws(detachedDrawEncoder);
             profiler.end("present");
             frameProfiler.endTimer("present", presentStart);
             frameProfiler.markFrame("d3d8");
