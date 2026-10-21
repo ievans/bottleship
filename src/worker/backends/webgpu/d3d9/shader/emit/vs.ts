@@ -197,6 +197,8 @@ export interface VsEmitOptions {
     /** Replaces oPos + pixel-centre correction as the clip position (LinkOptions
      *  fixedFunctionPosition); receives the constant-bank accessor in use. */
     positionOverride?: (vsc: string) => string;
+    /** Synthesized FFP colour processing, after bytecode and before interpolation. */
+    lightingOverride?: (vsc: string) => string;
     /** Hidden c[] slot carrying D3DRS_POINTSIZE, POINTSIZE_MIN and POINTSIZE_MAX. */
     pointSizeSlot?: number;
     /** Census to record this emit's opcode dispositions into. Passing one is how a caller
@@ -553,6 +555,7 @@ export function emitVsMain(prog: SmProgram, a: VsAnalysis, opts: VsEmitOptions):
         body.line(`out.clipA = vec4<f32>(dot(_clipPlanePos, ${vsc}.c[${clipSlot}]), dot(_clipPlanePos, ${vsc}.c[${clipSlot + 1}]), dot(_clipPlanePos, ${vsc}.c[${clipSlot + 2}]), dot(_clipPlanePos, ${vsc}.c[${clipSlot + 3}]));`);
         body.line(`out.clipB = vec2<f32>(dot(_clipPlanePos, ${vsc}.c[${clipSlot + 4}]), dot(_clipPlanePos, ${vsc}.c[${clipSlot + 5}]));`);
     }
+    if (opts.lightingOverride) body.line(opts.lightingOverride(vsc));
     const colorOutput = (name: string): string => prog.major < 3
         ? `min(max(${name}, vec4<f32>(0.0)), vec4<f32>(1.0))`
         : name;

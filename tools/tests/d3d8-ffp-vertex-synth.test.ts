@@ -6,6 +6,9 @@
  * interpreter and compared against the fixed-function math directly.
  */
 import { describe, expect, test } from "bun:test";
+import { createDefaultMaterial } from "../../src/worker/modules/ddraw/d3d/types";
+import type { WebGPUBackend } from "../../src/worker/backends/webgpu/webgpu-backend";
+import type { DDrawWebGPUExecutor } from "../../src/worker/backends/webgpu/ddraw/ddraw-backend-executor";
 import { Op, RegType } from "../../src/worker/backends/webgpu/d3d9/shader/sm-enums";
 import { compilePixelShader, compileVertexShader, linkProgram } from "../../src/worker/backends/webgpu/d3d9/shader";
 import type { RawVertexElement } from "../../src/worker/backends/webgpu/d3d9/shader";
@@ -17,6 +20,7 @@ import {
     FFP_FOG_OUT_SPECULAR,
     FFP_SYNTH_CONSTANT_COUNT,
     FFP_SYNTH_POSITION,
+    FFP_SYNTH_LIGHTING,
     synthesizeFfpVertexShader,
     writeFfpVertexConstants,
     type FfpVertexSpec,
@@ -401,6 +405,7 @@ function terrainAdapter(lighting: number) {
         ffpMemoPs: -1,
         ffpMemoResult: null,
         ffpVertexStages: new Map(),
+        ffpVertexRefusals: new Set(),
         resolveProgrammablePipeline: () => { calls.push("pipeline"); return 1; },
         captureDrawState: () => 0,
         drawViewport: () => ({ x: 0, y: 0, width: 640, height: 480, minZ: 0, maxZ: 1 }),
@@ -469,9 +474,90 @@ describe("D3D8 decl-only draws with a pixel shader bound", () => {
         expect(calls).toEqual(["pipeline", "programmable"]);
     });
 
-    test("a lit draw, which has no synthesized stage, keeps the fixed-function interleave", () => {
+    test("a lit draw preserves its programmable pixel shader instead of falling back", () => {
         const { adapter, calls } = terrainAdapter(1);
         expect(adapter.drawPrimitive(4, 0, 2)).toBe(0);
-        expect(calls).toEqual(["ffp-interleave"]);
+        expect(calls).toEqual(["pipeline", "programmable"]);
     });
+
+    test("lighting toggles invalidate the memo and produce distinct vertex-stage variants", () => {
+        const { adapter } = terrainAdapter(0);
+        const p = (adapter as any).programmable;
+        const a = p.resolveFfpVertexStage(adapter, (adapter as any).shaders);
+        adapter.renderStates[137] = 1;
+        const b = p.resolveFfpVertexStage(adapter, (adapter as any).shaders);
+        expect(a.variantKey).not.toBe(b.variantKey);
+        expect(a.lighting).toBeNull();
+        expect(b.lighting).toEqual(FFP_SYNTH_LIGHTING);
+    });
+
+    test("unsupported vertex blending is reported instead of silently losing the pixel shader", () => {
+        const { adapter } = terrainAdapter(1);
+        adapter.renderStates[151] = 1;
+        const p = (adapter as any).programmable;
+        expect(p.resolveFfpVertexStage(adapter, (adapter as any).shaders)).toBeNull();
+        expect([...p.ffpVertexRefusals]).toEqual(["vertex blending with a programmable pixel shader"]);
+    });
+});
+
+test("lit terrain link reserves its lighting bank and uses the shared lighting equation", () => {
+    const vs = compileVertexShader(synthesizeFfpVertexShader(terrainSpec()));
+    const link = linkProgram({ vs, ps: compilePixelShader(terrainPs11()),
+        declElements: TERRAIN_DECL, streamStride: 24, streamStrides: [24, 4, 8],
+        fixedFunctionPosition: FFP_SYNTH_POSITION, fixedFunctionLighting: FFP_SYNTH_LIGHTING });
+    expect(link.vsConstantCount).toBe(108);
+    expect(link.wgsl).toContain("ffpComputeLighting(");
+    expect(link.wgsl).toContain("oD0 = _ffpLit[0]");
+    expect(link.wgsl).toContain("(*lights)[i]");
+    expect(link.wgsl).toContain("vsc.c[107]");
+    const validator = probeOfflineWgslValidator();
+    if (validator.available) {
+        const result = validateWgslOffline(link.wgsl, validator);
+        expect(result.status, result.diagnostics ?? result.reason).toBe("passed");
+    }
+});
+
+
+test("lit draw snapshots track material and light changes without SetVertexShaderConstant", () => {
+    const { adapter } = terrainAdapter(1);
+    const material = createDefaultMaterial();
+    Object.assign(adapter, {
+        material, lights: new Map(), lightsEnabled: new Set(), transforms: new Map(),
+        viewport: { x: 0, y: 0, width: 640, height: 480, minZ: 0, maxZ: 1 },
+        renderTarget: { width: 640, height: 480 },
+        stageTexForDraw: () => null,
+    });
+    const backend = { getDevice: () => undefined } as unknown as WebGPUBackend;
+    const renderer = new D3D8ProgrammableRenderer(backend);
+    const executor = { syncSurfaceFromMemory: () => {} } as unknown as DDrawWebGPUExecutor;
+    const shaders = (adapter as any).shaders as D3D8ShaderRegistry;
+    const capture = () => {
+        const index = renderer.captureDrawState(adapter, shaders, executor);
+        return renderer.getCommandRecorder().getCurrentFrame().drawStates[index]!;
+    };
+    const first = capture();
+    const initialVersion = first.vsVersion;
+    const initialEmissive = first.vsConst[47 * 4];
+    expect(first.vsLen).toBe(108 * 4 + 4);
+    expect(Array.from(first.vsConst.subarray(108 * 4, 108 * 4 + 4)))
+        .toEqual([Math.fround(1 / 640), Math.fround(-1 / 480), 0, 0]);
+    material.emissive.r = 0.5;
+    const second = capture();
+    expect(second.vsConst[47 * 4]).toBe(0.5);
+    expect(second.vsVersion).not.toBe(initialVersion);
+    expect(first.vsConst[47 * 4]).toBe(initialEmissive);
+    // Device-global lights also live in the snapshot, not a shared mutable sidecar.
+    const light = {
+        type: 3, diffuse: { r: 1, g: 0, b: 0, a: 1 },
+        ambient: { r: 0, g: 0, b: 0, a: 1 }, specular: { r: 0, g: 0, b: 0, a: 1 },
+        position: { x: 0, y: 0, z: 0 }, direction: { x: 0, y: 0, z: 1 },
+        range: 1, falloff: 1, attenuation0: 1, attenuation1: 0, attenuation2: 0, theta: 0, phi: 0,
+    };
+    (adapter as any).lights.set(3, light);
+    (adapter as any).lightsEnabled.add(3);
+    const third = capture();
+    expect(third.vsConst[51 * 4]).toBe(1);
+    expect(third.vsVersion).not.toBe(second.vsVersion);
+    expect(second.vsConst[51 * 4]).toBe(0);
+    expect(capture().vsVersion).toBe(third.vsVersion);
 });
