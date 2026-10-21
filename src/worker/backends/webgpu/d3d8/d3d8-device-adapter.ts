@@ -2360,6 +2360,13 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             const device = webgpu.getDevice();
             const queue = webgpu.getQueue();
             const context = webgpu.getContext();
+            // LockRect/UnlockRect and CopyRects can write the backbuffer on the CPU
+            // without any subsequent primitive draw (native video players do this).
+            // Present must sample the current frame, not the previous GPU copy.
+            // The executor's authority/version check leaves GPU-authored frames alone.
+            if (device && queue && context) {
+                this.renderer.syncSurfaceFromMemory(this.renderTarget);
+            }
             const sourceView = this.renderTarget.gpuTextureView;
             if (!device || !queue || !context || !sourceView) {
                 Logger.warn(
