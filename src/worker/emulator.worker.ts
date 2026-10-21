@@ -113,6 +113,7 @@ import { IFC20 } from "./modules/ifc20";
 import { GdiPlus } from "./modules/gdiplus";
 import { Bass } from "./modules/bass";
 import { D3D8 } from "./modules/d3d8";
+import { D3dim700 } from "./modules/d3dim700";
 import { D3dx9 } from "./modules/d3dx9";
 import { OpenAL, ALUT } from "./modules/openal/openal";
 import { Quartz } from "./modules/quartz";
@@ -2594,6 +2595,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const bass = new Bass();
       const galaxy = new Galaxy();
       const d3d8 = new D3D8();
+      const d3dim700 = new D3dim700();
       const d3dx9 = new D3dx9();
       const openal = new OpenAL();
       const alut = new ALUT();
@@ -2666,6 +2668,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       bass.initialize(process);
       galaxy.initialize(process);
       d3d8.initialize(process);
+      d3dim700.initialize(process);
       openal.initialize(process);
       alut.initialize(process);
       wininet.initialize(process);
@@ -2753,6 +2756,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(bass.name, bass);
       process.registerModule(galaxy.name, galaxy);
       process.registerModule(d3d8.name, d3d8);
+      process.registerModule(d3dim700.name, d3dim700);
       process.registerModule(openal.name, openal);
       process.registerModule(alut.name, alut);
       process.registerModule(wininet.name, wininet);
@@ -2831,6 +2835,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(bass.name, bass.exports);
       process.dispatcher.registerModule(galaxy.name, galaxy.exports);
       process.dispatcher.registerModule(d3d8.name, d3d8.exports);
+      process.dispatcher.registerModule(d3dim700.name, d3dim700.exports);
       process.dispatcher.registerModule(openal.name, openal.exports);
       process.dispatcher.registerModule(alut.name, alut.exports);
       process.dispatcher.registerModule(wininet.name, wininet.exports);

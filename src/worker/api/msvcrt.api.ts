@@ -143,6 +143,7 @@ const ucrtFunctions: FunctionDescriptor[] = [
     makeFunc("ungetwc", 2),
     makeFunc("tmpfile", 0),
     makeFunc("_strerror", 1),
+    makeFunc("_tzset", 0, { returnType: "void" }),
     makeFunc("_Getdays", 0),
     makeFunc("_Getmonths", 0),
     makeFunc("_Gettnames", 0),

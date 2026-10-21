@@ -648,6 +648,8 @@ export class Msvcrt implements IModule {
         exports["@$bdele$qpv"] = (ctx, mem, args) => this.free(args[0] ?? 0);
         exports["@$bdla$qpv"] = (ctx, mem, args) => this.free(args[0] ?? 0);
 
+        exports["_tzset"] = () => { this.timezoneState!.tzset(); return 0; };
+
         // --- String formatting ---
         registerMsvcrtTimeLocaleExports(exports, {
             alloc: size => this.malloc(size),
