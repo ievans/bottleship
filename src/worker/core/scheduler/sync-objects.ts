@@ -302,7 +302,7 @@ export class SyncObjectManager {
         const obj = this.resourceProvider.getKernelObject(handle) as KernelObject | null;
         if (!obj) return false;
         switch (obj.kind) {
-            case 'thread': { const t = threadLookup((obj as KernelThreadObject).threadId); return t !== null && t.state === ThreadState.TERMINATED; }
+            case 'thread': return this._threadTerminated(obj, threadLookup);
             case 'event': return this._eventReady(obj as KernelEventObject, handle);
             case 'semaphore': return (obj as KernelSemaphoreObject).count > 0;
             case 'mutex': { const m = obj as KernelMutexObject; const owner = this._mutexOwner(m, handle); return owner === null || owner === threadId; }
@@ -345,6 +345,20 @@ export class SyncObjectManager {
         const mirrored = hypercallDataManager.readMutexMirrorState(handle);
         if (mirrored) return mirrored.abandoned;
         return m.abandoned;
+    }
+
+    /** Is the thread behind a thread-kind handle done? NT signals the thread OBJECT at
+     *  termination, permanently — the answer must outlive the scheduler record, which
+     *  reaping deletes. A join (`WaitForSingleObject(hThread)`) that arrives after the
+     *  reaper dropped the record used to consult only that record, never satisfied, and
+     *  the joining thread hung forever on a thread whose kernel object said terminated.
+     *  kobj.terminated is written at the single termination chokepoint; the live record
+     *  is the fallback for a kobj that predates it. */
+    private _threadTerminated(obj: KernelObject, threadLookup: ThreadLookupFn): boolean {
+        const kobj = obj as KernelThreadObject;
+        if (kobj.terminated) return true;
+        const t = threadLookup(kobj.threadId);
+        return t !== null && t.state === ThreadState.TERMINATED;
     }
 
     // ─── Private ────────────────────────────────────────────────────────────
@@ -390,7 +404,7 @@ export class SyncObjectManager {
             const obj = this.resourceProvider.getKernelObject(h) as KernelObject | null;
             if (!obj) return { ready: true, result: WAIT_FAILED, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] };
             switch (obj.kind) {
-                case 'thread': { const t = tl((obj as KernelThreadObject).threadId); if (!t || t.state !== ThreadState.TERMINATED) return _notReady; break; }
+                case 'thread': { if (!this._threadTerminated(obj, tl)) return _notReady; break; }
                 case 'event': {
                     const e = obj as KernelEventObject;
                     const st = this._getEventState(e, h);
@@ -419,7 +433,7 @@ export class SyncObjectManager {
             const obj = this.resourceProvider.getKernelObject(h) as KernelObject | null;
             if (!obj) return { ready: true, result: WAIT_FAILED, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] };
             switch (obj.kind) {
-                case 'thread': { const t = tl((obj as KernelThreadObject).threadId); if (t && t.state === ThreadState.TERMINATED) return { ready: true, result: WAIT_OBJECT_0 + i, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] }; break; }
+                case 'thread': { if (this._threadTerminated(obj, tl)) return { ready: true, result: WAIT_OBJECT_0 + i, consumeAutoReset: [], consumeSemaphores: [], consumeMutexes: [] }; break; }
                 case 'event': {
                     const e = obj as KernelEventObject;
                     if (this._eventReady(e, h)) {
