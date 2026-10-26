@@ -35,4 +35,8 @@ try {
  Copy-Item -LiteralPath (Join-Path $source 'en-us_license.txt') -Destination $game
  & bun tools/make-wgb.ts $game $OutputWgb --name 'The Lord of the Rings: The Return of the King Demo' --game-id 'app:lotr-return-of-the-king-demo' --exe 'ROTK_Demo.exe' --os winxp --width 640 --height 480 --bpp 32 --ram 256 --file-times --reg-path 'Software\EA Games\LOTR The Return of the King (tm) Demo' --reg-name 'Install Dir' --reg-install 'C:\'
  if($LASTEXITCODE -ne 0) {throw 'WGB creation failed'}
+ & bun tools/wgb.ts replace $OutputWgb 'cover.jpg' (Join-Path $PSScriptRoot '../public/covers/lotr-return-of-the-king-box.jpg')
+ if($LASTEXITCODE -ne 0) {throw 'Cover embedding failed'}
+ & bun tools/wgb.ts patch-manifest $OutputWgb meta.cover 'cover.jpg'
+ if($LASTEXITCODE -ne 0) {throw 'Cover metadata update failed'}
 } finally {Pop-Location}
