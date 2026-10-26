@@ -5,7 +5,7 @@ BottleShip targets native Win32 games of roughly **1997–2004** — the DirectD
 not exhaustive, and "runs" means different things at different stages (boots to menu vs. fully
 playable). Your mileage will vary with the exact build/version you own.
 
-Updated **2026-10-20** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
+Updated **2026-10-26** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
 been retested for this release. Observed demo stages are listed separately below. Successful
 GOG extraction does not establish gameplay coverage for that installer edition.
 
@@ -42,7 +42,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Unreal Tournament (demo) | playable | |
 | Quake II | playable | ✓ |
 | Half-Life: Uplink / Day One (demos) | playable | |
-| Half-Life 2 | boots | |
+| Half-Life 2 (20th Anniversary) | playable | |
 | Empires: Dawn of the Modern World (2003, GOG) | boots | ✓ |
 | Red Faction | playable | ✓ |
 | Grand Theft Auto III | playable | |
@@ -54,6 +54,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | American McGee's Alice | playable | |
 | Gothic | playable | ✓ |
 | Command & Conquer: Tiberian Sun | playable | |
+| Command & Conquer: Red Alert 3 | playable | |
 | Cossacks: European Wars | playable | ✓ |
 | Worms: Armageddon | playable | ✓ |
 | Discworld Noir | playable | |
@@ -65,6 +66,9 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Airfix Dogfighter (demo) | playable | |
 | The Blackwell Legacy | playable | ✓ |
 | Sea Dogs | playable | ✓ |
+| Sid Meier's Pirates! (2004) | playable | ✓ |
+| Deus Ex: Game of the Year Edition | playable | ✓ |
+| The Longest Journey | playable | ✓ |
 | Overboard! / Shipwreckers! (demo) | playable | |
 | House of 1000 Doors: Family Secrets | playable | |
 | Natalie Brooks: Secrets of Treasure House | playable | |
@@ -111,6 +115,16 @@ is absent. The trial's earlier gameplay verification does not validate the full 
 The working collection also covers full builds alongside the production demos of Re-Volt,
 Heroes III, StarCraft, Diablo II, Max Payne, Harry Potter 1, NFS Porsche and NFS Underground.
 The Re-Volt beta is a separate working build, not a replacement for the released demo.
+
+On 2026-10-26 the maintainer confirmed Sid Meier's Pirates! (2004), Half-Life 2
+(20th Anniversary), Command & Conquer: Red Alert 3, Deus Ex: Game of the Year Edition
+and The Longest Journey as working. These playable statuses include that maintainer
+report. The local bundles are `sid-meiers-pirates.wgb`, `hl2-20th.wgb`,
+`red-alert-3.wgb`, `deus-ex-goty.wgb` and `the_longest_journey.wgb`.
+Red Alert 3 was also launched through the Bundles UI: the opening movie and the
+Leningrad mission briefing rendered. The observed run recorded a browser-cache write
+failure while the system disk was full; startup subsequently succeeded. This check
+covers the base game; Uprising and campaign completion have not been verified.
 
 System Shock 2 coverage is for the original 1999 game, including previously purchased GOG
 copies; it does not cover the 2025 remaster. Unreal Gold's former GOG edition is delisted.
@@ -195,8 +209,6 @@ Montezuma, Natalie Brooks, Farm Frenzy and House of 1000 Doors.
 
 | Title | Status | GOG |
 |-------|--------|:---:|
-| The Longest Journey | in progress | ✓ |
-| Deus Ex | in progress | ✓ |
 | Prince of Persia: The Sands of Time | in progress | ✓ |
 
 ## Reporting compatibility
