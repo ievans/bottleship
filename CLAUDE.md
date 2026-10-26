@@ -523,7 +523,7 @@ Archive / installer formats — USE OUR OWN READERS, never `apt install` a third
                       de-obfuscation, LINK_PREV dedup, volume-split files, MD5 verify.
                       CLI: `tools/unshield-extract.ts <data1.hdr> <out> [--list]`.
                       (NOT the same as MSCF — 7-Zip/cabextract cannot read `ISc(`.)
-    - inno/         — Inno Setup headers (LZMA1/2 via the Rust WASM backend). CLI: `tools/inno-inspect.ts`;
+    - inno/         — Inno Setup headers; zlib (pako) and LZMA1/2 (Rust WASM backend) chunks. CLI: `tools/inno-inspect.ts`;
                       end-to-end GOG installer → bundle: `tools/gog-to-wgb.ts`.
     - freearc/      — FreeArc (`.arc`, srep+LZMA) used by some repacks.
     - rar/          — RAR5 layout + STORED data (the store-only `.rar` a game drop wraps an
