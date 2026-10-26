@@ -11,6 +11,7 @@ import { Mem } from '../../core/memory/mem-accessor';
 import { VirtualFileSystem } from '../../runtime/filesystem/vfs';
 import { readStringA, readStringW, encodeUTF16LE, encodeFileApiString } from './file-io-strings';
 import { searchPathSafeMode } from '../../core/dll-search-order';
+import { registerFileIoTempExports } from './file-io-temp';
 
 const ERROR_FILE_NOT_FOUND = 2;
 const ERROR_INVALID_PARAMETER = 87;
@@ -123,6 +124,7 @@ export function ensureTempDirectories(environment: Map<string, string>, vfs: Pic
 }
 
 export function registerFileIoPathExports(exports: Record<string, ThunkImplementation>): void {
+    registerFileIoTempExports(exports);
     exports['GetCurrentDirectoryA'] = (ctx, mem, args) => {
         const nBufferLength = args[0];
         const lpBuffer = args[1];

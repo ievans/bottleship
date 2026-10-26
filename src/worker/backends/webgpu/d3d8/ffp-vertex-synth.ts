@@ -10,7 +10,7 @@
  * bank that drives it. The program then links against the guest's pixel shader exactly
  * like a guest-supplied vs_1_1.
  *
- * Lighting is outside this module's scope: a lit draw has no synthesized vertex stage.
+ * Lighting, when requested, is emitted by the linker using the shared FFP equation.
  */
 import { RegType, Op } from "../d3d9/shader/sm-enums";
 import type { RawVertexElement } from "../d3d9/shader";
@@ -69,6 +69,14 @@ const C_TEXMATRIX = 12;
 export const FFP_SYNTH_POSITION = { inputRegister: VSDE_POSITION, matrixSlot: C_MVP } as const;
 export const FFP_SYNTH_MAX_TEXCOORDS = 8;
 export const FFP_SYNTH_CONSTANT_COUNT = C_TEXMATRIX + FFP_SYNTH_MAX_TEXCOORDS * 4;
+export const FFP_SYNTH_LIGHTING_SLOT = FFP_SYNTH_CONSTANT_COUNT;
+export const FFP_SYNTH_LIGHTING = {
+    constantSlot: FFP_SYNTH_LIGHTING_SLOT,
+    worldViewSlot: C_WORLDVIEW,
+    normalMatrixSlot: C_NORMAL,
+    positionRegister: VSDE_POSITION,
+    normalRegister: VSDE_NORMAL,
+} as const;
 
 export interface FfpTexcoordSpec {
     /** Output texcoord register n (= texture stage n). */
@@ -83,6 +91,7 @@ export interface FfpTexcoordSpec {
 }
 
 export interface FfpVertexSpec {
+    lighting?: boolean;
     hasDiffuse: boolean;
     hasSpecular: boolean;
     /** Component count of each texcoord set present in the declaration (index = set). */
@@ -158,7 +167,7 @@ export function ffpVertexSpecKey(spec: FfpVertexSpec): string {
         .map(t => `${t.output}.${t.mode}.${t.set}.${t.transformFlags}`)
         .join(",");
     const comps = spec.texcoordComponents.map(c => c ?? "-").join("");
-    return `d${+spec.hasDiffuse}s${+spec.hasSpecular}n${+spec.hasNormal}${+spec.normalizeNormals}`
+    return `l${+!!spec.lighting}d${+spec.hasDiffuse}s${+spec.hasSpecular}n${+spec.hasNormal}${+spec.normalizeNormals}`
         + `f${spec.fog}${+spec.rangeFog}c${comps}t${tc}`;
 }
 

@@ -3699,6 +3699,23 @@ export class Scheduler {
         }
     }
 
+    /** The last-error setter for an API that completes after an await: it targets the thread
+     *  that made the call (this thread object, not a possibly reused id), and does nothing
+     *  once that thread or the process is gone. */
+    captureLastError(): (code: number) => void {
+        const caller = this.getCurrentThread();
+        const process = this.process;
+        return (code: number): void => {
+            if (this.process !== process) return;
+            if (!caller) {
+                if (!this.getCurrentThread()) this.setLastError(code);
+                return;
+            }
+            if (this.threads.get(caller.id) !== caller || caller.state === ThreadState.TERMINATED) return;
+            this.setThreadLastError(caller, code);
+        };
+    }
+
     /** Last error of a thread that may not be current: a wait completed at its wake. */
     private setThreadLastError(t: Thread, code: number): void {
         if (t.id === this.currentThreadId) {

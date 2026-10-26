@@ -58,6 +58,8 @@ import { SHADER_BOOLEAN_BANK_BYTES, SHADER_INTEGER_REGISTER_COUNT } from "../d3d
 import { resolveProgrammablePixelFogMode } from "../d3d9/ffp-fog";
 import type { DrawViewport } from "../d3d9/d3d9-command-recorder";
 import type { AlphaTest } from "../d3d9/shader/sm-wgsl";
+import { FfpVertexLightingPacker, FFP_VERTEX_LIGHTING_REGISTERS,
+    type FixedFunctionVertexLighting } from "../d3d9/shader/link/ffp-vertex-lighting";
 import {
     D3D_ALPHALESS_FORMATS,
     FFP_MAX_STAGES,
@@ -85,6 +87,8 @@ import {
     FFP_SYNTH_CONSTANT_COUNT,
     FFP_SYNTH_MAX_TEXCOORDS,
     FFP_SYNTH_POSITION,
+    FFP_SYNTH_LIGHTING,
+    FFP_SYNTH_LIGHTING_SLOT,
     isFfpVertexSpecSupported,
     synthesizeFfpVertexShader,
     TTFF_PROJECTED,
@@ -117,6 +121,9 @@ const FFP_VERTEX_STATE_WORDS = FFP_VERTEX_RENDER_STATES.length + FFP_SYNTH_MAX_T
 
 /** A synthesized fixed-function vertex stage and the link state it implies. */
 export interface FfpVertexStage {
+    lighting: FixedFunctionVertexLighting | null;
+    hasDiffuse: boolean;
+    hasSpecular: boolean;
     compiled: CompiledVs;
     /** buildD3D8FfpVariantKey for this stage's link (a pixel shader is always bound). */
     variantKey: string;
@@ -159,13 +166,15 @@ export class D3D8ProgrammableRenderer {
     private readonly ffpHybridStagePool: FfpUniformParams["stages"][number][] = [];
     /** Synthesized fixed-function vertex stages, by ffpVertexSpecKey. */
     private readonly ffpVertexStages = new Map<string, FfpVertexStage>();
-    private readonly ffpVertexConstants = new Float32Array(FFP_SYNTH_CONSTANT_COUNT * 4);
+    private readonly ffpVertexConstants = new Float32Array((FFP_SYNTH_CONSTANT_COUNT + FFP_VERTEX_LIGHTING_REGISTERS) * 4);
+    private readonly ffpVertexLighting = new FfpVertexLightingPacker();
     // resolveFfpVertexStage memo: the inputs of the last resolution, compared field-wise so a
     // draw whose state has not changed resolves without allocating.
     private readonly ffpMemoState = new Int32Array(FFP_VERTEX_STATE_WORDS);
     private ffpMemoVs = -1;
     private ffpMemoPs = -1;
     private ffpMemoResult: FfpVertexStage | null = null;
+    private readonly ffpVertexRefusals = new Set<string>();
     private readonly viewportScratch: SanitizedViewport = { x: 0, y: 0, width: 0, height: 0, minZ: 0, maxZ: 1 };
     private readonly drawViewportScratch: DrawViewport = { x: 0, y: 0, width: 0, height: 0, minZ: 0, maxZ: 1 };
 
@@ -191,7 +200,7 @@ export class D3D8ProgrammableRenderer {
      * D3D runs fixed-function vertex processing into the programmable pixel stage, so the
      * link gets that processing as synthesized vs_1_1 (ffp-vertex-synth.ts). Null when the
      * draw is not that pairing or needs fixed-function work the synthesis does not cover
-     * (lighting, vertex blending); such a draw stays on the fixed-function path.
+     * (vertex blending or unsupported texgen); such a draw stays on the fixed-function path.
      *
      * Called several times per draw; the answer is memoized on the state it depends on, so
      * only a state change pays for building the spec.
@@ -231,10 +240,11 @@ export class D3D8ProgrammableRenderer {
         vsObj: D3D8VsObject,
         ps: CompiledPs,
     ): FfpVertexStage | null {
-        if (this.getRS(adapter, D3DRENDERSTATE_LIGHTING) !== 0) return null;
-        if (this.getRS(adapter, D3DRENDERSTATE_VERTEXBLEND) !== 0) return null;
+        if (this.getRS(adapter, D3DRENDERSTATE_VERTEXBLEND) !== 0) {
+            return this.unsupportedFfpVertex("vertex blending with a programmable pixel shader");
+        }
         const inputs = describeDeclInputs(vsObj.decl);
-        if (!inputs.hasPosition) return null;
+        if (!inputs.hasPosition) return this.unsupportedFfpVertex("declaration has no position input");
 
         // D3DTTFF_PROJECTED is honoured by ps_1_1-1_3 `tex` alone; ps_1_4 and later project
         // explicitly (texld _dw / texldp), so there the flag is not part of the coordinate.
@@ -243,6 +253,7 @@ export class D3D8ProgrammableRenderer {
         for (const n of ps.analysis.samplers) outputs.add(n);
         const ts = adapter.textureStates;
         const spec: FfpVertexSpec = {
+            lighting: this.getRS(adapter, D3DRENDERSTATE_LIGHTING) !== 0,
             hasDiffuse: inputs.hasDiffuse,
             hasSpecular: inputs.hasSpecular,
             hasNormal: inputs.hasNormal,
@@ -265,12 +276,16 @@ export class D3D8ProgrammableRenderer {
             ),
             rangeFog: this.getRS(adapter, D3DRENDERSTATE_RANGEFOGENABLE) !== 0,
         };
-        if (!isFfpVertexSpecSupported(spec)) return null;
+        if (!isFfpVertexSpecSupported(spec)) return this.unsupportedFfpVertex(
+            `texture-coordinate generation/transform unsupported: ${JSON.stringify(spec.texcoords)}`);
         const key = ffpVertexSpecKey(spec);
         let stage = this.ffpVertexStages.get(key);
         if (!stage) {
             const projectedMask = ffpProjectedMask(spec);
             stage = {
+                lighting: spec.lighting ? { ...FFP_SYNTH_LIGHTING, normalRegister: inputs.hasNormal ? 3 : null } : null,
+                hasDiffuse: inputs.hasDiffuse,
+                hasSpecular: inputs.hasSpecular,
                 compiled: compileVertexShader(synthesizeFfpVertexShader(spec)),
                 variantKey: `${buildD3D8FfpVariantKey(0, projectedMask, null)}:fv${key}`,
                 projectedMask,
@@ -278,6 +293,14 @@ export class D3D8ProgrammableRenderer {
             this.ffpVertexStages.set(key, stage);
         }
         return stage;
+    }
+
+    private unsupportedFfpVertex(reason: string): null {
+        if (!this.ffpVertexRefusals.has(reason)) {
+            this.ffpVertexRefusals.add(reason);
+            Logger.warn(LogCategory.SYSTEM, `D3D8 fixed-function vertex stage unsupported: ${reason}; fallback cannot execute the bound pixel shader`);
+        }
+        return null;
     }
 
     /**
@@ -556,6 +579,7 @@ export class D3D8ProgrammableRenderer {
                 samplerStates: hybridSamplers ?? undefined,
                 projectedStages: projectedMask,
                 fixedFunctionPosition: ffpVertex ? FFP_SYNTH_POSITION : null,
+                fixedFunctionLighting: ffpVertex?.lighting,
             });
             if (link.interpolantBudgetExceeded) {
                 throw new Error("D3D8 shader link exceeds WebGPU inter-stage interpolant budget");
@@ -639,7 +663,9 @@ export class D3D8ProgrammableRenderer {
         const ps = psObj?.compiled ?? null;
         // The linker places the hidden pixel-centre vec4 right after the program's own
         // constant count, so a synthesized bank is cut to that count like a guest one.
-        const vsConstantLen = Math.min(vs ? vs.analysis.constantCount : 0, 256) * 4;
+        const vsConstantLen = Math.min(ffpVertex?.lighting
+            ? Math.max(vs!.analysis.constantCount, FFP_SYNTH_LIGHTING_SLOT + FFP_VERTEX_LIGHTING_REGISTERS)
+            : vs ? vs.analysis.constantCount : 0, 256) * 4;
         const vsLen = vsConstantLen + 4; // hidden c[] pixel-centre tail
         // A bound VS with NO pixel shader still needs the fixed-function texture-stage
         // cascade's state (see packFfpHybridPixelState / resolveProgrammablePipeline's
@@ -665,6 +691,10 @@ export class D3D8ProgrammableRenderer {
             const rt = adapter.activeRenderTarget;
             const vp = sanitizeViewportInto(this.viewportScratch, adapter.viewport, rt.width, rt.height);
             writeFfpVertexConstants(this.ffpVertexConstants, adapter, vp.width, vp.height);
+            if (ffpVertex.lighting) {
+                this.ffpVertexLighting.write(this.ffpVertexConstants, FFP_SYNTH_LIGHTING_SLOT,
+                    adapter.getFFPLightingState()!, adapter.renderStates, ffpVertex.hasDiffuse, ffpVertex.hasSpecular);
+            }
             copyPrefix(state.vsConst, this.ffpVertexConstants, vsConstantLen);
         } else {
             state.vsConst.set(shaders.vsConstants.subarray(0, vsConstantLen));

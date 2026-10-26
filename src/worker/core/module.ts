@@ -9,6 +9,9 @@ export interface IModule {
     exports: Record<string, ThunkImplementation>;
     initialize(process: Process): void;
     reset?(): void;
+    /** Remove module-owned temporary files before process exit or VFS teardown.
+     * Must be idempotent; rejection keeps reset from switching away from that VFS. */
+    cleanupProcessFiles?(): Promise<void>;
     recreateVTables?(): void;
     reregisterExports?(process: Process): void;
     /**
