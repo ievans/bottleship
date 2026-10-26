@@ -46,9 +46,10 @@ import { isWise, extractWise } from '@bottleship/formats/wise';
 import { isVise, extractVise } from '@bottleship/formats/vise';
 import { isInstallShield3, extractInstallShield3 } from '@bottleship/formats/installshield3';
 import { findRar4, extractRar4 } from '@bottleship/formats/rar';
+import { IsoImage, extractIsoToMap } from '@bottleship/formats/iso';
 import { isInstallShieldLauncher, extractInstallShieldLauncher } from '@bottleship/formats/installshield-launcher';
 
-export type InstallerVia = "ea-winzip" | "installshield" | "installshield3" | "wise" | "vise" | "rar4" | "inno" | "freearc" | "pftw" | "cab-sfx" | "msi" | "installshield-launcher" | "none";
+export type InstallerVia = "ea-winzip" | "installshield" | "installshield3" | "wise" | "vise" | "rar4" | "iso" | "inno" | "freearc" | "pftw" | "cab-sfx" | "msi" | "installshield-launcher" | "none";
 
 export interface ContainerExtractOptions {
     /** Shared unpack-streaming WASM bytes for Inno/FreeArc LZMA and RAR PPMd. */
@@ -72,6 +73,10 @@ export interface ContainerExtractOptions {
      * file in `files`, so it resolves these from that map without this hook.
      */
     resolveExternalFile?: (name: string, size: number) => Promise<Uint8Array | null> | Uint8Array | null;
+    /** Resolve an exact container-relative MSI cabinet or loose source path on demand. */
+    resolveInstallerFile?: (path: string) => Promise<Uint8Array | null> | Uint8Array | null;
+    /** Explicitly accept stale MSI hash metadata while reporting every mismatch. */
+    onMsiHashMismatch?: (path: string, expected: string, actual: string) => void;
     onProgress?: (pct: number, label: string) => void;
 }
 
@@ -522,8 +527,12 @@ const msiFormat: InstallerFormat<{ name: string; bytes: Uint8Array }> = {
     async extract(files, match, ctx) {
         const index = new Map([...files].map(([name, bytes]) => [normSlash(name).toLowerCase(), bytes]));
         const root = dirOf(match.name);
-        const gameFiles = await extractMsiPayload(match.bytes, name => index.get((root + normSlash(name)).toLowerCase()) ?? null, {
+        const gameFiles = await extractMsiPayload(match.bytes, name => {
+            const path = root + normSlash(name);
+            return index.get(path.toLowerCase()) ?? ctx.resolveInstallerFile?.(path) ?? null;
+        }, {
             inflateBlock: ctx.cabInflateBlock,
+            onHashMismatch: ctx.onMsiHashMismatch,
             onProgress: (done, total, name) => ctx.onProgress?.(Math.round(done / total * 100), `Extracting ${name}`),
         });
         return {gameFiles, note: 'MSI File/Component/Directory tables → INSTALLDIR (custom actions not executed)'};
@@ -582,12 +591,28 @@ const installShieldLauncherFormat: InstallerFormat<Uint8Array> = {
     },
 };
 
+const isoFormat: InstallerFormat<Uint8Array> = {
+    id: 'iso', label: 'ISO disc image',
+    detect(files) {
+        // An installed tree may retain a disc image beside its executable.
+        if ([...files.keys()].some(name => /\.exe$/i.test(name))) return null;
+        const images = [...files].filter(([name]) => /\.iso$/i.test(name));
+        if (images.length > 1) throw new Error('Multiple ISO images; import the discs together with iso-to-wgb');
+        return images[0]?.[1] ?? null;
+    },
+    async extract(_files, bytes, ctx) {
+        const files = extractIsoToMap(IsoImage.mount(new BufferSource(bytes)));
+        const inner = await extractInstallerFromFiles(files, ctx);
+        return {gameFiles: inner.gameFiles, note: `ISO → ${inner.note}`};
+    },
+};
+
 const INSTALLER_FORMATS: InstallerFormat<any>[] = [
     eaWinzipFormat, msiFormat, installShieldFormat, installShieldLauncherFormat,
     singlePayload('installshield3', 'InstallShield 3 Z archive', isInstallShield3, extractInstallShield3),
     singlePayload('wise', 'Wise DEFLATE installer', isWise, extractWise),
     singlePayload('vise', 'VISE object-table installer', isVise, extractVise),
-    rar4Format, freeArcFormat, pftwFormat, cabSfxFormat, innoFormat,
+    rar4Format, isoFormat, freeArcFormat, pftwFormat, cabSfxFormat, innoFormat,
 ];
 
 // --- the recursion ------------------------------------------------------------------
