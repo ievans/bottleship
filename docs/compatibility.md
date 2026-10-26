@@ -61,6 +61,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Tomb Raider II | playable | ✓ |
 | The Elder Scrolls III: Morrowind | playable | ✓ |
 | Nuclear Titbit (Ядерный Титбит) | playable | |
+| Neighbours from Hell (2003, Buka/Russian) | boots; tutorial movement verified | |
 | Airfix Dogfighter (demo) | playable | |
 | The Blackwell Legacy | playable | ✓ |
 | Sea Dogs | playable | ✓ |
@@ -133,6 +134,12 @@ in `7b25393`, now included in main. This updates the earlier startup failure rep
 [issue #31](https://github.com/jenissimo/bottleship/issues/31). Gameplay, campaign completion
 and stability have not been established by this confirmation; the original macOS/Apple
 Silicon environment from the issue has not been independently retested.
+
+Neighbours from Hell (2003, Russian Buka disc): the title screen, menus, first tutorial,
+character movement and room transition were checked. Russian speech and music play;
+MPEG assets with leading padding are recognized. The original disc's three stale MSI
+hash records require explicit acceptance during import. Later episodes and campaign
+completion have not been tested.
 
 ## Demo coverage
 
