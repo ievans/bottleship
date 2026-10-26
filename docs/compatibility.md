@@ -5,7 +5,7 @@ BottleShip targets native Win32 games of roughly **1997–2004** — the DirectD
 not exhaustive, and "runs" means different things at different stages (boots to menu vs. fully
 playable). Your mileage will vary with the exact build/version you own.
 
-Updated **2026-10-08** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
+Updated **2026-10-20** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
 been retested for this release. Observed demo stages are listed separately below. Successful
 GOG extraction does not establish gameplay coverage for that installer edition.
 
@@ -43,6 +43,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Quake II | playable | ✓ |
 | Half-Life: Uplink / Day One (demos) | playable | |
 | Half-Life 2 | boots | |
+| Empires: Dawn of the Modern World (2003, GOG) | boots | ✓ |
 | Red Faction | playable | ✓ |
 | Grand Theft Auto III | playable | |
 | Grand Theft Auto: Vice City | playable | |
@@ -110,6 +111,13 @@ The original Bard's Tale and Worms World Party demos are older editions than the
 remasters. The original Bard's Tale demo has now been checked independently (see below);
 Worms World Party's original demo reaches its startup splash; match entry remains unverified.
 
+Empires: Dawn of the Modern World (2003, GOG offline edition): startup is now confirmed
+by the maintainer (2026-10-20), following the resource-loading and x87 precision fixes
+in `7b25393`, now included in main. This updates the earlier startup failure reported in
+[issue #31](https://github.com/jenissimo/bottleship/issues/31). Gameplay, campaign completion
+and stability have not been established by this confirmation; the original macOS/Apple
+Silicon environment from the issue has not been independently retested.
+
 ## Demo coverage
 
 These observations cover the listed demo editions only; a rendered menu does not establish
@@ -145,6 +153,7 @@ full playability.
 | [Carmageddon II demo](https://archive.org/details/Carmageddon2CarpocalypseNowDemo) | Rendered Controls screen; race entry remains unverified | ✓ |
 | [Painkiller Demo 2](https://archive.org/details/Painkiller_Demo_2_build_v1.0) | Rendered main menu; level entry remains unverified | ✓ |
 | [Worms World Party original demo](https://ftp.zx.net.nz/pub/archive/ftp.team17.com/pub/t17/goodies/wwp_demo.exe) | Rendered demo splash; match entry remains unverified | ✓ |
+| Crimson Skies trial | [Contributor bring-up (#33)](https://github.com/jenissimo/bottleship/issues/33), independently verified on 2026-10-20: visible pilot-name editing, campaign hangar, voiced briefing, legible Flight Check objectives and the Hawaii mission in flight with HUD and keyboard roll controls. Direct3D 6; graphical glitches remain. Repacked from the original CrimsonTrial.exe with its own TrueType fonts installed under Windows Fonts. Wrapped DrawTextEx measurement and text color after solid GDI blits were fixed against native Windows oracles. Force feedback and mission completion remain unverified | ✓ |
 
 Harry Potter 1 and Unreal Tournament demos also reach their rendered menus.
 

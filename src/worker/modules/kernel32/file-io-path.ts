@@ -54,7 +54,7 @@ const joinWindowsPath = (dir: string, file: string): string => {
     return `${d}\\${f}`.replace(/\//g, '\\');
 };
 
-const collectDefaultSearchDirectories = (): string[] => {
+export const collectDefaultSearchDirectories = (): string[] => {
     const system = System.getInstance();
     const vfs = system.fileSystem;
     const dirs: string[] = [];
@@ -110,6 +110,17 @@ const writeSearchPathResultA = (
 
     return required - 1;
 };
+
+/**
+ * The directory GetTempPath reports exists on every Windows install, and programs create
+ * files and folders in it without creating it first. Make the TMP and TEMP directories.
+ */
+export function ensureTempDirectories(environment: Map<string, string>, vfs: Pick<VirtualFileSystem, 'ensureDirTreeSync'>): void {
+    for (const name of ['TMP', 'TEMP']) {
+        const dir = environment.get(name);
+        if (dir) vfs.ensureDirTreeSync(dir);
+    }
+}
 
 export function registerFileIoPathExports(exports: Record<string, ThunkImplementation>): void {
     exports['GetCurrentDirectoryA'] = (ctx, mem, args) => {
