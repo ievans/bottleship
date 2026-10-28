@@ -10,7 +10,7 @@
     "predev": "bun run generate-reference-argcounts && bun run generate-indexes",
     "dev": "bunx --bun vite",
     "dev:lan": "bun deploy/lan-dev.ts",
-    "dev:mp": "concurrently -n \"lan,vite\" -c \"green,magenta\" \"bun run dev:lan\" \"bun run dev\"",
+    "dev:mp": "concurrently -k -n \"lan,vite\" -c \"green,magenta\" \"bun run dev:lan\" \"bun run dev\"",
     "dev:ssl": "VITE_SSL=1 bun run dev",
     "dev:sidecar": "bun run tools/dev-sidecar/dev-sidecar.ts",
     "dev:logs": "bun run tools/dev-sidecar/dev-sidecar.ts",

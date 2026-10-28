@@ -33,9 +33,12 @@ export const SIDECAR_PORT = Number(process.env.BS_SIDECAR_PORT ?? 3001);
 export const GAME_DEV_FILTER = "game=dev";
 const IS_MAC = process.platform === "darwin";
 const IS_WIN = process.platform === "win32";
+const IS_LINUX = process.platform === "linux";
 const CHROME_PATH = IS_MAC
     ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    : "C:/Program Files/Google/Chrome/Application/chrome.exe";
+    : IS_LINUX
+        ? (process.env.BS_CHROME_PATH ?? "chromium")
+        : "C:/Program Files/Google/Chrome/Application/chrome.exe";
 /** Where a detached Chrome's stdout/stderr land — see launchChrome. */
 export const CHROME_STDIO_DIR = `${process.cwd()}/logs/chrome`;
 const DEFAULT_PROFILE = process.env.BS_CHROME_PROFILE ?? (IS_MAC
@@ -163,7 +166,16 @@ async function launchChrome(port: number, profile: string, autoplay: boolean): P
         ...(process.env.BS_CHROME_FLAGS ? process.env.BS_CHROME_FLAGS.split(" ").filter(Boolean) : []),
         "about:blank",
     ];
-    if (IS_MAC) {
+    if (IS_LINUX) {
+        // Headless unless a display exists. Flags a container needs (--no-sandbox,
+        // --disable-dev-shm-usage, WebGPU on a software adapter) come from BS_CHROME_FLAGS.
+        mkdirSync(CHROME_STDIO_DIR, { recursive: true });
+        const out = openSync(`${CHROME_STDIO_DIR}/stdout.log`, "a");
+        const err = openSync(`${CHROME_STDIO_DIR}/stderr.log`, "a");
+        Bun.spawn([CHROME_PATH, ...(process.env.DISPLAY ? [] : ["--headless=new"]), ...args], {
+            stdio: ["ignore", out, err],
+        }).unref();
+    } else if (IS_MAC) {
         // Detach so Chrome outlives this bun process. `open -na` launches a fresh
         // instance with our args even if Chrome is already running under another profile.
         Bun.spawn(["open", "-na", "Google Chrome", "--args", ...args], {

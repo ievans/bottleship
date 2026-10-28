@@ -240,6 +240,8 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // Vite refuses Host headers it does not know; set for a dev server reached by name.
+    ...process.env.BS_ALLOWED_HOSTS ? { allowedHosts: process.env.BS_ALLOWED_HOSTS.split(",") } : {},
     port: 5174,
     strictPort: true,
     ...useSsl ? { https: true } : {},
