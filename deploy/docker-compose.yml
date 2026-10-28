@@ -24,6 +24,8 @@ services:
       - BS_AUTH_USER=${BS_AUTH_USER:-}
       - BS_AUTH_PASS=${BS_AUTH_PASS:-}
       - BS_AUTH_REALM=${BS_AUTH_REALM:-BottleShip}
+      # Set to 1 behind a Cloudflare Tunnel / reverse proxy that is the ONLY way in (docs/multiplayer.md).
+      - LAN_TRUST_PROXY=${LAN_TRUST_PROXY:-}
     volumes:
       - ${BS_ROOT:-/srv/bottleship}:/app:ro
     networks:

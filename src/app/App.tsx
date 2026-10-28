@@ -17,7 +17,7 @@ import { AudioEngine, AudioPlayEncodedPayload, AudioPlayPayload, AudioUpdatePayl
 import { getLogClient, sendLogToServer, writeDebugFile, writeDebugFileBase64, rotateLogFile, logArtifactPath } from "../utils/log-client";
 import { bundleLogName } from "../utils/bundle-url";
 import { sessionFromLocation } from "../harness/session";
-import { lanRelayUrl } from "../net/lan-url";
+import { lanRelayUrl, newLanRoom } from "../net/lan-url";
 import { installHarnessFacade } from "../harness/facade";
 import { getCachedGamepadMeta, initGamepadCache, readLiveGamepad, rescanGamepads } from "../gamepad-cache";
 import GameSelectScreen, { type GameEntry } from "../library/GameSelectScreen";
@@ -417,9 +417,7 @@ export default function App() {
   }, []);
   const openLanPanel = useCallback(() => {
     if (!lanRoom) {
-      // ROOM_NAME (lan-protocol.ts) allows [A-Za-z0-9_-]{1,32}; base36 timestamp+random
-      // keeps it short, unguessable enough for a casual LAN session, URL-safe as-is.
-      const room = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const room = newLanRoom();
       joinLanRoom(room);
     }
     setLanPanelOpen((open) => !open);

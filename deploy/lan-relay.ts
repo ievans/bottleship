@@ -131,9 +131,29 @@ export function originAllowed(origin: string | null, host: string | null): boole
     }
 }
 
+/** Cap key for a client address: an IPv6 host controls its whole /64, so that is the unit. */
+export function addressKey(addr: string): string {
+    const a = addr.trim().toLowerCase().replace(/%.*$/, "");
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(a);
+    if (mapped) return mapped[1];
+    if (!a.includes(":")) return a;
+    const halves = a.split("::");
+    if (halves.length > 2) return a;
+    const head = halves[0] ? halves[0].split(":") : [];
+    const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+    const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+    const groups = [...head, ...Array(Math.max(fill, 0)).fill("0"), ...tail];
+    if (groups.length !== 8 || !groups.every((g) => /^[0-9a-f]{1,4}$/.test(g))) return a;
+    return `${groups.slice(0, 4).map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+}
+
 export interface LanServeOptions {
     relay?: LanRelay;
-    /** Trust X-Forwarded-For for the per-address cap (only behind a proxy you control). */
+    /**
+     * Believe the proxy's client-address headers for the per-address cap (only when every request
+     * reaches this server through a proxy you control). Without it all clients behind a tunnel
+     * share the tunnel's address and its cap.
+     */
     trustProxy?: boolean;
 }
 
@@ -150,8 +170,12 @@ export function serveLan(opts: LanServeOptions = {}) {
             if (!ROOM_NAME.test(m[1])) return new Response("Bad room", { status: 400 });
             // A browser page on another origin must not be able to join a room.
             if (!originAllowed(req.headers.get("Origin"), req.headers.get("Host"))) return new Response("Forbidden", { status: 403 });
-            const fwd = trustProxy ? req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() : undefined;
-            const key = fwd || server.requestIP?.(req)?.address || "unknown";
+            // Cloudflare overwrites CF-Connecting-IP, whereas it appends to a client-supplied
+            // X-Forwarded-For, so only the former is unforgeable there.
+            const fwd = trustProxy
+                ? req.headers.get("CF-Connecting-IP")?.trim() || req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim()
+                : undefined;
+            const key = addressKey(fwd || server.requestIP?.(req)?.address || "unknown");
             if (server.upgrade(req, { data: { room: m[1], key, peer: null } })) return undefined;
             return new Response("Upgrade failed", { status: 400 });
         },
@@ -160,7 +184,8 @@ export function serveLan(opts: LanServeOptions = {}) {
             // A reader that falls behind loses frames; for TCP that is silent corruption, so drop it.
             backpressureLimit: 1 << 20,
             closeOnBackpressureLimit: true,
-            idleTimeout: 120,
+            // Bun pings at half this; a tunnel/CDN drops a WebSocket that stays silent for ~100 s.
+            idleTimeout: 60,
             open(ws: { data: Data; send(b: Uint8Array): number; close(code?: number): void }) {
                 const peer = relay.join(ws.data.room, (f) => { if (ws.send(f) === 0) ws.close(1013); },
                     { key: ws.data.key, kick: () => ws.close(1008) });

@@ -32,6 +32,29 @@ Without `?lan=`, Winsock behaves exactly as before (the offline stubs).
 - Behind a reverse proxy, pass WebSocket upgrades and keep the `Host` header: the relay refuses
   an `Origin` whose host differs from `Host`.
 
+## Behind a Cloudflare Tunnel (or any reverse proxy)
+
+`cloudflared` forwards WebSocket upgrades as is, so `/lan/<room>` needs no special rule. Point the
+tunnel at the server (`http://bottleship-stand:5173`, or `http://localhost:5173`) and:
+
+- **Set `LAN_TRUST_PROXY=1`** (the compose file passes it through). Otherwise every Internet client
+  arrives from the tunnel's address and the whole site shares one `LAN_MAX_CONN_PER_IP` allowance.
+  With it the cap keys on `CF-Connecting-IP` (which Cloudflare overwrites, so a client cannot forge
+  it), then the first `X-Forwarded-For` entry, then the socket address. IPv6 clients are counted per /64.
+  Only enable it when the tunnel is the sole way to reach the port — do not publish it — or a direct
+  client can send those headers itself.
+- **Keep the `Host` header.** The relay refuses an `Origin` that differs from `Host`; do not set
+  `httpHostHeader` on the tunnel's origin to something other than the public hostname.
+- **Protect the site.** A room is open to whoever knows its name. The in-app button makes a 20-character
+  random name (~100 bits), so an invite link is the credential. Add Cloudflare Access or
+  `BS_AUTH_USER`/`BS_AUTH_PASS` if the whole stand should not be public.
+- Idle sockets are pinged every 30 s, well inside the ~100 s a proxy waits before dropping a silent
+  WebSocket.
+- `tools/make-stand.ts` now ships `lan-relay.ts` and `lan-protocol.ts` beside `server.ts`; an older
+  payload has no relay (`/lan/…` answers 404) until it is rebuilt.
+
+Peers still talk through the relay only, so no inbound port or UDP is needed on any client.
+
 ## Relay limits and hardening
 
 Rooms are open to anyone who knows the name, so use an unguessable room name and put the site
@@ -39,7 +62,7 @@ behind `BS_AUTH_USER`/`BS_AUTH_PASS` or your access proxy for anything public.
 
 - At most 32 peers per room, 256 rooms, 16 connections per client address
   (`LAN_MAX_CONN_PER_IP`). Behind a reverse proxy set `LAN_TRUST_PROXY=1` so the cap uses the
-  first `X-Forwarded-For` entry (only do this if the proxy sets that header itself).
+  client address the proxy reports (see above).
 - A peer is disconnected for exceeding ~2 MiB/s sustained (4 MiB burst); a broadcast is charged
   once per recipient. A reader that cannot keep up is disconnected rather than silently losing
   frames, because a lost TCP segment would corrupt the stream.
@@ -109,6 +132,6 @@ lobby). Observed wire format:
 
 `tools/tests/lan-stack.test.ts` (relay + stack), `tools/tests/lan-exports.test.ts` (thunks
 against a fake guest address space), `tools/tests/lan-hardening.test.ts` (forged frames, limits,
-reconnect, origin/upgrade handling), `tools/tests/lan-hostent.test.ts` (peer name resolution),
+reconnect, origin/upgrade handling), `tools/tests/lan-hostent.test.ts` (peer name resolution), `tools/tests/lan-tunnel.test.ts` (proxy client address, room names, stand payload),
 `tools/tests/iphlpapi.test.ts` (adapter enumeration), `tools/tests/lan-peer.test.ts` (the
 synthetic peer).
