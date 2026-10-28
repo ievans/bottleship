@@ -14,7 +14,8 @@ const SOCKET_ERROR = -1;
 const INVALID_SOCKET = -1;
 const AF_INET = 2;
 const SOCKADDR_IN = 16;
-const WSAEFAULT = 10014, WSAENOTSOCK = 10038, WSAEINTR = 10004;
+const WSAEFAULT = 10014, WSAENOTSOCK = 10038, WSAEINTR = 10004, WSAETIMEDOUT = 10060;
+const SO_RCVTIMEO = 0x1006;
 const MSG_PEEK = 2;
 const FIONREAD = 0x4004667f;
 const PENDING = Symbol("pending");
@@ -71,16 +72,19 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
     const own = (s: number): boolean => d.isActive() && stack.has(s);
 
     /** Retries `op` until it yields a result; blocking sockets park the thread on the stack. */
-    const blocking = (s: number, op: () => number | Pending, failed: number): number | Promise<number> => {
+    const blocking = (s: number, op: () => number | Pending, failed: number, timeoutOpt = 0): number | Promise<number> => {
         const first = op();
         if (first !== PENDING) return first;
         if (table.isNonBlocking(s)) { setError(E.WOULDBLOCK); return failed; }
+        const limit = timeoutOpt ? stack.getOpt(s, SOL_SOCKET, timeoutOpt) : 0;
+        const deadline = limit > 0 ? performance.now() + limit : Infinity;
         return (async () => {
             for (;;) {
-                await stack.waitChange([s], -1);
+                await stack.waitChange([s], deadline === Infinity ? -1 : Math.max(0, deadline - performance.now()));
                 if (!stack.has(s)) { setError(WSAEINTR); return failed; }
                 const r = op();
                 if (r !== PENDING) return r;
+                if (performance.now() >= deadline) { setError(WSAETIMEDOUT); return failed; }
             }
         })();
     };
@@ -89,11 +93,12 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
 
     const recvInto = (s: number, len: number, flags: number, deliver: (data: Uint8Array) => boolean,
         name: ((ip: number, port: number) => boolean) | null): number | Pending => {
-        const r = stack.recv(s, len, (flags & MSG_PEEK) !== 0);
+        const r = stack.recv(s, len, true);
         if (r.err === E.WOULDBLOCK) return PENDING;
         if (r.err && r.err !== E.MSGSIZE) return fail(r.err);
         if (!deliver(r.data)) return fail(WSAEFAULT);
         if (name && !name(r.ip, r.port)) return fail(WSAEFAULT);
+        if ((flags & MSG_PEEK) === 0) stack.recv(s, len, false);
         setError(r.err);
         return r.err === E.MSGSIZE ? SOCKET_ERROR : r.data.length;
     };
@@ -223,9 +228,9 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
                 const r = stack.accept(s, () => table.socket(1));
                 if (r.err === E.WOULDBLOCK) return PENDING;
                 if (r.err) return fail(r.err, INVALID_SOCKET);
-                writeName(a[1] >>> 0, a[2] >>> 0, r.ip, r.port);
+                if (table.isNonBlocking(s)) table.setNonBlocking(r.id, true);
                 setError(0);
-                return r.id;
+                return writeName(a[1] >>> 0, a[2] >>> 0, r.ip, r.port) ? r.id : fail(WSAEFAULT, INVALID_SOCKET);
             }, INVALID_SOCKET);
         },
         shutdown: (_c, _m, a) => {
@@ -257,7 +262,7 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             if (!own(s)) return PASS;
             const buf = a[1] >>> 0, len = a[2] >>> 0;
             return blocking(s, () => recvInto(s, len, a[3] | 0,
-                data => data.length === 0 || Mem.writeBytes(buf, data) === data.length, null), SOCKET_ERROR);
+                data => data.length === 0 || Mem.writeBytes(buf, data) === data.length, null), SOCKET_ERROR, SO_RCVTIMEO);
         },
         recvfrom: (_c, _m, a) => {
             const s = a[0] >>> 0;
@@ -266,7 +271,7 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             if (!nameBufferOk(from, fromLen)) return fail(WSAEFAULT);
             return blocking(s, () => recvInto(s, len, a[3] | 0,
                 data => data.length === 0 || Mem.writeBytes(buf, data) === data.length,
-                (ip, port) => writeName(from, fromLen, ip, port)), SOCKET_ERROR);
+                (ip, port) => writeName(from, fromLen, ip, port)), SOCKET_ERROR, SO_RCVTIMEO);
         },
 
         // ---- names / options ----
@@ -326,8 +331,9 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
 
         // ---- readiness ----
         select: (_c, _m, a) => {
+            if (!d.isActive()) return PASS;
             const sets = [a[1] >>> 0, a[2] >>> 0, a[3] >>> 0].map(readFdSet);
-            if (sets.some(x => x === null)) return fail(WSAEFAULT);
+            if (sets.some(x => x === null)) return PASS;
             const [rd, wr, ex] = sets as number[][];
             const all = [...rd, ...wr, ...ex];
             if (!all.some(own)) return PASS;
@@ -355,8 +361,10 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             return (async () => {
                 const deadline = timeoutMs < 0 ? Infinity : performance.now() + timeoutMs;
                 for (;;) {
+                    if (!watch.every(w => stack.has(w))) return fail(WSAENOTSOCK);
                     const left = deadline === Infinity ? -1 : Math.max(0, deadline - performance.now());
                     await stack.waitChange(watch, left);
+                    if (!watch.every(w => stack.has(w))) return fail(WSAENOTSOCK);
                     const r = poll();
                     if (r[0].length + r[1].length + r[2].length > 0 || performance.now() >= deadline) return finish(r);
                 }
@@ -430,7 +438,7 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             if (a[3]) Mem.writeUint32(a[3] >>> 0, got);
             if (flagsPtr) Mem.writeUint32(flagsPtr, 0);
             return 0;
-        }, SOCKET_ERROR);
+        }, SOCKET_ERROR, SO_RCVTIMEO);
     };
 
     return out;

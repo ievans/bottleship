@@ -3,3 +3,6 @@ dist
 .git
 logs
 .claude
+plan
+.env*
+public/apps

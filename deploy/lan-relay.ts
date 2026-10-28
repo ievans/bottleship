@@ -7,6 +7,11 @@ import { LAN_SUBNET, LAN_MAX_FRAME, ROOM_NAME, Op, decode, encode, isBroadcast }
 
 export const MAX_PEERS_PER_ROOM = 32;
 export const MAX_ROOMS = 256;
+/** Concurrent connections one client address may hold (override: LAN_MAX_CONN_PER_IP). */
+export const MAX_CONN_PER_KEY = 16;
+/** Token bucket per peer, in bytes delivered (a broadcast is charged once per recipient). */
+export const RATE_BYTES_PER_SEC = 2 << 20;
+export const RATE_BURST_BYTES = 4 << 20;
 const FIRST_HOST = 2;
 const LAST_HOST = 254;
 
@@ -19,12 +24,40 @@ export interface LanPeer {
 
 type Sink = (frame: Uint8Array) => void;
 
+export interface JoinOptions {
+    /** Client address; connections sharing a key count against MAX_CONN_PER_KEY. */
+    key?: string;
+    /** Called when the relay disconnects the peer (rate limit); the transport must close. */
+    kick?: () => void;
+}
+
+export interface LanRelayOptions {
+    maxConnPerKey?: number;
+    rateBytesPerSec?: number;
+    burstBytes?: number;
+    now?: () => number;
+}
+
 export class LanRelay {
     private rooms = new Map<string, Map<number, Sink>>();
+    private perKey = new Map<string, number>();
+    private readonly maxConnPerKey: number;
+    private readonly now: () => number;
+    private readonly rate: number;
+    private readonly burst: number;
 
-    /** Returns null when the room name is invalid or the room/server is full. */
-    join(room: string, sink: Sink): LanPeer | null {
+    constructor(opts: LanRelayOptions = {}) {
+        this.maxConnPerKey = opts.maxConnPerKey ?? MAX_CONN_PER_KEY;
+        this.now = opts.now ?? (() => performance.now());
+        this.rate = opts.rateBytesPerSec ?? RATE_BYTES_PER_SEC;
+        this.burst = opts.burstBytes ?? RATE_BURST_BYTES;
+    }
+
+    /** Returns null when the room name is invalid or the room/server/client is full. */
+    join(room: string, sink: Sink, opts: JoinOptions = {}): LanPeer | null {
         if (!ROOM_NAME.test(room)) return null;
+        const key = opts.key;
+        if (key !== undefined && (this.perKey.get(key) ?? 0) >= this.maxConnPerKey) return null;
         let peers = this.rooms.get(room);
         if (!peers) {
             if (this.rooms.size >= MAX_ROOMS) return null;
@@ -36,25 +69,43 @@ export class LanRelay {
         while (host <= LAST_HOST && peers.has((LAN_SUBNET | host) >>> 0)) host++;
         const ip = (LAN_SUBNET | host) >>> 0;
         peers.set(ip, sink);
+        if (key !== undefined) this.perKey.set(key, (this.perKey.get(key) ?? 0) + 1);
         sink(encode({ op: Op.Welcome, ip }));
 
         const members = peers;
-        return {
+        let tokens = this.burst;
+        let last = this.now();
+        let left = false;
+        const peer: LanPeer = {
             ip,
             receive: (frame) => {
-                if (frame.length > LAN_MAX_FRAME) return;
+                if (left || frame.length > LAN_MAX_FRAME) return;
                 const msg = decode(frame);
                 // Only client→relay ops are routable; a client must not forge Welcome/PeerLeave.
                 if (!msg || msg.op === Op.Welcome || msg.op === Op.PeerLeave) return;
+                const bcast = isBroadcast(msg.ip);
+                if (bcast && msg.op !== Op.Udp) return;
+                const fanout = bcast ? Math.max(1, members.size - 1) : 1;
+                const t = this.now();
+                tokens = Math.min(this.burst, tokens + ((t - last) / 1000) * this.rate);
+                last = t;
+                tokens -= frame.length * fanout;
+                // Dropping would corrupt a TCP stream silently, so over-limit means disconnect.
+                if (tokens < 0) { opts.kick?.(); peer.leave(); return; }
                 const out = encode({ ...msg, ip } as typeof msg);
-                if (isBroadcast(msg.ip)) {
-                    if (msg.op !== Op.Udp) return;
+                if (bcast) {
                     for (const [peerIp, send] of members) if (peerIp !== ip) send(out);
                     return;
                 }
                 members.get(msg.ip)?.(out);
             },
             leave: () => {
+                if (left) return;
+                left = true;
+                if (key !== undefined) {
+                    const n = (this.perKey.get(key) ?? 1) - 1;
+                    if (n <= 0) this.perKey.delete(key); else this.perKey.set(key, n);
+                }
                 if (members.get(ip) !== sink) return;
                 members.delete(ip);
                 const gone = encode({ op: Op.PeerLeave, ip });
@@ -62,6 +113,7 @@ export class LanRelay {
                 if (members.size === 0 && this.rooms.get(room) === members) this.rooms.delete(room);
             },
         };
+        return peer;
     }
 
     roomCount(): number {
@@ -69,24 +121,49 @@ export class LanRelay {
     }
 }
 
+/** Same-origin check; a missing Origin (non-browser client) is allowed, a malformed one is not. */
+export function originAllowed(origin: string | null, host: string | null): boolean {
+    if (!origin) return true;
+    try {
+        return host !== null && new URL(origin).host.toLowerCase() === host.toLowerCase();
+    } catch {
+        return false;
+    }
+}
+
+export interface LanServeOptions {
+    relay?: LanRelay;
+    /** Trust X-Forwarded-For for the per-address cap (only behind a proxy you control). */
+    trustProxy?: boolean;
+}
+
 /** Bun WebSocket handler pair for `Bun.serve`; route `/lan/<room>` to `upgrade`. */
-export function serveLan(relay = new LanRelay()) {
-    type Data = { room: string; peer: LanPeer | null };
+export function serveLan(opts: LanServeOptions = {}) {
+    const trustProxy = opts.trustProxy ?? process.env.LAN_TRUST_PROXY === "1";
+    const relay = opts.relay ?? new LanRelay({ maxConnPerKey: Number(process.env.LAN_MAX_CONN_PER_IP) || undefined });
+    type Data = { room: string; key: string; peer: LanPeer | null };
+    type Server = { upgrade(req: Request, o: { data: Data }): boolean; requestIP?(req: Request): { address: string } | null };
     return {
-        upgrade(req: Request, server: { upgrade(req: Request, o: { data: Data }): boolean }): Response | undefined {
+        upgrade(req: Request, server: Server): Response | undefined {
             const m = /^\/lan\/([^/]+)$/.exec(new URL(req.url).pathname);
             if (!m) return new Response("Not Found", { status: 404 });
             if (!ROOM_NAME.test(m[1])) return new Response("Bad room", { status: 400 });
             // A browser page on another origin must not be able to join a room.
-            const origin = req.headers.get("Origin");
-            if (origin && new URL(origin).host !== req.headers.get("Host")) return new Response("Forbidden", { status: 403 });
-            if (server.upgrade(req, { data: { room: m[1], peer: null } })) return undefined;
+            if (!originAllowed(req.headers.get("Origin"), req.headers.get("Host"))) return new Response("Forbidden", { status: 403 });
+            const fwd = trustProxy ? req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() : undefined;
+            const key = fwd || server.requestIP?.(req)?.address || "unknown";
+            if (server.upgrade(req, { data: { room: m[1], key, peer: null } })) return undefined;
             return new Response("Upgrade failed", { status: 400 });
         },
         websocket: {
             maxPayloadLength: LAN_MAX_FRAME,
-            open(ws: { data: Data; send(b: Uint8Array): void; close(code?: number): void }) {
-                const peer = relay.join(ws.data.room, (f) => ws.send(f));
+            // A reader that falls behind loses frames; for TCP that is silent corruption, so drop it.
+            backpressureLimit: 1 << 20,
+            closeOnBackpressureLimit: true,
+            idleTimeout: 120,
+            open(ws: { data: Data; send(b: Uint8Array): number; close(code?: number): void }) {
+                const peer = relay.join(ws.data.room, (f) => { if (ws.send(f) === 0) ws.close(1013); },
+                    { key: ws.data.key, kick: () => ws.close(1008) });
                 if (!peer) { ws.close(1013); return; }
                 ws.data.peer = peer;
             },

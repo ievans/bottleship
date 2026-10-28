@@ -131,7 +131,11 @@ async function serveFile(filePath: string, req: Request, extraHeaders: Record<st
 
 // Virtual-LAN relay for multiplayer (/lan/<room>). Optional so a stand that ships only
 // server.ts keeps working; see docs/multiplayer.md.
-const lan = await import("./lan-relay").then((m) => m.serveLan()).catch(() => null);
+const lan = await import("./lan-relay").then((m) => m.serveLan()).catch((err: Error & { code?: string }) => {
+    // Only an absent relay file is "not installed"; a broken one must not hide.
+    if (err.code !== "ERR_MODULE_NOT_FOUND" && !/Cannot find module/.test(String(err.message))) console.error("lan relay failed to load:", err);
+    return null;
+});
 
 Bun.serve({
     port: PORT,

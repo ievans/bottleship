@@ -2,13 +2,14 @@
 # Development image: Bun + Chromium (for the CDP harness) + Claude Code, running as a
 # non-root user. The repo is bind-mounted at /workspace, so edits made by Claude inside the
 # container are live on the host and picked up by the Vite dev server.
-FROM oven/bun:1.2.22
+FROM oven/bun:1.2.22@sha256:66ba69deede44e3af5dc542def218fdb3bcad2205900ea761dc5623bf973d2df
 
-# CLAUDE_CODE_VERSION: pin an exact version for reproducible builds, e.g.
-#   docker compose -f docker-compose.dev.yml build --build-arg CLAUDE_CODE_VERSION=<x.y.z>
-ARG CLAUDE_CODE_VERSION=latest
+# This image holds API/GitHub tokens, so the CLI is pinned to an exact version you choose
+# (`npm view @anthropic-ai/claude-code version`); there is deliberately no default.
+ARG CLAUDE_CODE_VERSION
 
-RUN apt-get update \
+RUN test -n "$CLAUDE_CODE_VERSION" || { echo 'set CLAUDE_CODE_VERSION to an exact version' >&2; exit 1; } \
+ && apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git ripgrep chromium nodejs npm openssh-client procps \
  && rm -rf /var/lib/apt/lists/* \

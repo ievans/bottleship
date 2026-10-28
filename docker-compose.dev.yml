@@ -1,6 +1,7 @@
 # Live development with Claude Code inside the container.
 #
 #   git submodule update --init            # vendor/v86 must exist on the host
+#   export CLAUDE_CODE_VERSION=<x.y.z>     # exact pin: npm view @anthropic-ai/claude-code version
 #   export ANTHROPIC_API_KEY=...           # or run `claude login` once inside (persists in a volume)
 #   docker compose -f docker-compose.dev.yml up -d --build
 #   docker compose -f docker-compose.dev.yml exec claude claude
@@ -9,11 +10,14 @@
 # Vite runs with HMR off (a reload restarts the guest), so reload the tab after Claude edits.
 services:
   dev:
-    build: { context: ., dockerfile: Dockerfile.dev }
+    build: &build
+      context: .
+      dockerfile: Dockerfile.dev
+      args: { CLAUDE_CODE_VERSION: "${CLAUDE_CODE_VERSION:?pin an exact Claude Code version}" }
     working_dir: /workspace
     command: sh -c "bun install --frozen-lockfile && exec bun run dev:mp"
     ports:
-      - "5174:5174"
+      - "127.0.0.1:5174:5174"   # loopback only: the dev server exposes the source tree and the relay
     volumes:
       - .:/workspace
       - node_modules:/workspace/node_modules
@@ -23,12 +27,14 @@ services:
     restart: unless-stopped
 
   claude:
-    build: { context: ., dockerfile: Dockerfile.dev }
+    build: *build
     working_dir: /workspace
-    command: sleep infinity
+    command: sh -c "bun install --frozen-lockfile && exec sleep infinity"
     volumes:
       - .:/workspace
-      - node_modules:/workspace/node_modules
+      # Its own install: this container holds tokens and must not run code the dev
+      # container's dependency scripts planted in a shared volume.
+      - node_modules_claude:/workspace/node_modules
       - claude-home:/home/bun/.claude
     environment:
       - ANTHROPIC_API_KEY
@@ -39,4 +45,5 @@ services:
 
 volumes:
   node_modules:
+  node_modules_claude:
   claude-home:

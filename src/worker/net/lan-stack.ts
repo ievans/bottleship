@@ -49,7 +49,6 @@ interface Sock {
     pending: Sock[];
     role: Dir;
     cid: number;
-    connectorIp: number;
     remoteIp: number;
     remotePort: number;
     rx: Uint8Array[];
@@ -78,12 +77,11 @@ export class LanStack {
     private link: LanLink | null = null;
     private socks = new Map<number, Sock>();
     private conns = new Map<string, Sock>();
-    private nextCid = 1;
     private nextEphemeral = EPHEMERAL_LO + Math.floor(Math.random() * 1000);
 
     attachLink(link: LanLink | null): void {
         this.link = link;
-        if (!link) this.ip = null;
+        if (!link && this.ip !== null) { this.ip = null; this.networkLost(); }
     }
 
     get linked(): boolean { return this.ip !== null; }
@@ -92,7 +90,12 @@ export class LanStack {
     onFrame(frame: Uint8Array): void {
         const msg = decode(frame);
         if (!msg) return;
-        if (msg.op === Op.Welcome) { this.ip = msg.ip; return; }
+        if (msg.op === Op.Welcome) {
+            const changed = this.ip !== null && this.ip !== msg.ip;
+            this.ip = msg.ip;
+            if (changed) this.networkLost();
+            return;
+        }
         if (msg.op === Op.PeerLeave) { this.peerGone(msg.ip); return; }
         this.receive(msg.ip, msg);
     }
@@ -103,7 +106,7 @@ export class LanStack {
         this.socks.set(id, {
             id, kind: type === 1 ? "tcp" : "udp", boundIp: 0, boundPort: 0, opts: new Map(),
             dgrams: [], peerIp: 0, peerPort: 0,
-            state: "idle", child: false, backlog: 0, pending: [], role: 0, cid: 0, connectorIp: 0,
+            state: "idle", child: false, backlog: 0, pending: [], role: 0, cid: 0,
             remoteIp: 0, remotePort: 0, rx: [], rxBytes: 0, peerFin: false, sentFin: false,
             reset: false, connectFailed: false, soError: 0, timer: null,
             async: null, evt: null, readArmed: true, waiters: new Set(),
@@ -119,6 +122,7 @@ export class LanStack {
         if (s.timer) clearTimeout(s.timer);
         if (s.kind === "tcp") {
             if (s.state === "connected" && !s.sentFin && !s.reset) this.emit(s.remoteIp, { op: Op.Fin, cid: s.cid, dir: s.role });
+            else if (s.state === "connecting") this.emit(s.remoteIp, { op: Op.Rst, cid: s.cid, dir: s.role });
             this.dropConn(s);
             for (const c of s.pending) {
                 this.emit(c.remoteIp, { op: Op.Rst, cid: c.cid, dir: c.role });
@@ -198,8 +202,7 @@ export class LanStack {
             const d = s.dgrams[0];
             if (!d) return { err: E.WOULDBLOCK, data: none, ip: 0, port: 0 };
             const cut = d.data.length > maxLen;
-            if (!peek) s.dgrams.shift();
-            this.rearmRead(s);
+            if (!peek) { s.dgrams.shift(); this.rearmRead(s); }
             return { err: cut ? E.MSGSIZE : 0, data: cut ? d.data.subarray(0, maxLen) : d.data, ip: d.ip, port: d.port };
         }
         if (s.state !== "connected" && !s.reset && !s.peerFin && s.rxBytes === 0) {
@@ -218,8 +221,7 @@ export class LanStack {
             out.set(c.subarray(0, n), off);
             off += n;
         }
-        if (!peek) this.consume(s, out.length);
-        this.rearmRead(s);
+        if (!peek) { this.consume(s, out.length); this.rearmRead(s); }
         return { err: 0, data: out, ip: s.remoteIp, port: s.remotePort };
     }
 
@@ -240,17 +242,15 @@ export class LanStack {
         if (ip === 0 || port === 0 || isBroadcast(ip)) return E.ADDRNOTAVAIL;
         if (!this.isSelf(ip) && (!this.link || this.ip === null)) return E.NETUNREACH;
         if (s.boundPort === 0) { const e = this.bind(id, 0, 0); if (e) return e; }
-        const target = ip >>> 24 === 127 ? this.selfIp() : ip;
         s.role = 0;
-        s.cid = this.nextCid++;
-        s.connectorIp = this.selfIp();
-        s.remoteIp = target;
+        s.cid = this.newCid(0);
+        s.remoteIp = this.isSelf(ip) ? (ip >>> 24 === 127 ? LOOPBACK : ip) : ip;
         s.remotePort = port;
         s.state = "connecting";
         s.connectFailed = false;
-        this.conns.set(this.key(0, s.connectorIp, s.cid), s);
+        this.conns.set(this.key(0, s.cid), s);
         s.timer = setTimeout(() => this.failConnect(s, E.TIMEDOUT), this.connectTimeoutMs);
-        this.emit(target, { op: Op.Syn, cid: s.cid, srcPort: s.boundPort, dstPort: port });
+        this.emit(s.remoteIp, { op: Op.Syn, cid: s.cid, srcPort: s.boundPort, dstPort: port });
         return E.WOULDBLOCK;
     }
 
@@ -271,6 +271,11 @@ export class LanStack {
         if (!c) return { err: E.WOULDBLOCK, id: 0, ip: 0, port: 0 };
         c.id = allocId();
         this.socks.set(c.id, c);
+        // The accepted socket inherits the listener's async/event selection.
+        if (s.async) c.async = { ...s.async };
+        if (s.evt) c.evt = { handle: s.evt.handle, mask: s.evt.mask, fired: 0, errs: new Array<number>(10).fill(0) };
+        c.readArmed = true;
+        if (c.async || c.evt) this.replay(c);
         if (s.pending.length) this.signal(s, FD_ACCEPT);
         return { err: 0, id: c.id, ip: c.remoteIp, port: c.remotePort };
     }
@@ -385,7 +390,7 @@ export class LanStack {
     private selfIp(): number { return this.ip ?? LOOPBACK; }
     private isSelf(ip: number): boolean { return ip >>> 24 === 127 || (this.ip !== null && ip === this.ip); }
     private localFor(remote: number): number { return remote >>> 24 === 127 ? LOOPBACK : this.selfIp(); }
-    private key(role: Dir, connectorIp: number, cid: number): string { return `${role}:${connectorIp}:${cid}`; }
+    private key(role: Dir, cid: number): string { return `${role}:${cid}`; }
 
     private emit(dstIp: number, m: DistributiveOmit<LanMsg, "ip">): void {
         if (this.isSelf(dstIp)) {
@@ -424,7 +429,7 @@ export class LanStack {
             case Op.Udp: this.udpIn(srcIp, m.srcPort, m.dstPort, m.data); return;
             case Op.Syn: this.synIn(srcIp, m); return;
             case Op.SynAck: {
-                const s = this.conns.get(this.key(0, this.selfIp(), m.cid));
+                const s = this.findConn(srcIp, m.cid, 1);
                 if (!s || s.state !== "connecting") return;
                 if (s.timer) { clearTimeout(s.timer); s.timer = null; }
                 s.state = "connected";
@@ -434,8 +439,15 @@ export class LanStack {
             }
             case Op.Data: {
                 const s = this.findConn(srcIp, m.cid, m.dir);
-                if (!s || s.state !== "connected") return;
-                if (s.rxBytes + m.data.length > MAX_TCP_RX_BYTES) return;
+                if (!s) { this.emit(srcIp, { op: Op.Rst, cid: m.cid, dir: m.dir === 0 ? 1 : 0 }); return; }
+                if (s.state !== "connected") return;
+                // No window is advertised, so overflow cannot be back-pressured: reset
+                // rather than silently leave a hole in the stream.
+                if (s.rxBytes + m.data.length > MAX_TCP_RX_BYTES) {
+                    this.emit(s.remoteIp, { op: Op.Rst, cid: s.cid, dir: s.role });
+                    this.abort(s);
+                    return;
+                }
                 s.rx.push(m.data.slice());
                 s.rxBytes += m.data.length;
                 this.signal(s, FD_READ);
@@ -443,7 +455,7 @@ export class LanStack {
             }
             case Op.Fin: {
                 const s = this.findConn(srcIp, m.cid, m.dir);
-                if (!s) return;
+                if (!s) { this.emit(srcIp, { op: Op.Rst, cid: m.cid, dir: m.dir === 0 ? 1 : 0 }); return; }
                 s.peerFin = true;
                 this.signal(s, FD_READ);
                 this.signal(s, FD_CLOSE);
@@ -460,9 +472,23 @@ export class LanStack {
         }
     }
 
+    /** The local end of the flow a frame from `srcIp` (sent by `senderRole`) belongs to. */
     private findConn(srcIp: number, cid: number, senderRole: Dir): Sock | undefined {
-        const role: Dir = senderRole === 0 ? 1 : 0;
-        return this.conns.get(this.key(role, role === 0 ? this.selfIp() : srcIp, cid));
+        const s = this.conns.get(this.key(senderRole === 0 ? 1 : 0, cid));
+        // Only the peer the flow was established with may touch it.
+        return s && this.sameHost(s.remoteIp, srcIp) ? s : undefined;
+    }
+
+    private sameHost(a: number, b: number): boolean {
+        return a === b || (this.isLocal(a) && this.isLocal(b));
+    }
+    private isLocal(ip: number): boolean { return ip >>> 24 === 127 || ip === this.ip; }
+
+    private newCid(role: Dir): number {
+        for (;;) {
+            const cid = crypto.getRandomValues(new Uint32Array(1))[0] || 1;
+            if (!this.conns.has(this.key(role, cid))) return cid;
+        }
     }
 
     private udpIn(srcIp: number, srcPort: number, dstPort: number, data: Uint8Array): void {
@@ -485,17 +511,20 @@ export class LanStack {
             this.emit(srcIp, { op: Op.Rst, cid: m.cid, dir: 1 });
             return;
         }
+        if (this.conns.has(this.key(1, m.cid))) {
+            this.emit(srcIp, { op: Op.Rst, cid: m.cid, dir: 1 });
+            return;
+        }
         const c = this.blank("tcp");
         c.child = true;
         c.state = "connected";
         c.role = 1;
         c.cid = m.cid;
-        c.connectorIp = srcIp;
-        c.remoteIp = srcIp;
+        c.remoteIp = this.isSelf(srcIp) ? LOOPBACK : srcIp;
         c.remotePort = m.srcPort;
         c.boundPort = m.dstPort;
         c.boundIp = l.boundIp;
-        this.conns.set(this.key(1, srcIp, m.cid), c);
+        this.conns.set(this.key(1, m.cid), c);
         l.pending.push(c);
         this.emit(srcIp, { op: Op.SynAck, cid: m.cid });
         this.signal(l, FD_ACCEPT);
@@ -510,6 +539,7 @@ export class LanStack {
 
     private failConnect(s: Sock, err: number): void {
         if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+        if (err === E.TIMEDOUT) this.emit(s.remoteIp, { op: Op.Rst, cid: s.cid, dir: 0 });
         this.dropConn(s);
         s.state = "idle";
         s.connectFailed = true;
@@ -532,8 +562,18 @@ export class LanStack {
         }
     }
 
+    /** The link went away or our address changed: flows over the old address are dead. */
+    private networkLost(): void {
+        for (const s of [...this.conns.values()]) {
+            if (this.isLocal(s.remoteIp)) continue;
+            if (s.state === "connecting") this.failConnect(s, E.NETUNREACH);
+            else if (s.state === "connected") this.abort(s);
+        }
+        for (const s of this.socks.values()) this.wake(s);
+    }
+
     private dropConn(s: Sock): void {
-        if (s.cid) this.conns.delete(this.key(s.role, s.connectorIp, s.cid));
+        if (s.cid && this.conns.get(this.key(s.role, s.cid)) === s) this.conns.delete(this.key(s.role, s.cid));
     }
 
     private consume(s: Sock, n: number): void {
