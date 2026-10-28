@@ -1,0 +1,28 @@
+# syntax=docker/dockerfile:1
+# Development image: Bun + Chromium (for the CDP harness) + Claude Code, running as a
+# non-root user. The repo is bind-mounted at /workspace, so edits made by Claude inside the
+# container are live on the host and picked up by the Vite dev server.
+FROM oven/bun:1.2.22
+
+# CLAUDE_CODE_VERSION: pin an exact version for reproducible builds, e.g.
+#   docker compose -f docker-compose.dev.yml build --build-arg CLAUDE_CODE_VERSION=<x.y.z>
+ARG CLAUDE_CODE_VERSION=latest
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git ripgrep chromium nodejs npm openssh-client procps \
+ && rm -rf /var/lib/apt/lists/* \
+ && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && npm cache clean --force
+
+# Named volumes inherit ownership from these paths; without them they come up root-owned.
+RUN mkdir -p /workspace/node_modules /home/bun/.claude \
+ && chown -R bun:bun /workspace /home/bun/.claude
+
+# The base image ships a `bun` user at uid 1000; use it so bind-mounted files stay owned by
+# the host user on a typical Linux box.
+USER bun
+ENV CHROME_PATH=/usr/bin/chromium \
+    CLAUDE_CONFIG_DIR=/home/bun/.claude \
+    PATH=/home/bun/.bun/bin:$PATH
+WORKDIR /workspace

@@ -3,6 +3,8 @@
  * Ordinal layout follows ws2_32.dll (differs from wsock32 for several slots).
  */
 
+import { lanStack, lanActive, lanClearEvent } from "../net/lan";
+import { createLanExports, overlayLan, wrapSocketCreate } from "../net/lan-exports";
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
@@ -13,7 +15,7 @@ import { WAIT_BLOCKED_NO_SWITCH } from "../core/scheduler/types";
 import {
     SOCKET_ERROR,
     WSAEFAULT,
-    WsaSocketTable,
+    sharedWsaSockets,
     makeSocketExports,
     makeWsaStartup,
     makeWsaCleanup,
@@ -40,7 +42,7 @@ const WSA_WAIT_FAILED = 0xffffffff;
 export class Ws2_32 implements IModule {
     name = "ws2_32";
     exports: Record<string, ThunkImplementation> = {};
-    private socketTable = new WsaSocketTable();
+    private socketTable = sharedWsaSockets;
     private resetAddrInfo: (() => void) | null = null;
 
     initialize(process: Process): void {
@@ -350,9 +352,22 @@ export class Ws2_32 implements IModule {
         };
 
         this.exports["inet_pton"] = () => 0;
+        this.installLan(process, setError);
+    }
+
+    /** Real sockets over the virtual LAN when one is configured; the stubs otherwise. */
+    private installLan(process: Process, setError: (code: number) => void): void {
+        const deps = {
+            stack: lanStack, table: this.socketTable, process, setError,
+            isActive: lanActive, clearEvent: lanClearEvent,
+        };
+        overlayLan(this.exports, createLanExports(deps));
+        wrapSocketCreate(this.exports, deps);
+        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [10, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
     }
 
     reset(): void {
+        lanStack.reset();
         this.socketTable.reset();
         this.resetAddrInfo?.();
         wsaStartupCount.reset();

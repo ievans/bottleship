@@ -1,0 +1,42 @@
+# Live development with Claude Code inside the container.
+#
+#   git submodule update --init            # vendor/v86 must exist on the host
+#   export ANTHROPIC_API_KEY=...           # or run `claude login` once inside (persists in a volume)
+#   docker compose -f docker-compose.dev.yml up -d --build
+#   docker compose -f docker-compose.dev.yml exec claude claude
+#
+# Open http://localhost:5174 ; multiplayer: two tabs with ?game=dev&lan=<room>.
+# Vite runs with HMR off (a reload restarts the guest), so reload the tab after Claude edits.
+services:
+  dev:
+    build: { context: ., dockerfile: Dockerfile.dev }
+    working_dir: /workspace
+    command: sh -c "bun install --frozen-lockfile && exec bun run dev:mp"
+    ports:
+      - "5174:5174"
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+    environment:
+      # inotify does not cross a bind mount from macOS/Windows hosts.
+      - CHOKIDAR_USEPOLLING=${CHOKIDAR_USEPOLLING:-}
+    restart: unless-stopped
+
+  claude:
+    build: { context: ., dockerfile: Dockerfile.dev }
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - .:/workspace
+      - node_modules:/workspace/node_modules
+      - claude-home:/home/bun/.claude
+    environment:
+      - ANTHROPIC_API_KEY
+      - GH_TOKEN
+      - CHROME_PATH=/usr/bin/chromium
+    depends_on: [dev]
+    restart: unless-stopped
+
+volumes:
+  node_modules:
+  claude-home:

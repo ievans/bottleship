@@ -25,6 +25,9 @@ const BUILD_SHA = (
 // cert). Opt into a self-signed HTTPS dev/preview server with VITE_SSL=1.
 const useSsl = !!process.env.VITE_SSL;
 
+// Multiplayer relay (deploy/lan-dev.ts), proxied so the page reaches it on its own origin.
+const lanProxy = { "/lan": { target: "ws://127.0.0.1:5175", ws: true } };
+
 const coopCoepHeaders = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp"
@@ -241,6 +244,7 @@ export default defineConfig({
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
+    proxy: lanProxy,
     watch: {
       // Chokidar registers one fs.watch handle PER FILE and its defaults ignore only
       // .git/node_modules/the cache dir. These trees hold no importable module and tens of
@@ -257,6 +261,7 @@ export default defineConfig({
   },
   preview: {
     host: true,
+    proxy: lanProxy,
     ...useSsl ? { https: true } : {},
     headers: coopCoepHeaders
   },

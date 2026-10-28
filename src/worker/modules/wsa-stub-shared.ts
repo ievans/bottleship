@@ -1166,6 +1166,14 @@ export class WsaSocketTable {
         return this.sockets.get(s >>> 0)?.connected ?? false;
     }
 
+    isNonBlocking(s: number): boolean {
+        return this.sockets.get(s >>> 0)?.nonBlocking ?? false;
+    }
+
+    typeOf(s: number): number {
+        return this.sockets.get(s >>> 0)?.type ?? SOCK_STREAM;
+    }
+
     setNonBlocking(s: number, nonBlocking: boolean): void {
         const socket = this.sockets.get(s >>> 0);
         if (socket) socket.nonBlocking = nonBlocking;
@@ -1192,6 +1200,9 @@ export class WsaSocketTable {
         return 0;
     }
 }
+
+/** wsock32 and ws2_32 are one Winsock: a SOCKET handle is valid through either DLL. */
+export const sharedWsaSockets = new WsaSocketTable();
 
 export function makeSocketExports(
     table: WsaSocketTable,
