@@ -30,6 +30,7 @@ import {
     WSAENOTSOCK,
     WSAENOTCONN,
     WSAEWOULDBLOCK,
+    makeWsaThreadError,
 } from "./wsa-stub-shared";
 
 const WSA_INVALID_EVENT = 0xffffffff;
@@ -46,7 +47,7 @@ export class Ws2_32 implements IModule {
     private resetAddrInfo: (() => void) | null = null;
 
     initialize(process: Process): void {
-        let wsaLastError = 0;
+        const wsaError = makeWsaThreadError();
 
         const ok = () => 0;
         const htons = (_ctx: unknown, _mem: unknown, args: number[]) => {
@@ -62,14 +63,12 @@ export class Ws2_32 implements IModule {
                 ((value >>> 24) & 0xff)
             ) >>> 0;
         };
-        const getLastError = () => wsaLastError >>> 0;
+        const getLastError = () => wsaError.get();
         const setLastError = (_ctx: unknown, _mem: unknown, args: number[]) => {
-            wsaLastError = (args[0] ?? 0) | 0;
+            wsaError.set(args[0] ?? 0);
             return 0;
         };
-        const setError = (code: number) => {
-            wsaLastError = code | 0;
-        };
+        const setError = (code: number) => wsaError.set(code);
         const startup = makeWsaStartup(setError, WSAEFAULT, SOCKET_ERROR);
         const socketExports = makeSocketExports(this.socketTable, setError);
         const dns = createDnsStubs(process, setError);
@@ -352,13 +351,13 @@ export class Ws2_32 implements IModule {
         };
 
         this.exports["inet_pton"] = () => 0;
-        this.installLan(process, setError);
+        this.installLan(process, setError, wsaError.capture);
     }
 
     /** Real sockets over the virtual LAN when one is configured; the stubs otherwise. */
-    private installLan(process: Process, setError: (code: number) => void): void {
+    private installLan(process: Process, setError: (code: number) => void, captureError: () => (code: number) => void): void {
         const deps = {
-            stack: lanStack, table: this.socketTable, process, setError,
+            stack: lanStack, table: this.socketTable, process, setError, captureError,
             isActive: lanActive, clearEvent: lanClearEvent,
         };
         overlayLan(this.exports, createLanExports(deps));

@@ -26,6 +26,8 @@ export interface LanExportDeps {
     table: WsaSocketTable;
     process: Process;
     setError(code: number): void;
+    /** Binds the calling thread now; the returned setter targets it after an await. */
+    captureError(): (code: number) => void;
     isActive(): boolean;
     clearEvent(handle: number): void;
 }
@@ -68,7 +70,14 @@ function nameBufferOk(ptr: number, lenPtr: number): boolean {
 }
 
 export function createLanExports(d: LanExportDeps): Record<string, Impl> {
-    const { stack, table, setError } = d;
+    const { stack, table } = d;
+    // Last error is per-thread: code that runs after an await must not write the then-current thread's.
+    let errorTarget: ((code: number) => void) | null = null;
+    const setError = (code: number): void => (errorTarget ?? d.setError)(code);
+    const asCaller = <T>(cap: (code: number) => void, f: () => T): T => {
+        errorTarget = cap;
+        try { return f(); } finally { errorTarget = null; }
+    };
     const own = (s: number): boolean => d.isActive() && stack.has(s);
 
     /** Retries `op` until it yields a result; blocking sockets park the thread on the stack. */
@@ -78,13 +87,14 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         if (table.isNonBlocking(s)) { setError(E.WOULDBLOCK); return failed; }
         const limit = timeoutOpt ? stack.getOpt(s, SOL_SOCKET, timeoutOpt) : 0;
         const deadline = limit > 0 ? performance.now() + limit : Infinity;
+        const cap = d.captureError();
         return (async () => {
             for (;;) {
                 await stack.waitChange([s], deadline === Infinity ? -1 : Math.max(0, deadline - performance.now()));
-                if (!stack.has(s)) { setError(WSAEINTR); return failed; }
-                const r = op();
+                if (!stack.has(s)) { cap(WSAEINTR); return failed; }
+                const r = asCaller(cap, op);
                 if (r !== PENDING) return r;
-                if (performance.now() >= deadline) { setError(WSAETIMEDOUT); return failed; }
+                if (performance.now() >= deadline) { cap(WSAETIMEDOUT); return failed; }
             }
         })();
     };
@@ -232,13 +242,14 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             if (e === 0) { setError(0); return 0; }
             if (e !== E.WOULDBLOCK) return fail(e);
             if (table.isNonBlocking(s)) return fail(E.WOULDBLOCK);
+            const cap = d.captureError();
             return (async () => {
                 for (;;) {
                     await stack.waitChange([s], -1);
-                    if (!stack.has(s)) return fail(WSAEINTR);
+                    if (!stack.has(s)) { cap(WSAEINTR); return SOCKET_ERROR; }
                     const st = stack.ready(s);
-                    if (st.x) return fail(stack.getOpt(s, SOL_SOCKET, SO_ERROR) || E.CONNREFUSED);
-                    if (st.w) { setError(0); return 0; }
+                    if (st.x) { cap(stack.getOpt(s, SOL_SOCKET, SO_ERROR) || E.CONNREFUSED); return SOCKET_ERROR; }
+                    if (st.w) { cap(0); return 0; }
                 }
             })();
         },
@@ -380,15 +391,16 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
             }
             if (total > 0 || timeoutMs === 0) return finish(first);
             const watch = all.filter(own);
+            const cap = d.captureError();
             return (async () => {
                 const deadline = timeoutMs < 0 ? Infinity : performance.now() + timeoutMs;
                 for (;;) {
-                    if (!watch.every(w => stack.has(w))) return fail(WSAENOTSOCK);
+                    if (!watch.every(w => stack.has(w))) { cap(WSAENOTSOCK); return SOCKET_ERROR; }
                     const left = deadline === Infinity ? -1 : Math.max(0, deadline - performance.now());
                     await stack.waitChange(watch, left);
-                    if (!watch.every(w => stack.has(w))) return fail(WSAENOTSOCK);
+                    if (!watch.every(w => stack.has(w))) { cap(WSAENOTSOCK); return SOCKET_ERROR; }
                     const r = poll();
-                    if (r[0].length + r[1].length + r[2].length > 0 || performance.now() >= deadline) return finish(r);
+                    if (r[0].length + r[1].length + r[2].length > 0 || performance.now() >= deadline) return asCaller(cap, () => finish(r));
                 }
             })();
         },

@@ -1474,3 +1474,13 @@ export function makeWsaStartup(
         return 0;
     };
 }
+
+/** WSAGetLastError/WSASetLastError are GetLastError/SetLastError on NT: one per-thread value. */
+export function makeWsaThreadError() {
+    const sched = () => System.getInstance().scheduler;
+    return {
+        get: (): number => sched().getLastError() >>> 0,
+        set: (code: number): void => sched().setLastError(code | 0),
+        capture: (): ((code: number) => void) => sched().captureLastError(),
+    };
+}

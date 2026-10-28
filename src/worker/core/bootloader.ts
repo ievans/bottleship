@@ -432,6 +432,9 @@ function createRecoverablePfHandler(): Uint8Array {
  */
 export const PF_HALT_TARGET = (0x7E00 + 32 + 256 * 8) + 3 * 25 + 19;
 
+/** First byte of the #PF handler (PF_HALT_TARGET sits 19 bytes in). */
+export const PF_HANDLER_ENTRY = PF_HALT_TARGET - 19;
+
 function setIDTEntry(
     view: DataView,
     index: number,

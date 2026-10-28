@@ -38,7 +38,7 @@ import {
 } from './wbuf-format';
 export { WBUF_ARG_PAYLOAD, WBUF_ARG_SHADER_CONSTANT, WBUF_ARG_UP_DRAW };
 import { cpuViewsForBuffer, readRetiredInsns, PROXY_BASELINE } from '../cpu/cpu-views';
-import { PF_HALT_TARGET, TRAP_MARKER_VECTOR } from '../bootloader';
+import { PF_HALT_TARGET, PF_HANDLER_ENTRY, TRAP_MARKER_VECTOR } from '../bootloader';
 import { faultRecorder, cr2RegisterCandidates, isFaultEipConsistent, analyzeIndirectCallFault, classifyWildTransfer } from '../memory/fault-recorder';
 import { stubRegistry } from '../diagnostics/stub-registry';
 import { apiCensus, isHresultThunk } from '../diagnostics/api-census';
@@ -2195,6 +2195,11 @@ export class ThunkDispatcher {
                 }
             }
         }
+
+        // A WASM hypercall that touched an unmapped guest address has already vectored the CPU
+        // into the #PF handler before declining to JS; running the thunk now would use the
+        // handler's frame as the call's stack. Leave it: the handler's own trap raises the fault.
+        if (functionId > 0 && functionId < MAX_THUNK_ID && ((this.cachedIpRaw?.[0] ?? 0) >>> 0) === PF_HANDLER_ENTRY) return;
 
         // ULTRA-FAST PATH: Check fast table BEFORE any other work.
         // Normal thunk IDs are small positive numbers (< MAX_THUNK_ID).
