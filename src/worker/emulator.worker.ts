@@ -475,7 +475,7 @@ const gdiPresentOnce = () => {
     // screen the moment it is drawn. Coalesced to one blit per composite, and only while
     // GDI owns the screen — under any other plan that output is not visible on Windows
     // either, so publishing it would just leak the game's window into the dialog rects.
-    if (plan.mode === 'full') flushHeldWindowDCs();
+    if (plan.mode === 'full' || (plan.mode === 'rects' && plan.gdiOwnsDisplay)) flushHeldWindowDCs();
     const gdiDirty = gdi.isOverlayDirty();
 
     if (plan.mode !== 'full') {
@@ -1256,7 +1256,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false): Promi
     }
 
     // Collect DLLs that need DllMain(DLL_PROCESS_ATTACH) before EXE entry
-    const pendingDllInits = system.process.loader.getPendingDllInits();
+    const pendingDllInits = system.process.loader.takeBootDllInits();
     if (pendingDllInits.length > 0) {
       Logger.warn(LogCategory.SYSTEM,
         `DllMain trampoline: ${pendingDllInits.length} DLL(s): ${pendingDllInits.map(d => `${d.name}@0x${d.entryPoint.toString(16)}`).join(', ')}`);

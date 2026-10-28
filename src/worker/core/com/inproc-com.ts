@@ -146,7 +146,8 @@ function runDllMainChain(
     if (!frameId) return null;
 
     let initIndex = 0;
-    const chainDllMain = (_ret: number): number | null => {
+    const chainDllMain = (ret: number): number | null => {
+        dllInits[initIndex]?.onReturn?.(ret);
         initIndex++;
         if (initIndex < dllInits.length) {
             const next = dllInits[initIndex]!;

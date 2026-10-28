@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { LanRelay, MAX_CONN_PER_KEY, RATE_BURST_BYTES, originAllowed, serveLan } from "../../deploy/lan-relay";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
-import { LanStack, E, FD_READ, FD_CLOSE } from "../../src/worker/net/lan-stack";
+import { LanStack, E, FD_READ, FD_WRITE, FD_CLOSE } from "../../src/worker/net/lan-stack";
 import { createLanExports, PASS } from "../../src/worker/net/lan-exports";
 import { WsaSocketTable } from "../../src/worker/modules/wsa-stub-shared";
 import { Op, decode, encode } from "../../src/net/lan-protocol";
@@ -67,8 +67,11 @@ describe("TCP edge cases", () => {
     test("receive overflow resets both ends instead of dropping bytes mid-stream", async () => {
         const { a, b, cs, ss } = await pair();
         const mib = new Uint8Array(1 << 20);
+        let t = 0;
+        a.stack.now = () => t;
         let r = 0;
-        for (let i = 0; i < 6 && r >= 0; i++) r = a.stack.send(cs, mib);
+        for (let i = 0; i < 12 && r >= 0; i++) { t += 1000; r = a.stack.send(cs, mib); }
+        expect(a.stack.counters.throttled + b.stack.counters.rxOverflow).toBeGreaterThan(0);
         await flush();
         expect(b.stack.recv(ss, 1, false).err).toBe(0);      // data queued before the cut-off is intact
         let last = b.stack.recv(ss, 1 << 30, false);
@@ -262,5 +265,108 @@ describe("relay limits", () => {
         expect(data!.key).toBe("10.0.0.1");
         serveLan({ relay: new LanRelay(), trustProxy: true }).upgrade(new Request("http://h/lan/a", { headers: hdr }), server);
         expect(data!.key).toBe("8.8.8.8");
+    });
+});
+
+describe("sender pacing", () => {
+    test("a stream is throttled under the relay's rate instead of being kicked", async () => {
+        const { a, b, cs, ss } = await pair();
+        let t = 0;
+        a.stack.now = () => t;
+        const chunk = new Uint8Array(256 << 10);
+        let accepted = 0, blocked = 0;
+        // 10 simulated seconds of an unbounded writer, draining the receiver as it goes.
+        for (let ms = 0; ms < 10_000; ms += 10) {
+            t = ms;
+            const r = a.stack.send(cs, chunk);
+            expect(r === -E.WOULDBLOCK || r >= 0).toBe(true);
+            if (r < chunk.length) blocked++;
+            if (r > 0) accepted += r;
+            await flush();
+            while (b.stack.recv(ss, 1 << 20, false).data.length) { /* drain */ }
+        }
+        expect(blocked).toBeGreaterThan(0);
+        expect(accepted).toBeLessThan(10 * (2 << 20));
+        expect(accepted).toBeGreaterThan(5 * (2 << 20));
+    });
+    test("a refused send owes FD_WRITE once the budget returns", async () => {
+        const { a, cs } = await pair();
+        let t = 0;
+        a.stack.now = () => t;
+        const posts: number[] = [];
+        a.stack.hooks = { postMessage: (_h, _m, _w, l) => { posts.push(l & 0xffff); return true; }, setEvent: () => {} };
+        a.stack.selectAsync(cs, 1, 0x500, FD_WRITE);
+        posts.length = 0;
+        const big = new Uint8Array(4 << 20);
+        const n = a.stack.send(cs, big);
+        expect(n).toBeLessThan(big.length);
+        expect(a.stack.send(cs, big)).toBe(-E.WOULDBLOCK);
+        expect(a.stack.ready(cs).w).toBe(false);
+        t = 1000;
+        await new Promise<void>(r => setTimeout(r, 300));
+        expect(posts).toContain(FD_WRITE);
+        expect(a.stack.ready(cs).w).toBe(true);
+    });
+    test("datagrams over the budget are dropped and counted, not queued", async () => {
+        const relay = new LanRelay({ burstBytes: 1 << 30 });
+        const a = peer(relay);
+        peer(relay);
+        let t = 0;
+        a.stack.now = () => t;
+        const u = a.sock(2);
+        a.stack.bind(u, 0, 4000);
+        const dg = new Uint8Array(60_000);
+        for (let i = 0; i < 40; i++) expect(a.stack.sendTo(u, 0xc0a84d03, 4000, dg)).toBe(dg.length);
+        expect(a.stack.counters.throttled).toBeGreaterThan(0);
+        expect(a.sent.filter(f => f[0] === Op.Udp).length).toBeLessThan(40);
+    });
+    test("the relay logs and closes with a reason when it does kick", () => {
+        const relay = new LanRelay({ rateBytesPerSec: 1, burstBytes: 1000, now: () => 0 });
+        let kicked = 0;
+        const p = relay.join("r", () => {}, { kick: () => { kicked++; } })!;
+        relay.join("r", () => {});
+        const dg = encode({ op: Op.Udp, ip: 0xc0a84d03, srcPort: 1, dstPort: 2, data: new Uint8Array(900) });
+        p.receive(dg);
+        expect(kicked).toBe(0);
+        p.receive(dg);
+        expect(kicked).toBe(1);
+    });
+});
+
+describe("address changes and leaving the LAN", () => {
+    test("a UDP socket bound to our address follows it across a reconnect", async () => {
+        const relay = new LanRelay();
+        const a = peer(relay);
+        const u = a.sock(2);
+        const oldIp = a.stack.ip!;
+        expect(a.stack.bind(u, oldIp, 5000)).toBe(0);
+        a.stack.attachLink(null);
+        const other = peer(relay);
+        const p2 = relay.join("r", f => a.stack.onFrame(f))!;
+        a.stack.attachLink({ send: f => p2.receive(f) });
+        await flush();
+        expect(a.stack.ip).not.toBeNull();
+        const newIp = a.stack.ip!;
+        other.stack.create(99, 2);
+        other.stack.bind(99, 0, 5001);
+        other.stack.sendTo(99, newIp, 5000, bytes("hi"));
+        await flush();
+        expect(newIp).not.toBe(oldIp);
+        expect(a.stack.names(u)!.local!.ip).toBe(newIp);
+        expect(text(a.stack.recv(u, 10, false).data)).toBe("hi");
+    });
+    test("dissolve keeps handles valid and fails them with NETDOWN", async () => {
+        const { a, cs } = await pair();
+        const u = a.sock(2);
+        a.stack.bind(u, 0, 6000);
+        a.stack.dissolve();
+        expect(a.stack.has(cs)).toBe(true);
+        expect(a.stack.isDown(cs)).toBe(true);
+        expect(a.stack.send(cs, bytes("x"))).toBe(-E.NETDOWN);
+        expect(a.stack.recv(cs, 1, false).err).toBe(E.NETDOWN);
+        expect(a.stack.sendTo(u, 0xc0a84d03, 1, bytes("x"))).toBe(-E.NETDOWN);
+        expect(a.stack.ready(cs).r).toBe(true);
+        a.stack.close(cs);
+        expect(a.stack.has(cs)).toBe(false);
     });
 });

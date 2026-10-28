@@ -127,29 +127,27 @@ export function shouldSuppress3DGdiOverlay(
 
 /**
  * FlipToGDISurface: the GDI surface becomes the visible one again. When a flip chain was on
- * screen, remember the frame count so the display counts as GDI's until the app presents again.
+ * screen, remember the content-present count so the display counts as GDI's until the app
+ * writes the primary again.
  */
 export function noteFlipToGdiSurface(ddrawCtx: DDrawContext): void {
     if (!ddrawCtx.gdiSurfaceVisible && isDDrawExclusiveFullscreen(ddrawCtx)) {
-        ddrawCtx.gdiFlippedAtPresent = ddrawCtx.presenter?.presentRequestCount?.() ?? 0;
+        ddrawCtx.gdiFlippedAtPresent = ddrawCtx.presenter?.contentPresentCount?.() ?? 0;
     }
     ddrawCtx.gdiSurfaceVisible = true;
 }
 
 /**
  * The display shows the GDI surface: a flip chain was on screen, FlipToGDISurface took it
- * back, and nothing has been presented since. The last presented frame is then not what
- * the screen shows — GDI window output is.
+ * back, and nothing has put pixels on the primary since. The last presented frame is then
+ * not what the screen shows — GDI window output is.
+ *
+ * A front-buffer write (Blt, Unlock, a Flip) lands in the displayed memory and ends the
+ * state; a palette change or FlipToGDISurface's own present puts nothing new on the primary
+ * (presenter `displayOnly`), so neither does.
  */
 export function gdiSurfaceOnDisplay(ddrawCtx: DDrawContext | null | undefined): boolean {
     const at = ddrawCtx?.gdiFlippedAtPresent;
     if (at === undefined || !ddrawCtx?.gdiSurfaceVisible || !isDDrawExclusiveFullscreen(ddrawCtx)) return false;
-    return (ddrawCtx.presenter?.presentRequestCount?.() ?? 0) === at;
-}
-
-/** FlipToGDISurface presents the GDI surface itself; that present is the display, not
- *  new content, so the mark moves past it. */
-export function settleFlipToGdiSurface(ddrawCtx: DDrawContext): void {
-    if (ddrawCtx.gdiFlippedAtPresent === undefined) return;
-    ddrawCtx.gdiFlippedAtPresent = ddrawCtx.presenter?.presentRequestCount?.() ?? 0;
+    return (ddrawCtx.presenter?.contentPresentCount?.() ?? 0) === at;
 }

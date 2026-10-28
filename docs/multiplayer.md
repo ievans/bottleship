@@ -64,11 +64,22 @@ behind `BS_AUTH_USER`/`BS_AUTH_PASS` or your access proxy for anything public.
   (`LAN_MAX_CONN_PER_IP`). Behind a reverse proxy set `LAN_TRUST_PROXY=1` so the cap uses the
   client address the proxy reports (see above).
 - A peer is disconnected for exceeding ~2 MiB/s sustained (4 MiB burst); a broadcast is charged
-  once per recipient. A reader that cannot keep up is disconnected rather than silently losing
-  frames, because a lost TCP segment would corrupt the stream.
+  once per recipient. The relay logs the kick and closes with reason `rate limit`. A reader that
+  cannot keep up is disconnected rather than silently losing frames, because a lost TCP segment
+  would corrupt the stream.
+- Guests pace themselves below that limit (~1.5 MiB/s sustained, 1 MiB burst, shared by every
+  socket), so honest traffic is throttled rather than kicked: a TCP `send` accepts what the budget
+  allows (a partial write, or `WSAEWOULDBLOCK` with `FD_WRITE` posted when it recovers; a blocking
+  `send` waits and returns once everything is accepted) and a UDP datagram over budget is dropped
+  and counted (`counters.throttled`), as a congested link would. Small game updates always fit.
 - The relay overwrites the source address of every frame, and the stack only accepts frames for
   a flow from the peer that flow was established with (connection ids are random).
-- Connections are reset when the relay link drops or the tab's address changes.
+- Connections are reset when the relay link drops or the tab's address changes; a UDP socket bound
+  to the old address follows the new one.
+- Joining a room mid-session adopts sockets made earlier on first use. Leaving one makes existing
+  sockets fail with `WSAENETDOWN` (they stay valid until `closesocket`); new sockets are offline stubs.
+- `MSG_PEEK` counts as a receive for `WSAAsyncSelect`/`WSAEventSelect`: it re-enables `FD_READ`
+  and re-posts it while data remains.
 
 ## What is implemented
 
@@ -91,7 +102,8 @@ answers `ERROR_NO_DATA` as before.
 - Overlapped Winsock I/O, IPv6, other `iphlpapi` adapter queries (`GetAdaptersAddresses`,
   `GetNetworkParams`, …), `SO_SNDTIMEO`, `WSAAsyncGetHostBy*` for the local name.
 - Internet matchmaking services (e.g. GameSpy) — rooms replace them.
-- TCP has no flow control: a reader that falls 4 MiB behind has its connection reset (never a silent gap).
+- TCP has no receiver flow control: a reader that falls 4 MiB behind has its connection reset
+  (`counters.rxOverflow`; never a silent gap). Sender pacing makes that take seconds of an unread stream.
 - Relay-side `SO_BROADCAST` is not enforced, and UDP sockets bound to a specific address still see broadcasts.
 - `gethostname`/`gethostbyname` answer with the offline stub's name until the relay has welcomed the tab.
 - Only one title has been verified end to end (below).

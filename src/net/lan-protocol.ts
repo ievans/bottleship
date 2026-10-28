@@ -9,6 +9,9 @@ export const LAN_SUBNET = 0xc0a84d00; // 192.168.77.0/24
 export const LAN_BROADCAST = 0xc0a84dff; // 192.168.77.255
 export const LIMITED_BROADCAST = 0xffffffff;
 export const LAN_MAX_FRAME = 65536;
+/** Per-peer token bucket the relay enforces on bytes delivered; senders pace themselves below it. */
+export const LAN_RATE_BYTES_PER_SEC = 2 << 20;
+export const LAN_RATE_BURST_BYTES = 4 << 20;
 
 export const Op = {
     Udp: 1,

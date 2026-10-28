@@ -5,14 +5,14 @@
  * marshals arguments; window messages and kernel events go out through `hooks`.
  * IPs are host-order uint32 (a.b.c.d == a<<24|b<<16|c<<8|d); ports are host order.
  */
-import { Op, Dir, LanMsg, decode, encode, isBroadcast, LAN_BROADCAST } from "../../net/lan-protocol";
+import { Op, Dir, LanMsg, decode, encode, isBroadcast, LAN_BROADCAST, LAN_RATE_BYTES_PER_SEC } from "../../net/lan-protocol";
 
 export const FD_READ = 1, FD_WRITE = 2, FD_OOB = 4, FD_ACCEPT = 8, FD_CONNECT = 16, FD_CLOSE = 32;
 export const SOL_SOCKET = 0xffff, SO_ERROR = 0x1007, SO_TYPE = 0x1008, SO_REUSEADDR = 4;
 
 export const E = {
     WOULDBLOCK: 10035, INPROGRESS: 10036, ALREADY: 10037, DESTADDRREQ: 10039, MSGSIZE: 10040,
-    INVAL: 10022, OPNOTSUPP: 10045, ADDRINUSE: 10048, ADDRNOTAVAIL: 10049, NETUNREACH: 10051,
+    INVAL: 10022, OPNOTSUPP: 10045, ADDRINUSE: 10048, ADDRNOTAVAIL: 10049, NETDOWN: 10050, NETUNREACH: 10051,
     CONNRESET: 10054, ISCONN: 10056, NOTCONN: 10057, SHUTDOWN: 10058, TIMEDOUT: 10060,
     CONNREFUSED: 10061,
 } as const;
@@ -23,6 +23,13 @@ const MAX_UDP_PAYLOAD = 65507;
 const TCP_CHUNK = 32768;
 const MAX_QUEUED_DGRAMS = 512;
 const MAX_TCP_RX_BYTES = 4 << 20;
+/** Send budget: under the relay's per-peer bucket, so honest bulk traffic is paced instead of disconnected. */
+const TX_RATE = (LAN_RATE_BYTES_PER_SEC * 3) >> 2;
+const TX_BURST = 1 << 20;
+/** Left for datagrams: a stream never drains the bucket to the point game updates are dropped. */
+const TX_STREAM_RESERVE = 128 << 10;
+const TX_WAKE_BYTES = 16 << 10;
+const DATA_FRAME_OVERHEAD = 10;
 
 export interface LanLink { send(frame: Uint8Array): void }
 /** Wire-level observer; null (the default) costs one check per frame. */
@@ -44,6 +51,10 @@ export interface LanCounters {
     droppedTx: number;
     /** Datagrams/segments delivered to our own sockets without touching the relay. */
     looped: number;
+    /** Datagrams dropped because the send budget was spent (a congested link drops them). */
+    throttled: number;
+    /** TCP connections reset because the receiver fell more than MAX_TCP_RX_BYTES behind. */
+    rxOverflow: number;
 }
 
 export interface SockInfo {
@@ -98,6 +109,10 @@ interface Sock {
     async: { hwnd: number; msg: number; mask: number } | null;
     evt: { handle: number; mask: number; fired: number; errs: number[] } | null;
     readArmed: boolean;
+    /** A send was refused for lack of budget; FD_WRITE is owed when it returns. */
+    txBlocked: boolean;
+    /** The virtual LAN was left: the handle stays valid but every operation fails with NETDOWN. */
+    down: boolean;
     waiters: Set<() => void>;
 }
 
@@ -110,7 +125,8 @@ export class LanStack {
     connectTimeoutMs = 10000;
 
     tap: LanTap | null = null;
-    readonly counters: LanCounters = { sent: 0, received: 0, malformed: 0, droppedTx: 0, looped: 0 };
+    readonly counters: LanCounters = { sent: 0, received: 0, malformed: 0, droppedTx: 0, looped: 0, throttled: 0, rxOverflow: 0 };
+    now: () => number = () => performance.now();
     /** Relay peers heard from and not yet announced gone. */
     readonly peers = new Set<number>();
 
@@ -118,6 +134,10 @@ export class LanStack {
     private socks = new Map<number, Sock>();
     private conns = new Map<string, Sock>();
     private nextEphemeral = EPHEMERAL_LO + Math.floor(Math.random() * 1000);
+    private lastIp: number | null = null;
+    private txTokens = TX_BURST;
+    private txLast = -1;
+    private txTimer: ReturnType<typeof setTimeout> | null = null;
 
     attachLink(link: LanLink | null): void {
         this.link = link;
@@ -135,7 +155,9 @@ export class LanStack {
         this.tap?.frame(false, frame);
         if (msg.op === Op.Welcome) {
             const changed = this.ip !== null && this.ip !== msg.ip;
-            this.ip = msg.ip;
+            const moved = this.lastIp !== null && this.lastIp !== msg.ip;
+            if (moved) this.readdress(this.lastIp!, msg.ip);
+            this.ip = this.lastIp = msg.ip;
             if (changed) this.networkLost();
             return;
         }
@@ -153,8 +175,34 @@ export class LanStack {
             state: "idle", child: false, backlog: 0, pending: [], role: 0, cid: 0,
             remoteIp: 0, remotePort: 0, rx: [], rxBytes: 0, peerFin: false, sentFin: false,
             reset: false, connectFailed: false, soError: 0, timer: null,
-            async: null, evt: null, readArmed: true, waiters: new Set(),
+            async: null, evt: null, readArmed: true, txBlocked: false, down: false, waiters: new Set(),
         });
+    }
+
+    isDown(id: number): boolean { return this.socks.get(id)?.down === true; }
+
+    /** Re-enable FD_READ after a receive that did not consume (MSG_PEEK) — any receive call does. */
+    rearm(id: number): void {
+        const s = this.socks.get(id);
+        if (s) this.rearmRead(s);
+    }
+
+    /** The LAN was left: connections die, but handles stay valid and fail with NETDOWN until closed. */
+    dissolve(): void {
+        for (const s of this.socks.values()) {
+            if (s.timer) { clearTimeout(s.timer); s.timer = null; }
+            if (s.kind === "tcp") {
+                if (s.state === "connecting") this.failConnect(s, E.NETDOWN);
+                else if (s.state === "connected") this.abort(s);
+                for (const c of s.pending) this.dropConn(c);
+                s.pending = [];
+            }
+            s.down = true;
+            this.wake(s);
+        }
+        this.conns.clear();
+        this.peers.clear();
+        this.lastIp = null;
     }
 
     has(id: number): boolean { return this.socks.has(id); }
@@ -190,6 +238,7 @@ export class LanStack {
     bind(id: number, ip: number, port: number): number {
         const s = this.socks.get(id);
         if (!s) return E.INVAL;
+        if (s.down) return E.NETDOWN;
         if (s.boundPort !== 0) return E.INVAL;
         if (ip !== 0 && !this.isSelf(ip) && !isBroadcast(ip)) return E.ADDRNOTAVAIL;
         if (port === 0) {
@@ -221,6 +270,7 @@ export class LanStack {
     sendTo(id: number, dstIp: number, dstPort: number, data: Uint8Array): number {
         const s = this.socks.get(id);
         if (!s || s.kind !== "udp") return -E.INVAL;
+        if (s.down) return -E.NETDOWN;
         if (dstPort === 0 || dstIp === 0) return -E.ADDRNOTAVAIL;
         if (data.length > MAX_UDP_PAYLOAD) return -E.MSGSIZE;
         if (s.boundPort === 0) { const e = this.bind(id, 0, 0); if (e) return -e; }
@@ -236,7 +286,13 @@ export class LanStack {
                 if (bcast) this.counters.droppedTx++;
                 return bcast ? data.length : -E.NETUNREACH;
             }
-            this.transmit(this.link, encode({ op: Op.Udp, ip: bcast ? LAN_BROADCAST : dstIp, srcPort: s.boundPort, dstPort, data }));
+            const frame = encode({ op: Op.Udp, ip: bcast ? LAN_BROADCAST : dstIp, srcPort: s.boundPort, dstPort, data });
+            // The relay charges a broadcast once per recipient.
+            const cost = frame.length * (bcast ? Math.max(1, this.peers.size) : 1);
+            this.txRefill();
+            if (this.txTokens < cost) { this.counters.throttled++; return data.length; }
+            this.txTokens -= cost;
+            this.transmit(this.link, frame);
         }
         return data.length;
     }
@@ -246,6 +302,7 @@ export class LanStack {
         const s = this.socks.get(id);
         const none = new Uint8Array(0);
         if (!s) return { err: E.INVAL, data: none, ip: 0, port: 0 };
+        if (s.down) return { err: E.NETDOWN, data: none, ip: 0, port: 0 };
         if (s.kind === "udp") {
             const d = s.dgrams[0];
             if (!d) return { err: E.WOULDBLOCK, data: none, ip: 0, port: 0 };
@@ -279,6 +336,7 @@ export class LanStack {
     connect(id: number, ip: number, port: number): number {
         const s = this.socks.get(id);
         if (!s) return E.INVAL;
+        if (s.down) return E.NETDOWN;
         if (s.kind === "udp") {
             if (s.boundPort === 0) { const e = this.bind(id, 0, 0); if (e) return e; }
             s.peerIp = ip; s.peerPort = port;
@@ -305,6 +363,7 @@ export class LanStack {
     listen(id: number, backlog: number): number {
         const s = this.socks.get(id);
         if (!s || s.kind !== "tcp") return E.OPNOTSUPP;
+        if (s.down) return E.NETDOWN;
         if (s.state !== "idle" && s.state !== "listening") return E.INVAL;
         if (s.boundPort === 0) { const e = this.bind(id, 0, 0); if (e) return e; }
         s.state = "listening";
@@ -314,6 +373,7 @@ export class LanStack {
 
     accept(id: number, allocId: () => number): { err: number; id: number; ip: number; port: number } {
         const s = this.socks.get(id);
+        if (s?.down) return { err: E.NETDOWN, id: 0, ip: 0, port: 0 };
         if (!s || s.kind !== "tcp" || s.state !== "listening") return { err: E.INVAL, id: 0, ip: 0, port: 0 };
         const c = s.pending.shift();
         if (!c) return { err: E.WOULDBLOCK, id: 0, ip: 0, port: 0 };
@@ -328,10 +388,14 @@ export class LanStack {
         return { err: 0, id: c.id, ip: c.remoteIp, port: c.remotePort };
     }
 
-    /** Returns bytes sent or a negative error. */
+    /**
+     * Returns bytes accepted or a negative error. A stream over the relay accepts what the send
+     * budget allows (possibly fewer than `data.length`, or -WOULDBLOCK) and owes FD_WRITE when it recovers.
+     */
     send(id: number, data: Uint8Array): number {
         const s = this.socks.get(id);
         if (!s) return -E.INVAL;
+        if (s.down) return -E.NETDOWN;
         if (s.kind === "udp") {
             if (!s.peerPort) return -E.DESTADDRREQ;
             return this.sendTo(id, s.peerIp, s.peerPort, data);
@@ -339,15 +403,25 @@ export class LanStack {
         if (s.reset) return -E.CONNRESET;
         if (s.state !== "connected") return -E.NOTCONN;
         if (s.sentFin) return -E.SHUTDOWN;
-        for (let off = 0; off < data.length; off += TCP_CHUNK) {
-            this.emit(s.remoteIp, { op: Op.Data, cid: s.cid, dir: s.role, data: data.slice(off, off + TCP_CHUNK) });
+        let n = data.length;
+        if (n > 0 && this.paced(s)) {
+            this.txRefill();
+            const room = Math.floor(this.txTokens - TX_STREAM_RESERVE);
+            n = Math.max(0, Math.min(n, room - DATA_FRAME_OVERHEAD * Math.ceil(Math.max(room, 0) / TCP_CHUNK)));
+            if (n < data.length) { s.txBlocked = true; this.armTxWake(); }
+            if (n === 0) return -E.WOULDBLOCK;
+            this.txTokens -= n + DATA_FRAME_OVERHEAD * Math.ceil(n / TCP_CHUNK);
         }
-        return data.length;
+        for (let off = 0; off < n; off += TCP_CHUNK) {
+            this.emit(s.remoteIp, { op: Op.Data, cid: s.cid, dir: s.role, data: data.slice(off, Math.min(off + TCP_CHUNK, n)) });
+        }
+        return n;
     }
 
     shutdown(id: number, how: number): number {
         const s = this.socks.get(id);
         if (!s) return E.INVAL;
+        if (s.down) return E.NETDOWN;
         if (s.kind !== "tcp" || s.state !== "connected") return E.NOTCONN;
         if ((how === 1 || how === 2) && !s.sentFin) {
             s.sentFin = true;
@@ -376,6 +450,7 @@ export class LanStack {
     ready(id: number): { r: boolean; w: boolean; x: boolean } {
         const s = this.socks.get(id);
         if (!s) return { r: false, w: false, x: false };
+        if (s.down) return { r: true, w: false, x: false };
         return { r: this.readable(s), w: this.writable(s), x: s.connectFailed };
     }
 
@@ -521,6 +596,7 @@ export class LanStack {
                 // No window is advertised, so overflow cannot be back-pressured: reset
                 // rather than silently leave a hole in the stream.
                 if (s.rxBytes + m.data.length > MAX_TCP_RX_BYTES) {
+                    this.counters.rxOverflow++;
                     this.emit(s.remoteIp, { op: Op.Rst, cid: s.cid, dir: s.role });
                     this.abort(s);
                     return;
@@ -669,7 +745,48 @@ export class LanStack {
     }
 
     private writable(s: Sock): boolean {
-        return s.kind === "udp" || (s.state === "connected" && !s.sentFin && !s.reset);
+        if (s.kind === "udp") return true;
+        if (s.state !== "connected" || s.sentFin || s.reset) return false;
+        if (this.paced(s)) {
+            this.txRefill();
+            if (this.txTokens - TX_STREAM_RESERVE < TX_WAKE_BYTES) { s.txBlocked = true; this.armTxWake(); return false; }
+        }
+        return true;
+    }
+
+    /** Only traffic that crosses the relay spends the send budget. */
+    private paced(s: Sock): boolean { return this.link !== null && !this.isSelf(s.remoteIp); }
+
+    private txRefill(): void {
+        const t = this.now();
+        if (this.txLast < 0) this.txLast = t;
+        this.txTokens = Math.min(TX_BURST, this.txTokens + ((t - this.txLast) / 1000) * TX_RATE);
+        this.txLast = t;
+    }
+
+    private armTxWake(): void {
+        if (this.txTimer) return;
+        this.txRefill();
+        const need = TX_STREAM_RESERVE + TX_WAKE_BYTES - this.txTokens;
+        this.txTimer = setTimeout(() => this.txWake(), Math.max(1, Math.ceil((need / TX_RATE) * 1000)));
+    }
+
+    private txWake(): void {
+        this.txTimer = null;
+        const owed: Sock[] = [];
+        for (const s of this.socks.values()) if (s.txBlocked) owed.push(s);
+        if (!owed.length) return;
+        this.txRefill();
+        if (this.txTokens - TX_STREAM_RESERVE < TX_WAKE_BYTES) { this.armTxWake(); return; }
+        for (const s of owed) {
+            s.txBlocked = false;
+            this.signal(s, FD_WRITE);
+        }
+    }
+
+    /** Our address changed across a reconnect: sockets bound to the old one follow it. */
+    private readdress(from: number, to: number): void {
+        for (const s of this.socks.values()) if (s.boundIp === from) s.boundIp = to;
     }
 
     private rearmRead(s: Sock): void {

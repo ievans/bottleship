@@ -212,7 +212,7 @@ export interface ThunkResult {
     preserveCallbackReturnAddress?: boolean;
     blockedNoSwitch?: boolean;  // Thread is WAITING, redirect EIP to spin loop (no runnable peers)
     deferredWrites?: DeferredWrite[];  // Writes to apply after async completion
-    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number }>;  // DllMains to invoke after async load
+    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number; onReturn?: (ret: number) => void }>;  // DllMains to invoke after async load
     sehTrampoline?: { base: number; end: number };  // Trampoline code range for SEH unwind (seh-dispatch.ts)
     /**
      * Async-only: defer initiation of a guest-callback chain to the safe apply point.
@@ -249,7 +249,7 @@ interface PendingAsyncRestore {
     returnValue: number;
     cleanupBytes: number;
     deferredWrites?: DeferredWrite[];
-    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number }>;
+    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number; onReturn?: (ret: number) => void }>;
     errorFlag: boolean;
     completionName: string;
     /** Deferred guest-callback chain (see ThunkResult.startCallbackChain). Applied at the safe point. */
@@ -2199,7 +2199,8 @@ export class ThunkDispatcher {
         // A WASM hypercall that touched an unmapped guest address has already vectored the CPU
         // into the #PF handler before declining to JS; running the thunk now would use the
         // handler's frame as the call's stack. Leave it: the handler's own trap raises the fault.
-        if (functionId > 0 && functionId < MAX_THUNK_ID && ((this.cachedIpRaw?.[0] ?? 0) >>> 0) === PF_HANDLER_ENTRY) return;
+        // ipRawView rebinds a view detached by a memory grow; a bare cached read would see 0 and fail open.
+        if (functionId > 0 && functionId < MAX_THUNK_ID && ((this.ipRawView?.[0] ?? 0) >>> 0) === PF_HANDLER_ENTRY) return;
 
         // ULTRA-FAST PATH: Check fast table BEFORE any other work.
         // Normal thunk IDs are small positive numbers (< MAX_THUNK_ID).
@@ -4001,7 +4002,8 @@ export class ThunkDispatcher {
                     returnAddr: ret,
                     postEsp: (esp + 4 + cleanupBytes) >>> 0,
                     entryEsp: esp >>> 0,
-                    complete: (_ret: number): number | null => {
+                    complete: (ret: number): number | null => {
+                        dllInits[next]?.onReturn?.(ret);
                         next++;
                         return next < dllInits.length && invokeInit(next) ? null : baseAddress;
                     },
@@ -4041,7 +4043,8 @@ export class ThunkDispatcher {
             }
 
             let initIndex = 0;
-            const completeThunk = (_ret: number): number | null => {
+            const completeThunk = (ret: number): number | null => {
+                dllInits[initIndex]?.onReturn?.(ret);
                 initIndex++;
                 if (initIndex < dllInits.length) {
                     const next = dllInits[initIndex];

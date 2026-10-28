@@ -103,7 +103,7 @@ import { registerDirectDraw2Exports } from "./directdraw-v2";
 
 import { windows as sharedWindows } from "../user32/shared-state";
 import type { WindowInfo } from "../user32/shared-state";
-import { noteFlipToGdiSurface, settleFlipToGdiSurface } from "./gdi-visibility";
+import { noteFlipToGdiSurface } from "./gdi-visibility";
 import { resizeFullscreenWindowToMode } from "../../runtime/windowing/fullscreen-window";
 import { repaintDialogOverlayIfVisible, requestGuestDialogPaint } from "../user32/dialog-paint";
 
@@ -2142,12 +2142,11 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
 
         // Present the primary surface to restore GDI control
         try {
-            await context.presenter.present(primaryState, mem);
+            await context.presenter.present(primaryState, mem, { displayOnly: true });
         } catch (e) {
             Logger.error(LogCategory.DDRAW, `FlipToGDISurface: Present failed: ${e}`);
             return E_FAIL;
         }
-        settleFlipToGdiSurface(context);
 
         return DD_OK;
     };
@@ -2186,12 +2185,11 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
 
         // Present the primary surface to restore GDI control
         try {
-            await context.presenter.present(primaryState, mem);
+            await context.presenter.present(primaryState, mem, { displayOnly: true });
         } catch (e) {
             Logger.error(LogCategory.DDRAW, `FlipToGDISurface: Present failed: ${e}`);
             return E_FAIL;
         }
-        settleFlipToGdiSurface(context);
 
         return DD_OK;
     };

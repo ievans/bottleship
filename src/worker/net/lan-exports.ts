@@ -79,7 +79,14 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         errorTarget = cap;
         try { return f(); } finally { errorTarget = null; }
     };
-    const own = (s: number): boolean => d.isActive() && stack.has(s);
+    // A socket made before the room was joined was never registered; it joins the LAN on first use.
+    // One left behind by a leave is still ours (it fails with NETDOWN) rather than falling to the offline stub.
+    const own = (s: number): boolean => {
+        if (stack.has(s)) return d.isActive() || stack.isDown(s);
+        if (!d.isActive() || !table.isValid(s)) return false;
+        stack.create(s, table.typeOf(s));
+        return true;
+    };
 
     /** Retries `op` until it yields a result; blocking sockets park the thread on the stack. */
     const blocking = (s: number, op: () => number | Pending, failed: number, timeoutOpt = 0): number | Promise<number> => {
@@ -110,15 +117,29 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         if (!deliver(r.data)) return fail(WSAEFAULT);
         if (name && !name(r.ip, r.port)) return fail(WSAEFAULT);
         if ((flags & MSG_PEEK) === 0) stack.recv(s, len, false);
+        else stack.rearm(s);
         setError(r.err);
         return r.err === E.MSGSIZE ? SOCKET_ERROR : r.data.length;
     };
 
-    const sendFrom = (s: number, data: Uint8Array, to: { ip: number; port: number } | null): number => {
+    const sendFrom = (s: number, data: Uint8Array, to: { ip: number; port: number } | null): number | Promise<number> => {
+        const nonBlocking = table.isNonBlocking(s);
         const n = to ? stack.sendTo(s, to.ip, to.port, data) : stack.send(s, data);
-        if (n < 0) return fail(-n);
-        setError(0);
-        return n;
+        if (n >= 0 && (n === data.length || nonBlocking)) { setError(0); return n; }
+        if (n < 0 && (-n !== E.WOULDBLOCK || nonBlocking)) return fail(-n);
+        // A blocking stream send returns once everything is accepted.
+        let sent = Math.max(n, 0);
+        const cap = d.captureError();
+        return (async () => {
+            for (;;) {
+                await stack.waitChange([s], -1);
+                if (!stack.has(s)) { cap(WSAEINTR); return SOCKET_ERROR; }
+                const r = stack.send(s, data.subarray(sent));
+                if (r < 0 && -r !== E.WOULDBLOCK) { cap(-r); return SOCKET_ERROR; }
+                if (r > 0) sent += r;
+                if (sent >= data.length) { cap(0); return sent; }
+            }
+        })();
     };
 
     const gather = (bufs: number, count: number): Uint8Array | null => {
@@ -442,17 +463,20 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         WSARecvFrom: (_c, _m, a) => wsaRecv(a, 7, true),
     };
 
-    const wsaSend = (a: number[], ovl: number, hasTo: boolean): number | Pass => {
+    const wsaSend = (a: number[], ovl: number, hasTo: boolean): number | Promise<number> | Pass => {
         const s = a[0] >>> 0;
         if (!own(s) || a[ovl] || a[ovl + 1]) return PASS;
         const data = gather(a[1] >>> 0, a[2] >>> 0);
         if (!data) return fail(WSAEFAULT);
         const to = hasTo && a[5] ? readSockaddr(a[5] >>> 0, a[6] | 0) : null;
         if (hasTo && a[5] && !to) return fail(WSAEFAULT);
+        const done = (n: number): number => {
+            if (n < 0) return n;
+            if (a[3]) Mem.writeUint32(a[3] >>> 0, n);
+            return 0;
+        };
         const n = sendFrom(s, data, to);
-        if (n < 0) return n;
-        if (a[3]) Mem.writeUint32(a[3] >>> 0, n);
-        return 0;
+        return typeof n === "number" ? done(n) : n.then(done);
     };
 
     const wsaRecv = (a: number[], ovl: number, hasFrom: boolean): number | Promise<number> | Pass => {

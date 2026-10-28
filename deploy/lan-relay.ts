@@ -3,15 +3,15 @@
  * destination IP; the relay rewrites the IP field to the sender's address and keeps no flow
  * state. Transport-agnostic — `serveLan` adapts it to Bun WebSockets.
  */
-import { LAN_SUBNET, LAN_MAX_FRAME, ROOM_NAME, Op, decode, encode, isBroadcast } from "../src/net/lan-protocol";
+import { LAN_SUBNET, LAN_MAX_FRAME, LAN_RATE_BYTES_PER_SEC, LAN_RATE_BURST_BYTES, ROOM_NAME, Op, decode, encode, isBroadcast } from "../src/net/lan-protocol";
 
 export const MAX_PEERS_PER_ROOM = 32;
 export const MAX_ROOMS = 256;
 /** Concurrent connections one client address may hold (override: LAN_MAX_CONN_PER_IP). */
 export const MAX_CONN_PER_KEY = 16;
 /** Token bucket per peer, in bytes delivered (a broadcast is charged once per recipient). */
-export const RATE_BYTES_PER_SEC = 2 << 20;
-export const RATE_BURST_BYTES = 4 << 20;
+export const RATE_BYTES_PER_SEC = LAN_RATE_BYTES_PER_SEC;
+export const RATE_BURST_BYTES = LAN_RATE_BURST_BYTES;
 const FIRST_HOST = 2;
 const LAST_HOST = 254;
 
@@ -188,7 +188,10 @@ export function serveLan(opts: LanServeOptions = {}) {
             idleTimeout: 60,
             open(ws: { data: Data; send(b: Uint8Array): number; close(code?: number): void }) {
                 const peer = relay.join(ws.data.room, (f) => { if (ws.send(f) === 0) ws.close(1013); },
-                    { key: ws.data.key, kick: () => ws.close(1008) });
+                    { key: ws.data.key, kick: () => {
+                    console.warn(`[lan] room ${ws.data.room}: disconnecting a peer over the rate limit`);
+                    ws.close(1008, "rate limit");
+                } });
                 if (!peer) { ws.close(1013); return; }
                 ws.data.peer = peer;
             },

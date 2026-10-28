@@ -76,7 +76,6 @@ export function isGameScreenOwned(renderActive?: RenderActive | null): boolean {
  */
 function isGameContentOnScreen(renderActive?: RenderActive | null): boolean {
     const ddrawCtx = getDDrawContext();
-    if (gdiSurfaceOnDisplay(ddrawCtx)) return false;
     const active = renderActive ?? System.getInstance().services.render.getActive();
     if (shouldSuppress3DGdiOverlay(active, ddrawCtx)) return true;
     return ddrawShowsContent(ddrawCtx);
@@ -381,7 +380,7 @@ export function eraseDialogOverlay(hwnd: number): void {
 export type OverlayCompositePlan =
     | { mode: 'none' }
     | { mode: 'full' }
-    | { mode: 'rects'; rects: DialogOverlayRect[] };
+    | { mode: 'rects'; rects: DialogOverlayRect[]; gdiOwnsDisplay?: true };
 
 /**
  * Decide how the GDI overlay composites over the game frame. THE single source of
@@ -398,6 +397,11 @@ export type OverlayCompositePlan =
  *    DirectDraw ownership model says are actually on screen (dialogOverlayComposites);
  *    with none, `none` and the game frame shows through. WHICH dialogs is decided
  *    there; whether to consider any at all is decided here.
+ *  - FlipToGDISurface took the display back from a flip chain and nothing has been drawn to
+ *    the primary since (gdiSurfaceOnDisplay): GDI output is what is on screen, but only that
+ *    of the screen-owner window and the live dialogs above it — the opaque fullscreen owner
+ *    occludes windows that predate it, so the whole overlay is still never composited.
+ *    `gdiOwnsDisplay` tells the compositor that held window DCs are visible output.
  *  - Windowed / GDI desktop owns the screen: composite the whole overlay as usual.
  *
  * Pass the presenting renderActive (the device calling present) so the 3D-owned check
@@ -406,6 +410,14 @@ export type OverlayCompositePlan =
  * regardless).
  */
 export function getOverlayCompositePlan(renderActive?: RenderActive | null): OverlayCompositePlan {
+    const ddrawCtx = getDDrawContext();
+    if (gdiSurfaceOnDisplay(ddrawCtx)) {
+        const rects = getLiveDialogOverlayRects(renderActive);
+        const ownerHwnd: number = ddrawCtx?.cooperative?.hwnd ?? 0;
+        const owner = windows.get(ownerHwnd)?.visible ? getWindowVisualBounds(ownerHwnd) : null;
+        if (owner) rects.unshift(owner);
+        return rects.length ? { mode: 'rects', rects, gdiOwnsDisplay: true } : { mode: 'none' };
+    }
     if (isGameContentOnScreen(renderActive)) {
         const rects = getLiveDialogOverlayRects(renderActive);
         return rects.length ? { mode: 'rects', rects } : { mode: 'none' };

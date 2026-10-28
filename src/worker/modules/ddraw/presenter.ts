@@ -39,7 +39,7 @@ export class DDrawPresenter implements RenderActive {
     private counters: Record<string, number> = { frames: 0 };
     private lastPresentLog = 0;
     private presentCallCount = 0;
-    private presentRequests = 0;
+    private contentPresents = 0;
     private presentEarlyReturns = 0;
     private lastPresentTime = 0;
     private pendingSurface: DirectDrawSurfaceState | null = null;
@@ -144,8 +144,9 @@ export class DDrawPresenter implements RenderActive {
         return (this.counters.frames ?? 0) > 0;
     }
 
-    presentRequestCount(): number {
-        return this.presentRequests;
+    /** Presents that put pixels on the primary; `displayOnly` requests (palette, FlipToGDISurface's own) do not count. */
+    contentPresentCount(): number {
+        return this.contentPresents;
     }
 
     /**
@@ -238,9 +239,9 @@ export class DDrawPresenter implements RenderActive {
         }
     }
 
-    async present(surface: DirectDrawSurfaceState, _mem: Uint8Array, options: { throttle?: boolean; frameAlreadyMarked?: boolean; snapshotTextureView?: GPUTextureView } = {}): Promise<void> {
+    async present(surface: DirectDrawSurfaceState, _mem: Uint8Array, options: { throttle?: boolean; frameAlreadyMarked?: boolean; snapshotTextureView?: GPUTextureView; displayOnly?: boolean } = {}): Promise<void> {
         this.presentCallCount++;
-        this.presentRequests++;
+        if (!options.displayOnly) this.contentPresents++;
         return new Promise<void>((resolve, reject) => {
             if (this.pendingSurface || this.pendingResolvers.length > 0) {
                 const supersededResolvers = this.pendingResolvers.splice(0);

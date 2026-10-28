@@ -59,5 +59,6 @@ export function configureLan(url: string | null): void {
     socket = null;
     old?.close();
     lanStack.attachLink(null);
-    if (url !== null) open();
+    if (url === null) lanStack.dissolve();
+    else open();
 }

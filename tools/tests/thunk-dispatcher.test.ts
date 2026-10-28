@@ -884,3 +884,31 @@ describe('ThunkDispatcher — a fast path that grows guest memory is caught, not
         expect(d.cachedMem8!.length).toBe(replacement.length);
     });
 });
+
+describe('ThunkDispatcher — the #PF-handler guard survives a guest-memory grow', () => {
+    it('still declines the thunk when the cached EIP view is detached', async () => {
+        const { PF_HANDLER_ENTRY } = await import('../../src/worker/core/bootloader');
+        const d = mkDispatcher();
+        bindMemory(d);
+        d.cachedCpu = { reg32: d.cachedReg32Raw, instruction_pointer: d.cachedIpRaw };
+        d.cachedScheduler = { onThunkEnter: () => {}, onThunkBoundary: () => {} };
+
+        const FID = 79;
+        let ran = 0;
+        d.namesTable[FID] = 'test:PfGuard';
+        d.fastPathTable[FID] = () => { ran++; return 0; };
+
+        const replacement = new Uint8Array(0x10000);
+        d.getMemory = () => replacement;
+        d.bindCpuStateViews = (buffer: ArrayBuffer) => {
+            d.cachedReg32Raw = new Int32Array(buffer, 64, 8);
+            d.cachedIpRaw = new Int32Array(buffer, 556, 1);
+            d.cachedIpRaw[0] = PF_HANDLER_ENTRY;
+        };
+        (d.cachedIpRaw.buffer as ArrayBuffer).transfer();
+        expect(d.cachedIpRaw.length).toBe(0);
+
+        d.handlePortWrite(FID);
+        expect(ran).toBe(0);
+    });
+});
