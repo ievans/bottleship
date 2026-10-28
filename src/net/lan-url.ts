@@ -16,3 +16,20 @@ export function newLanRoom(rand: (n: number) => Uint8Array = (n) => crypto.getRa
     while (room.length < 20) for (const b of rand(32)) if (b < 252 && room.length < 20) room += ROOM_ALPHABET[b % 36];
     return room;
 }
+
+/** The room named by `?lan=`, or null when absent or not a valid room name. */
+export function lanRoomFromSearch(search: string): string | null {
+    const room = new URLSearchParams(search).get("lan");
+    return room && ROOM_NAME.test(room) ? room : null;
+}
+
+// ?ingest points at this browser's own OPFS staging dir and ?bs names a local harness tab; neither means anything to a peer.
+const LOCAL_ONLY_PARAMS = ["ingest", "bs"];
+
+/** A link a peer can open to join `room`: the current page with `lan` set and local-only params dropped. */
+export function lanInviteUrl(href: string, room: string): string {
+    const u = new URL(href);
+    for (const p of LOCAL_ONLY_PARAMS) u.searchParams.delete(p);
+    u.searchParams.set("lan", room);
+    return u.toString();
+}

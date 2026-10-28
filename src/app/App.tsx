@@ -17,7 +17,7 @@ import { AudioEngine, AudioPlayEncodedPayload, AudioPlayPayload, AudioUpdatePayl
 import { getLogClient, sendLogToServer, writeDebugFile, writeDebugFileBase64, rotateLogFile, logArtifactPath } from "../utils/log-client";
 import { bundleLogName } from "../utils/bundle-url";
 import { sessionFromLocation } from "../harness/session";
-import { lanRelayUrl, newLanRoom } from "../net/lan-url";
+import { lanInviteUrl as buildLanInviteUrl, lanRelayUrl, lanRoomFromSearch, newLanRoom } from "../net/lan-url";
 import { installHarnessFacade } from "../harness/facade";
 import { getCachedGamepadMeta, initGamepadCache, readLiveGamepad, rescanGamepads } from "../gamepad-cache";
 import GameSelectScreen, { type GameEntry } from "../library/GameSelectScreen";
@@ -388,17 +388,14 @@ export default function App() {
   // lanRelayUrl() read), but lets the player create/leave a room live, without a reload —
   // "set_lan" is already safe to send mid-session (emulator.worker.ts just forwards to
   // configureLan(), which no-ops if the url is unchanged).
-  const [lanRoom, setLanRoom] = useState<string | null>(
-    () => new URLSearchParams(window.location.search).get("lan"),
-  );
+  const [lanRoom, setLanRoom] = useState<string | null>(() => lanRoomFromSearch(window.location.search));
   const [lanPanelOpen, setLanPanelOpen] = useState(false);
   const [lanCopied, setLanCopied] = useState(false);
-  const lanInviteUrl = useMemo(() => {
-    if (!lanRoom) return null;
-    const u = new URL(window.location.href);
-    u.searchParams.set("lan", lanRoom);
-    return u.toString();
-  }, [lanRoom]);
+  const lanInviteUrl = useMemo(
+    () => (lanRoom ? buildLanInviteUrl(window.location.href, lanRoom) : null),
+    [lanRoom],
+  );
+  const lanInviteInputRef = useRef<HTMLInputElement | null>(null);
   const joinLanRoom = useCallback((room: string) => {
     const u = new URL(window.location.href);
     u.searchParams.set("lan", room);
@@ -412,13 +409,30 @@ export default function App() {
     u.searchParams.delete("lan");
     window.history.replaceState(null, "", u.toString());
     setLanRoom(null);
+    setLanPanelOpen(false);
     setLanCopied(false);
     globalWorker?.postMessage({ type: "set_lan", url: null });
   }, []);
+  const copyLanInvite = useCallback(() => {
+    const done = () => {
+      setLanCopied(true);
+      setTimeout(() => setLanCopied(false), 1500);
+    };
+    // navigator.clipboard exists only in secure contexts, and the LAN invite is usually opened from http://<lan-ip>.
+    const input = lanInviteInputRef.current;
+    const fallback = () => {
+      if (!input) return;
+      input.select();
+      if (document.execCommand("copy")) done();
+    };
+    if (navigator.clipboard) navigator.clipboard.writeText(lanInviteUrl ?? "").then(done, fallback);
+    else fallback();
+  }, [lanInviteUrl]);
   const openLanPanel = useCallback(() => {
     if (!lanRoom) {
-      const room = newLanRoom();
-      joinLanRoom(room);
+      joinLanRoom(newLanRoom());
+      setLanPanelOpen(true);
+      return;
     }
     setLanPanelOpen((open) => !open);
   }, [lanRoom, joinLanRoom]);
@@ -3310,18 +3324,13 @@ export default function App() {
                 Rooms are open to anyone with the link.
               </div>
               <input
-                readOnly value={lanInviteUrl ?? ""} onFocus={(e) => e.currentTarget.select()}
+                ref={lanInviteInputRef} readOnly value={lanInviteUrl ?? ""} onFocus={(e) => e.currentTarget.select()}
                 style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: 4 }}
               />
               <div style={{ display: "flex", gap: 8 }}>
                 <button
                   className={s["emu-topbar-btn"]}
-                  onClick={() => {
-                    navigator.clipboard?.writeText(lanInviteUrl ?? "").then(() => {
-                      setLanCopied(true);
-                      setTimeout(() => setLanCopied(false), 1500);
-                    });
-                  }}
+                  onClick={copyLanInvite}
                 >
                   {lanCopied ? "Copied!" : "Copy link"}
                 </button>

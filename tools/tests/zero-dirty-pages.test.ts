@@ -52,4 +52,12 @@ describe("zeroDirtyPages", () => {
         const raw = new Uint8Array(buf);
         for (let i = 0; i < raw.length; i++) expect(raw[i]).toBe(i >= 8 * PAGE && i < 72 * PAGE ? 0 : 0xff);
     });
+
+    test("an end past the view is clamped like fill, not thrown", () => {
+        const mem = mk(64);
+        mem[63 * PAGE + 1] = 1;
+        zeroDirtyPages(mem, 0, mem.length + 8 * PAGE);
+        expect(mem.every(b => b === 0)).toBe(true);
+        zeroDirtyPages(mem, mem.length + PAGE, mem.length + 2 * PAGE);
+    });
 });

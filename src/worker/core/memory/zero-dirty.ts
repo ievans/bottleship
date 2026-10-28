@@ -10,6 +10,8 @@ const SCAN_THRESHOLD = 64 * 1024;
  * untouched page into real host memory. The result is byte-identical to `mem.fill(0, start, end)`.
  */
 export function zeroDirtyPages(mem: Uint8Array, start: number, end: number): void {
+    if (end > mem.length) end = mem.length;
+    if (end <= start) return;
     if (end - start < SCAN_THRESHOLD) { mem.fill(0, start, end); return; }
     const lo = Math.ceil(start / PAGE) * PAGE;
     const hi = Math.floor(end / PAGE) * PAGE;
