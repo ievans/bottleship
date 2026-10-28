@@ -49,6 +49,8 @@ export interface DllInitEntry {
     entryPoint: number;
     /** Module name for logging */
     name: string;
+    /** DllMain fdwReason; DLL_PROCESS_ATTACH (1) when omitted */
+    reason?: number;
 }
 
 /**
@@ -305,6 +307,10 @@ export class PELoader {
     getPendingDllInits(): DllInitEntry[] {
         const inits = this.pendingDllInits;
         this.pendingDllInits = [];
+        for (const init of inits) {
+            const mod = this.moduleRegistry?.getByBase?.(init.baseAddress);
+            if (mod) mod.initialized = true;
+        }
         return inits;
     }
 

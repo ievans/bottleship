@@ -21,7 +21,7 @@
 
 import { System } from '../../core/system';
 import type { RenderActive } from '../../runtime/runtime-services';
-import { isGdiSurfaceHidden, ddrawOwnsScreen, ddrawShowsContent, shouldSuppress3DGdiOverlay } from '../ddraw/gdi-visibility';
+import { isGdiSurfaceHidden, ddrawOwnsScreen, ddrawShowsContent, gdiSurfaceOnDisplay, shouldSuppress3DGdiOverlay } from '../ddraw/gdi-visibility';
 import {
     windows,
     WindowInfo,
@@ -76,6 +76,7 @@ export function isGameScreenOwned(renderActive?: RenderActive | null): boolean {
  */
 function isGameContentOnScreen(renderActive?: RenderActive | null): boolean {
     const ddrawCtx = getDDrawContext();
+    if (gdiSurfaceOnDisplay(ddrawCtx)) return false;
     const active = renderActive ?? System.getInstance().services.render.getActive();
     if (shouldSuppress3DGdiOverlay(active, ddrawCtx)) return true;
     return ddrawShowsContent(ddrawCtx);

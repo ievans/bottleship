@@ -910,6 +910,41 @@ export class GDIContext {
     }
 
     /**
+     * A GetDC/GetWindowDC DC draws into its window's CURRENT rect, so one held across a
+     * SetWindowPos must follow the window instead of keeping the size it was handed
+     * (a window created small and then sized up would otherwise clip every blit).
+     */
+    retargetWindowDCs(hwnd: number, absX: number, absY: number, width: number, height: number): void {
+        const w = Math.max(1, width | 0);
+        const h = Math.max(1, height | 0);
+        for (const [hdc, state] of this.hdcStates) {
+            if (state.hwnd !== hwnd || !state.windowBlit || state.paintDc) continue;
+            const wb = state.windowBlit;
+            const resized = wb.width !== width || wb.height !== height;
+            state.windowBlit = { absX, absY, width, height };
+            if (!resized) continue;
+            const ctx = this.contexts.get(hdc);
+            const canvas = ctx?.canvas as OffscreenCanvas | undefined;
+            if (!ctx || !canvas || (canvas.width === w && canvas.height === h)) continue;
+            // Assigning a canvas dimension resets the context, so keep what was drawn.
+            let kept: OffscreenCanvas | null = null;
+            if (state.dirty) {
+                kept = new OffscreenCanvas(canvas.width, canvas.height);
+                kept.getContext('2d')?.drawImage(canvas, 0, 0);
+            }
+            canvas.width = w;
+            canvas.height = h;
+            ctx.fillStyle = '#FFFFFF';
+            ctx.strokeStyle = '#000000';
+            ctx.textBaseline = 'top';
+            state.appliedFont = '';
+            state.appliedFillStyle = '';
+            if (kept) ctx.drawImage(kept, 0, 0);
+            this.invalidateImageDataCache(hdc);
+        }
+    }
+
+    /**
      * Mark a window DC as belonging to a BeginPaint/EndPaint bracket, and give it the
      * clip such a DC has in Win32: the window's update region. Everything drawn through
      * the DC — the class-brush erase, the guest's own primitives, the child restamps —

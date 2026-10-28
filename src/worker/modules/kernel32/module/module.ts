@@ -1201,6 +1201,18 @@ function initModuleFunctions(): void {
         }
         Logger.log(LogCategory.KERNEL32,
             `FreeLibrary(0x${hModule.toString(16)}): unloaded "${mod.name}" (image left mapped; next LoadLibrary maps fresh)`);
+
+        // DllMain(DLL_PROCESS_DETACH) undoes what ATTACH did to process-global state (e.g. a
+        // top-level exception filter chained to the previous one). Skipping it lets the next
+        // load of the same image capture its own stale filter as "previous" and recurse.
+        if (mod.isRealDll && mod.initialized && mod.entryPoint !== 0) {
+            mod.initialized = false;
+            return Promise.resolve({
+                value: 1,
+                stackCleanup: 4,
+                dllInits: [{ baseAddress: mod.baseAddress, entryPoint: mod.baseAddress + mod.entryPoint, name: mod.name, reason: 0 }],
+            });
+        }
         return { value: 1, stackCleanup: 4 };
     };
 

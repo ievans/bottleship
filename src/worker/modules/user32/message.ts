@@ -238,6 +238,8 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         timerFunc: number;
         intervalMs: number;
         pendingTicks: number;
+        /** Owning thread of an hWnd==NULL timer (its WM_TIMER is a thread message); 0 for window timers. */
+        threadId: number;
     }
 
     interface TimerDiagCounters {
@@ -393,11 +395,11 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         }
 
         for (let i = 0; i < toPost; i++) {
-            system.windowManager.postMessage(state.hWnd, WM_TIMER, state.timerId, state.timerFunc);
+            system.windowManager.postMessage(state.hWnd, WM_TIMER, state.timerId, state.timerFunc, 0, 0, state.threadId);
             timerDiag.posted++;
         }
         if (toPost > 0) {
-            system.scheduler.wakeMessageWaiters();
+            system.scheduler.wakeMessageWaiters(state.threadId > 0 ? state.threadId : undefined);
             timerDiag.wakeWaiters++;
         }
     }
@@ -1519,6 +1521,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
             timerFunc: lpTimerFunc >>> 0,
             intervalMs: Math.max(uElapse, USER_TIMER_MINIMUM),
             pendingTicks: 0,
+            threadId: hWnd === 0 ? System.getInstance().scheduler.getCurrentThreadId() : 0,
         };
 
         // Win32: SetTimer with an existing (hwnd, id) RESETS that timer — cancel the

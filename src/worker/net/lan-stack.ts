@@ -25,6 +25,37 @@ const MAX_QUEUED_DGRAMS = 512;
 const MAX_TCP_RX_BYTES = 4 << 20;
 
 export interface LanLink { send(frame: Uint8Array): void }
+/** Wire-level observer; null (the default) costs one check per frame. */
+export interface LanTap { frame(outbound: boolean, frame: Uint8Array): void }
+
+/** Real events at the relay boundary: each counter moves only when that thing happened. */
+export interface LanCounters {
+    /** Frames handed to the relay link. */
+    sent: number;
+    /** Well-formed frames received from the relay. */
+    received: number;
+    /** Received frames that failed to decode. */
+    malformed: number;
+    /** Frames that had no link to leave on. */
+    droppedTx: number;
+    /** Datagrams/segments delivered to our own sockets without touching the relay. */
+    looped: number;
+}
+
+export interface SockInfo {
+    id: number;
+    type: "udp" | "tcp";
+    state: "idle" | "listening" | "connecting" | "connected" | "dead";
+    child: boolean;
+    local: { ip: number; port: number };
+    remote: { ip: number; port: number } | null;
+    rxBytes: number;
+    rxDgrams: number;
+    acceptQueue: number;
+    reset: boolean;
+    peerFin: boolean;
+    sentFin: boolean;
+}
 export interface LanHooks {
     postMessage(hwnd: number, msg: number, wParam: number, lParam: number): void;
     setEvent(handle: number): void;
@@ -74,6 +105,11 @@ export class LanStack {
     hooks: LanHooks | null = null;
     connectTimeoutMs = 10000;
 
+    tap: LanTap | null = null;
+    readonly counters: LanCounters = { sent: 0, received: 0, malformed: 0, droppedTx: 0, looped: 0 };
+    /** Relay peers heard from and not yet announced gone. */
+    readonly peers = new Set<number>();
+
     private link: LanLink | null = null;
     private socks = new Map<number, Sock>();
     private conns = new Map<string, Sock>();
@@ -81,6 +117,7 @@ export class LanStack {
 
     attachLink(link: LanLink | null): void {
         this.link = link;
+        if (!link) this.peers.clear();
         if (!link && this.ip !== null) { this.ip = null; this.networkLost(); }
     }
 
@@ -89,14 +126,17 @@ export class LanStack {
     /** Feed one relay→client frame. */
     onFrame(frame: Uint8Array): void {
         const msg = decode(frame);
-        if (!msg) return;
+        if (!msg) { this.counters.malformed++; return; }
+        this.counters.received++;
+        this.tap?.frame(false, frame);
         if (msg.op === Op.Welcome) {
             const changed = this.ip !== null && this.ip !== msg.ip;
             this.ip = msg.ip;
             if (changed) this.networkLost();
             return;
         }
-        if (msg.op === Op.PeerLeave) { this.peerGone(msg.ip); return; }
+        if (msg.op === Op.PeerLeave) { this.peers.delete(msg.ip); this.peerGone(msg.ip); return; }
+        if (msg.ip !== this.ip) this.peers.add(msg.ip);
         this.receive(msg.ip, msg);
     }
 
@@ -184,11 +224,15 @@ export class LanStack {
         if (bcast || this.isSelf(dstIp)) {
             const src = bcast ? this.selfIp() : (dstIp >>> 24 === 127 ? LOOPBACK : this.selfIp());
             const copy = data.slice();
+            this.counters.looped++;
             queueMicrotask(() => this.udpIn(src, s.boundPort, dstPort, copy));
         }
         if (bcast || !this.isSelf(dstIp)) {
-            if (!this.link || this.ip === null) return bcast ? data.length : -E.NETUNREACH;
-            this.link.send(encode({ op: Op.Udp, ip: bcast ? LAN_BROADCAST : dstIp, srcPort: s.boundPort, dstPort, data }));
+            if (!this.link || this.ip === null) {
+                if (bcast) this.counters.droppedTx++;
+                return bcast ? data.length : -E.NETUNREACH;
+            }
+            this.transmit(this.link, encode({ op: Op.Udp, ip: bcast ? LAN_BROADCAST : dstIp, srcPort: s.boundPort, dstPort, data }));
         }
         return data.length;
     }
@@ -385,6 +429,27 @@ export class LanStack {
         return out;
     }
 
+    // ---- observability ---------------------------------------------------------------
+
+    sockets(): SockInfo[] {
+        const out: SockInfo[] = [];
+        for (const s of this.socks.values()) {
+            const n = this.names(s.id)!;
+            out.push({
+                id: s.id, type: s.kind, state: s.state, child: s.child, local: n.local, remote: n.remote,
+                rxBytes: s.rxBytes, rxDgrams: s.dgrams.length, acceptQueue: s.pending.length,
+                reset: s.reset, peerFin: s.peerFin, sentFin: s.sentFin,
+            });
+        }
+        return out;
+    }
+
+    /** Ports of the flow a `senderRole` frame with `cid` belongs to, or null if the flow is gone. */
+    flowPorts(senderRole: Dir, cid: number, outbound: boolean): { local: number; remote: number } | null {
+        const s = this.conns.get(this.key(outbound ? senderRole : senderRole === 0 ? 1 : 0, cid));
+        return s ? { local: s.boundPort, remote: s.remotePort } : null;
+    }
+
     // ---- internals -------------------------------------------------------------------
 
     private selfIp(): number { return this.ip ?? LOOPBACK; }
@@ -395,10 +460,18 @@ export class LanStack {
     private emit(dstIp: number, m: DistributiveOmit<LanMsg, "ip">): void {
         if (this.isSelf(dstIp)) {
             const self = this.selfIp();
+            this.counters.looped++;
             queueMicrotask(() => this.receive(self, { ...m, ip: self } as LanMsg));
             return;
         }
-        this.link?.send(encode({ ...m, ip: dstIp } as LanMsg));
+        if (!this.link) { this.counters.droppedTx++; return; }
+        this.transmit(this.link, encode({ ...m, ip: dstIp } as LanMsg));
+    }
+
+    private transmit(link: LanLink, frame: Uint8Array): void {
+        this.counters.sent++;
+        this.tap?.frame(true, frame);
+        link.send(frame);
     }
 
     private allocPort(kind: Sock["kind"]): number {

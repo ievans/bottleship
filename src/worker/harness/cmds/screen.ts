@@ -19,7 +19,7 @@ import { sessionLogPath } from "../../../harness/session";
 import { getOverlayCompositePlan, isGameScreenOwned, isFlipScreenOwned, isGdiOutputOnScreen, getLiveDialogOverlays, repairOverlayWindowsOverlappingRect } from "../../modules/user32/dialog-overlay";
 import { windows as userWindows, getAbsoluteWindowPosition, isEffectivelyVisible } from "../../modules/user32/shared-state";
 import { controlTintColor, setControlTintArmed } from "../../modules/user32/control-tint";
-import { ddrawShowsContent } from "../../modules/ddraw/gdi-visibility";
+import { ddrawShowsContent, gdiSurfaceOnDisplay } from "../../modules/ddraw/gdi-visibility";
 import { getPresentRect } from "../../backends/webgpu/shared/present-geometry";
 
 /** Where a `debug_png_dump` we post actually lands: the host writes it under its own
@@ -218,6 +218,8 @@ export function registerScreenCommands(svc: HarnessService): void {
                 exclusive: !!dd?.cooperative?.exclusive,
                 gdiSurfaceVisible: dd ? dd.gdiSurfaceVisible : null,
                 flipScreenOwned: isFlipScreenOwned(),
+                gdiFlippedAtPresent: dd?.gdiFlippedAtPresent ?? null,
+                gdiSurfaceOnDisplay: gdiSurfaceOnDisplay(dd),
                 // Exclusive rights + a primary are not content: an app that took exclusive
                 // mode for the display mode and paints with GDI never presents, and its UI
                 // lives entirely in the overlay.

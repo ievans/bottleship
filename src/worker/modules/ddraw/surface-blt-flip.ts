@@ -549,6 +549,7 @@ export function createSurfaceBltFlipExports(context: DDrawContext): Record<strin
                     // A primary-chain Flip puts the flip chain on screen: in exclusive
                     // fullscreen, GDI windows stop being visible (until FlipToGDISurface).
                     context.gdiSurfaceVisible = false;
+                    context.gdiFlippedAtPresent = undefined;
                     Logger.verbose(LogCategory.DDRAW,
                         `Flip: calling present dst=0x${dstState.surfacePtr.toString(16)} gpuDirty=${(dstState as any).gpuDirty} gpuTexView=${!!dstState.gpuTextureView}`);
                     void context.presenter.present(dstState, mem, { throttle: true, frameAlreadyMarked: true });

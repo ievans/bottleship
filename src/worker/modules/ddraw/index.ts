@@ -880,6 +880,7 @@ export class DDraw implements IModule {
             this.context.deferredUploadManager.clear();
             this.context.ddraw7ObjectAddr = 0;
             this.context.gdiSurfaceVisible = true;
+            this.context.gdiFlippedAtPresent = undefined;
             this.context.suppressPresent = false;
             delete this.context.gammaRamp;
         }

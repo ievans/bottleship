@@ -212,7 +212,7 @@ export interface ThunkResult {
     preserveCallbackReturnAddress?: boolean;
     blockedNoSwitch?: boolean;  // Thread is WAITING, redirect EIP to spin loop (no runnable peers)
     deferredWrites?: DeferredWrite[];  // Writes to apply after async completion
-    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string }>;  // DllMains to invoke after async load
+    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number }>;  // DllMains to invoke after async load
     sehTrampoline?: { base: number; end: number };  // Trampoline code range for SEH unwind (seh-dispatch.ts)
     /**
      * Async-only: defer initiation of a guest-callback chain to the safe apply point.
@@ -249,7 +249,7 @@ interface PendingAsyncRestore {
     returnValue: number;
     cleanupBytes: number;
     deferredWrites?: DeferredWrite[];
-    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string }>;
+    dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number }>;
     errorFlag: boolean;
     completionName: string;
     /** Deferred guest-callback chain (see ThunkResult.startCallbackChain). Applied at the safe point. */
@@ -3966,10 +3966,10 @@ export class ThunkDispatcher {
         }
 
         const baseName = completionName.includes(':') ? completionName.split(':')[1] : completionName;
-        const isLoadLibrary = baseName === 'LoadLibraryExW' || baseName === 'LoadLibraryExA' ||
+        const runsDllMain = baseName === 'FreeLibrary' || baseName === 'LoadLibraryExW' || baseName === 'LoadLibraryExA' ||
             baseName === 'LoadLibraryW' || baseName === 'LoadLibraryA';
 
-        if (dllInits && dllInits.length > 0 && isLoadLibrary && this._callbackManager) {
+        if (dllInits && dllInits.length > 0 && runsDllMain && this._callbackManager) {
             const baseAddress = returnValue >>> 0;
             const esp = info.esp ?? 0;
             const returnAddr = info.returnAddr;
@@ -4006,7 +4006,7 @@ export class ThunkDispatcher {
                     const init = dllInits[index];
                     try {
                         return callbacks.invokeCallback(
-                            init.entryPoint, [init.baseAddress, 1, 0], 0, undefined, false,
+                            init.entryPoint, [init.baseAddress, init.reason ?? 1, 0], 0, undefined, false,
                             'DllMainChain', undefined, { directThunkReturn: direct },
                         ).callbackId !== 0;
                     } catch (e) {
@@ -4045,7 +4045,7 @@ export class ThunkDispatcher {
                     try {
                         this._callbackManager!.invokeCallback(
                             next.entryPoint,
-                            [next.baseAddress, 1, 0],
+                            [next.baseAddress, next.reason ?? 1, 0],
                             0,
                             completeThunk,
                             false,
@@ -4065,7 +4065,7 @@ export class ThunkDispatcher {
             const first = dllInits[0];
             this._callbackManager.invokeCallback(
                 first.entryPoint,
-                [first.baseAddress, 1, 0],
+                [first.baseAddress, first.reason ?? 1, 0],
                 0,
                 completeThunk,
                 false,

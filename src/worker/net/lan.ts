@@ -18,6 +18,12 @@ export function lanActive(): boolean {
     return wanted !== null;
 }
 
+export interface LanStatus { wanted: string | null; socketOpen: boolean; retryMs: number }
+
+export function lanStatus(): LanStatus {
+    return { wanted, socketOpen: socket?.readyState === WebSocket.OPEN, retryMs };
+}
+
 export function lanClearEvent(handle: number): void {
     System.getInstance().scheduler.resetEvent(handle);
 }

@@ -176,7 +176,7 @@ export class Wsock32 implements IModule {
         };
         overlayLan(this.exports, createLanExports(deps));
         wrapSocketCreate(this.exports, deps);
-        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [12, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
+        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [12, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [51, "gethostbyaddr"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
     }
 
     reset(): void {

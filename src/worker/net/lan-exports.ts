@@ -145,16 +145,24 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
     // ---- hostname / DNS ---------------------------------------------------------------
 
     let hostentAddr = 0;
-    const hostName = (): string => `BOTTLESHIP-${(stack.ip ?? 0) & 255}`;
+    const nameOf = (ip: number): string => `BOTTLESHIP-${ip & 255}`;
+    const hostName = (): string => nameOf(stack.ip ?? 0);
 
-    const lanHostent = (): number => {
-        if (stack.ip === null) return 0;
+    const sameSubnet = (a: number, b: number): boolean => ((a ^ b) & 0xffffff00) === 0;
+
+    const peerIpOfName = (name: string): number | null => {
+        const m = /^BOTTLESHIP-(\d{1,3})$/i.exec(name);
+        if (!m || stack.ip === null) return null;
+        const n = Number(m[1]);
+        return n >= 1 && n <= 254 ? ((stack.ip & 0xffffff00) | n) >>> 0 : null;
+    };
+
+    const lanHostent = (ip: number): number => {
         if (!hostentAddr) hostentAddr = d.process.memory.alloc(96, "THUNK_DATA", "rw") >>> 0;
         if (!hostentAddr) return 0;
         const base = hostentAddr;
-        const name = new TextEncoder().encode(`${hostName()}\0`);
+        const name = new TextEncoder().encode(`${nameOf(ip)}\0`);
         const nameAt = base + 40, aliasAt = base + 16, addrAt = base + 20, listAt = base + 24;
-        const ip = stack.ip;
         const ok = Mem.writeBytes(nameAt, name) === name.length
             && Mem.writeUint32(aliasAt, 0)
             && Mem.writeBytes(addrAt, new Uint8Array([ip >>> 24, (ip >>> 16) & 255, (ip >>> 8) & 255, ip & 255])) === 4
@@ -178,8 +186,22 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         gethostbyname: (_c, mem, a) => {
             if (!a[0]) return PASS;
             const name = Marshaler.readString(mem, a[0] >>> 0).trim();
-            if (name !== "" && name.toLowerCase() !== hostName().toLowerCase()) return PASS;
-            const p = lanHostent();
+            if (stack.ip === null) return PASS;
+            const ip = name === "" || name.toLowerCase() === hostName().toLowerCase() ? stack.ip : peerIpOfName(name);
+            if (ip === null) return PASS;
+            const p = lanHostent(ip);
+            if (!p) return PASS;
+            setError(0);
+            return p;
+        },
+        gethostbyaddr: (_c, _m, a) => {
+            const ptr = a[0] >>> 0, len = a[1] | 0, type = a[2] | 0;
+            if (stack.ip === null || !ptr || len !== 4 || type !== AF_INET) return PASS;
+            const b = Mem.readBytes(ptr, 4);
+            if (!b) return PASS;
+            const ip = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+            if (!sameSubnet(ip, stack.ip)) return PASS;
+            const p = lanHostent(ip);
             if (!p) return PASS;
             setError(0);
             return p;

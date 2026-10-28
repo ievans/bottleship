@@ -19,6 +19,7 @@ const NAMED_VERBS = new Set([
     "state", "shot", "captureFrame", "textures", "dumpTexture", "dumpSurface", "time",
     "perfProfile", "perfSpikes", "perfStats", "perfThunks", "profilerStats", "readbackStats", "readLockDivergence", "eipProfile",
     "frameReport", "guestBlocks", "hotBlocksMark",
+    "lanJoin", "lanLeave", "lanState", "lanTrace",
     "breakOn", "breakOnExport", "breakOnSymbol", "breakOnApi", "watchMem", "pause", "resume",
     "fsRead", "fsWrite", "fsDelete", "fsList", "fsStat", "fsFlush", "regGet",
     "containerList", "containerRead", "containerWrite", "containerDelete",

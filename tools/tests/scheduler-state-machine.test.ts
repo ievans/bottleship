@@ -1354,6 +1354,28 @@ describe("scheduler/performSwitch (GUEST_CODE)", () => {
         expect(switches).toEqual([[1, 2]]);
     });
 
+    test("a bootstrap thread that is preempted loses its first-wait preference", () => {
+        const s = new Scheduler();
+        const child = inject(s, mkThread(1, ThreadState.RUNNING), { current: true });
+        const peer = mkThread(2, ThreadState.READY);
+        peer.context = createInitialContext(0x00402000, 0x00290000);
+        inject(s, peer, { runnable: true });
+        const bystander = mkThread(3, ThreadState.READY);
+        bystander.context = createInitialContext(0x00403000, 0x00280000);
+        inject(s, bystander, { runnable: true });
+        s.enqueueBootstrapToFirstWait(1);
+        (s as any).removeFromRunQueue(1); // dispatched: a running thread is not queued
+        expect((s as any).bootstrapUntilFirstWait.has(1)).toBe(true);
+
+        const cpu = fakeCpu({ eip: 0x00401000, esp: 0x0028ff00 });
+        expect((s as any).performSwitch(cpu, ThunkBoundaryKind.GUEST_CODE, 0)).toBe(true);
+
+        expect(child.state).toBe(ThreadState.READY);
+        expect((s as any).bootstrapUntilFirstWait.has(1)).toBe(false);
+        // Queued behind the bystander, no longer ahead of it.
+        expect((s as any).pickNextRunnable(2)?.id).toBe(3);
+    });
+
     test("self-restore: with no other runnable thread, marks current RUNNING and does not switch", () => {
         const s = new Scheduler();
         const t1 = inject(s, mkThread(1, ThreadState.RUNNING), { current: true });

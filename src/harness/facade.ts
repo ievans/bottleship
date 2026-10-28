@@ -33,12 +33,13 @@ import { diskBundleUrl } from "../utils/bundle-url";
 import { INPUT_INDEX, KEY_BITFIELD_BASE, KEY_BITFIELD_COUNT } from "../input/sab-layout";
 import { relativeIntent } from "../input/relative-intent";
 import { storageReport } from "./storage-report";
+import { lanRelayUrl } from "../net/lan-url";
 
 /** Verbs handled page-side (browser-only) rather than forwarded to the worker. */
 const BROWSER_ONLY = new Set([
     "openWgb", "loadPe", "audioGesture", "waitForEvent", "onModal", "dismissModal", "inputSab",
     "report", "hostModals", "setHostModal", "storageReport",
-    "hostRecord", "hostRecordStop", "hostReplay",
+    "hostRecord", "hostRecordStop", "hostReplay", "lanJoin",
 ]);
 
 export interface HarnessFacade {
@@ -598,6 +599,13 @@ export function installHarnessFacade(worker: Worker, getInputView?: () => Int32A
         return { replaying: true, count: list.length, deterministic: opts?.deterministic ?? true };
     }
 
+    /** lanJoin(room, url?) — the relay URL defaults to this page's origin, like the 🌐 button. */
+    async function lanJoin(room: string, url?: string): Promise<unknown> {
+        const relay = url ?? lanRelayUrl({ protocol: location.protocol, host: location.host, search: `?lan=${encodeURIComponent(room)}` });
+        if (!relay) throw new Error(`lanJoin: invalid room "${room}"`);
+        return rpc("lanJoin", [room, relay]);
+    }
+
     async function audioGesture(): Promise<unknown> {
         // Manual-mode only: a synthetic event can't satisfy the
         // autoplay policy — automation should launch Chrome with
@@ -622,6 +630,7 @@ export function installHarnessFacade(worker: Worker, getInputView?: () => Int32A
         if (step.cmd === "openWgb") return openWgb(step.args[0] as string, step.args[1] as any);
         if (step.cmd === "loadPe") return loadPe(step.args[0] as string);
         if (step.cmd === "audioGesture") return audioGesture();
+        if (step.cmd === "lanJoin") return lanJoin(step.args[0] as string, step.args[1] as string | undefined);
         if (step.cmd === "inputSab") return inputSab();
         if (step.cmd === "storageReport") return storageReport(step.args[0] as { verifyChunks?: number } | undefined);
         if (step.cmd === "hostRecord") return hostRecord();
@@ -674,6 +683,7 @@ export function installHarnessFacade(worker: Worker, getInputView?: () => Int32A
         openWgb,
         loadPe,
         audioGesture,
+        lanJoin,
         inputSab,
         storageReport,
         hostRecord,

@@ -287,6 +287,20 @@ function trySuspendForSyncWindowMessage(
     return { suspended: true, callbackId: first.callbackId, frameId, reusedFrame };
 }
 
+function retargetHeldWindowDCs(root: WindowInfo): void {
+    const gdi = System.getInstance().gdiContext;
+    const stack = [root];
+    while (stack.length) {
+        const win = stack.pop()!;
+        const { x, y } = getAbsoluteWindowPosition(win);
+        gdi.retargetWindowDCs(win.handle, x, y, win.width, win.height);
+        for (const child of win.children) {
+            const c = windows.get(child);
+            if (c) stack.push(c);
+        }
+    }
+}
+
 /** Shared SetWindowPos / DeferWindowPos geometry apply (Win32-faithful). */
 function applyWindowPosGeometry(
     hWnd: number,
@@ -322,6 +336,8 @@ function applyWindowPosGeometry(
         window.width = cx;
         window.height = cy;
     }
+
+    if (moving || resizing) retargetHeldWindowDCs(window);
 
     const wmWin = System.getInstance().windowManager.getWindow(hWnd);
     if (wmWin) {

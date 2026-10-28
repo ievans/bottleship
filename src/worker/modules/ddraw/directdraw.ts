@@ -103,6 +103,7 @@ import { registerDirectDraw2Exports } from "./directdraw-v2";
 
 import { windows as sharedWindows } from "../user32/shared-state";
 import type { WindowInfo } from "../user32/shared-state";
+import { noteFlipToGdiSurface, settleFlipToGdiSurface } from "./gdi-visibility";
 import { resizeFullscreenWindowToMode } from "../../runtime/windowing/fullscreen-window";
 import { repaintDialogOverlayIfVisible, requestGuestDialogPaint } from "../user32/dialog-paint";
 
@@ -2116,7 +2117,7 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
         const thisPtr = args[0];
 
         // GDI surface becomes the visible one again (overlay composite resumes).
-        context.gdiSurfaceVisible = true;
+        noteFlipToGdiSurface(context);
 
         // Get primary surface
         const primaryAddr = context.surfaces.primary;
@@ -2146,6 +2147,7 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
             Logger.error(LogCategory.DDRAW, `FlipToGDISurface: Present failed: ${e}`);
             return E_FAIL;
         }
+        settleFlipToGdiSurface(context);
 
         return DD_OK;
     };
@@ -2159,7 +2161,7 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
         const thisPtr = args[0];
 
         // GDI surface becomes the visible one again (overlay composite resumes).
-        context.gdiSurfaceVisible = true;
+        noteFlipToGdiSurface(context);
 
         // Get primary surface
         const primaryAddr = context.surfaces.primary;
@@ -2189,6 +2191,7 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
             Logger.error(LogCategory.DDRAW, `FlipToGDISurface: Present failed: ${e}`);
             return E_FAIL;
         }
+        settleFlipToGdiSurface(context);
 
         return DD_OK;
     };

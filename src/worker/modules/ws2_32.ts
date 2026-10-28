@@ -366,7 +366,7 @@ export class Ws2_32 implements IModule {
         // WSAAccept/WSAConnect take the same leading (s, name, namelen) arguments.
         this.exports["WSAAccept"] = this.exports["accept"]!;
         this.exports["WSAConnect"] = this.exports["connect"]!;
-        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [10, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
+        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [10, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [51, "gethostbyaddr"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
     }
 
     reset(): void {

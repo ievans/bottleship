@@ -75,6 +75,8 @@ export type DDrawContext = {
      * DDSCL_EXCLUSIVE|FULLSCREEN mode.
      */
     gdiSurfaceVisible: boolean;
+    /** Presented-frame count at the FlipToGDISurface that took the display back from a flip chain; cleared by the next Flip. */
+    gdiFlippedAtPresent?: number;
     surfaces: {
         primary: number;
         backBuffer: number;

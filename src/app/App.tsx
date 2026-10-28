@@ -384,6 +384,46 @@ export default function App() {
   }, [messageBox]);
   const [isPaused, setIsPaused] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Multiplayer room (?lan=<room>): mirrors the URL param set at boot (App.tsx's
+  // lanRelayUrl() read), but lets the player create/leave a room live, without a reload —
+  // "set_lan" is already safe to send mid-session (emulator.worker.ts just forwards to
+  // configureLan(), which no-ops if the url is unchanged).
+  const [lanRoom, setLanRoom] = useState<string | null>(
+    () => new URLSearchParams(window.location.search).get("lan"),
+  );
+  const [lanPanelOpen, setLanPanelOpen] = useState(false);
+  const [lanCopied, setLanCopied] = useState(false);
+  const lanInviteUrl = useMemo(() => {
+    if (!lanRoom) return null;
+    const u = new URL(window.location.href);
+    u.searchParams.set("lan", lanRoom);
+    return u.toString();
+  }, [lanRoom]);
+  const joinLanRoom = useCallback((room: string) => {
+    const u = new URL(window.location.href);
+    u.searchParams.set("lan", room);
+    window.history.replaceState(null, "", u.toString());
+    setLanRoom(room);
+    setLanCopied(false);
+    globalWorker?.postMessage({ type: "set_lan", url: lanRelayUrl(u) });
+  }, []);
+  const leaveLanRoom = useCallback(() => {
+    const u = new URL(window.location.href);
+    u.searchParams.delete("lan");
+    window.history.replaceState(null, "", u.toString());
+    setLanRoom(null);
+    setLanCopied(false);
+    globalWorker?.postMessage({ type: "set_lan", url: null });
+  }, []);
+  const openLanPanel = useCallback(() => {
+    if (!lanRoom) {
+      // ROOM_NAME (lan-protocol.ts) allows [A-Za-z0-9_-]{1,32}; base36 timestamp+random
+      // keeps it short, unguessable enough for a casual LAN session, URL-safe as-is.
+      const room = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      joinLanRoom(room);
+    }
+    setLanPanelOpen((open) => !open);
+  }, [lanRoom, joinLanRoom]);
   const [uiSettings, setUiSettings] = useState<UiSettings>(() => loadUiSettings());
   const [quality, setQuality] = useState<QualityConfig>(() => loadQuality());
   const qualityRef = useRef<QualityConfig>(quality);
@@ -3239,6 +3279,13 @@ export default function App() {
             )}
           </button>
           <button
+            className={cx(s, "emu-topbar-btn", lanRoom && "emu-btn-active")}
+            onClick={openLanPanel}
+            title={lanRoom ? "Multiplayer room (joined)" : "Start or join a multiplayer room"}
+          >
+            🌐
+          </button>
+          <button
             className={cx(s, "emu-topbar-btn", devPanelOpen && "emu-btn-active")}
             onClick={toggleDevPanel}
             title="Developer tools"
@@ -3247,6 +3294,47 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {lanPanelOpen && (
+        <div
+          style={{
+            position: "absolute", top: 44, right: 8, zIndex: 50,
+            background: "#1e1e1e", color: "#eee", border: "1px solid #444",
+            borderRadius: 6, padding: 12, width: 320, fontSize: 13,
+            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          }}
+        >
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Multiplayer room</div>
+          {lanRoom ? (
+            <>
+              <div style={{ opacity: 0.8, marginBottom: 8 }}>
+                Share this link with another player — opening it joins the same virtual LAN.
+                Rooms are open to anyone with the link.
+              </div>
+              <input
+                readOnly value={lanInviteUrl ?? ""} onFocus={(e) => e.currentTarget.select()}
+                style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: 4 }}
+              />
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  className={s["emu-topbar-btn"]}
+                  onClick={() => {
+                    navigator.clipboard?.writeText(lanInviteUrl ?? "").then(() => {
+                      setLanCopied(true);
+                      setTimeout(() => setLanCopied(false), 1500);
+                    });
+                  }}
+                >
+                  {lanCopied ? "Copied!" : "Copy link"}
+                </button>
+                <button className={s["emu-topbar-btn"]} onClick={leaveLanRoom}>Leave room</button>
+              </div>
+            </>
+          ) : (
+            <div style={{ opacity: 0.8 }}>Creating a room…</div>
+          )}
+        </div>
+      )}
 
       {displayGame!.id !== "dev" && displayGame!.gogUrl && !hasImportedBundle && (
         <div className={cx(s, "gog-upgrade", isFullscreen && "gog-upgrade--hidden")}>

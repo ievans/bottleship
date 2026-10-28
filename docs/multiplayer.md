@@ -6,7 +6,10 @@ WebSocket server. Nothing leaves the room.
 
 ## Use
 
-Open the game in each tab with the same room name:
+In the game's top bar, click the 🌐 button to create a room and get a shareable invite link
+(click again to copy it or leave the room) — it joins live, no reload. Opening that link in
+another tab or browser joins the same room. Equivalently, open the game directly with a room
+name in the URL:
 
 ```
 https://<host>/?game=<id>&lan=<room>      # room: [A-Za-z0-9_-], 1–32 chars
@@ -14,7 +17,8 @@ https://<host>/?game=<id>&lan=<room>      # room: [A-Za-z0-9_-], 1–32 chars
 
 The first tab gets `192.168.77.2`, the next `.3`, and so on (up to 32 per room). A guest sees
 that address from `gethostname`/`gethostbyname` (own name or `""`), `getsockname` and as the
-source of every datagram and connection it receives. UDP broadcasts (`255.255.255.255` or
+source of every datagram and connection it receives. Peers on the /24 resolve as `BOTTLESHIP-N`
+through `gethostbyname` and `gethostbyaddr`. UDP broadcasts (`255.255.255.255` or
 `192.168.77.255`) reach every other tab and loop back to the sender, as on Windows. Loopback
 and own-address traffic never leaves the tab.
 
@@ -50,22 +54,61 @@ behind `BS_AUTH_USER`/`BS_AUTH_PASS` or your access proxy for anything public.
 reset on peer loss, connect timeout). `lan-exports.ts` adapts it to `wsock32`/`ws2_32`:
 blocking and non-blocking `connect/accept/recv/recvfrom/send/sendto`, `select`,
 `WSAAsyncSelect`, `WSAEventSelect` + `WSAEnumNetworkEvents`, and non-overlapped
-`WSASend/WSARecv(From)/SendTo`, `WSAAccept`/`WSAConnect`, `SO_RCVTIMEO` on blocking receives,
+`WSASend/WSARecv(From)/SendTo`, `WSAAccept`/`WSAConnect`, `SO_RCVTIMEO` on blocking receives, `gethostbyname`/`gethostbyaddr` for room peers,
 and async/event selection inherited by accepted sockets. The wire format is `src/net/lan-protocol.ts`.
+`iphlpapi:GetAdaptersInfo` (`src/worker/modules/iphlpapi.ts`) reports one synthetic adapter for
+the virtual LAN once a room is joined — titles that enumerate adapters before offering
+multiplayer (e.g. Empire Earth's `TCP Protocol.dll`) see a real one, not zero. Offline, it still
+answers `ERROR_NO_DATA` as before.
 
 ## Not implemented
 
 - **DirectPlay** (`dplayx`) is still local-only; a title that uses it instead of Winsock will not
   see other tabs.
-- Overlapped Winsock I/O, IPv6, `iphlpapi` adapter enumeration, `SO_SNDTIMEO`, `WSAAsyncGetHostBy*` for the local name.
+- Overlapped Winsock I/O, IPv6, other `iphlpapi` adapter queries (`GetAdaptersAddresses`,
+  `GetNetworkParams`, …), `SO_SNDTIMEO`, `WSAAsyncGetHostBy*` for the local name.
 - Internet matchmaking services (e.g. GameSpy) — rooms replace them.
 - TCP has no flow control: a reader that falls 4 MiB behind has its connection reset (never a silent gap).
 - Relay-side `SO_BROADCAST` is not enforced, and UDP sockets bound to a specific address still see broadcasts.
 - `gethostname`/`gethostbyname` answer with the offline stub's name until the relay has welcomed the tab.
-- Titles have not been verified end to end; see [compatibility](compatibility.md).
+- Only the lobby handshake of one title has been verified (below); starting a match between two real guests has not.
+
+## Driving and debugging a title
+
+A second real guest costs gigabytes (two Empire Earth guests do not fit an 8 GB machine), so
+`tools/lan-peer.ts` joins a room as a synthetic peer — the real `LanStack` and wire protocol,
+a few MB — and can listen, send, sniff and replay UDP/TCP:
+
+```
+bun tools/lan-peer.ts listen-tcp 33336 --room R --relay ws://localhost:5174 \
+    --announce-hex <udp reply> --reply-hex <1st reply>,<2nd reply>
+bun tools/lan-peer.ts connect-tcp 192.168.77.2 33336 <hex> --room R --relay ws://localhost:5174
+```
+
+`--reply-hex` takes a comma-separated list: the Nth segment on a connection gets the Nth reply
+(one value answers every segment). On the guest side, `harness lanState` and `lanTrace` show
+the sockets and the last frames each way, and `lanJoin`/`lanLeave` join a room from a script.
+
+## Verified: Empire Earth lobby
+
+Empire Earth's "TCP Protocol" (NPIM) lobby runs over plain Winsock + `GetAdaptersInfo`, not
+DirectPlay. `tools/harness/regression/empire-earth-lan.harness.ts` drives a real guest through
+both directions against a synthetic peer: hosting (a peer's hello is answered with the roster and
+game settings) and joining (the guest lists a UDP-announced game, joins it and reaches the game
+lobby). Observed wire format:
+
+- UDP 8585: a client's Refresh broadcasts the 1-byte query `04`; a host answers each query with a
+  unicast announce (`01 …`, game name as UTF-16) and broadcasts `02 3882` keepalives (~15 s).
+- TCP 33336: `[len16 LE, includes itself][type][body]`. Client hello: type `01`, a `len16`-prefixed
+  UTF-16 player name, then a `len16`-prefixed second string (empty). Host reply: type `02`, the
+  assigned player id and a roster of `(id, name)` pairs. The client then sends its version
+  (`08 01 …`, e.g. `v2.00.2974`) and the host answers the game settings (`08 02 …`) and a closing
+  `08 03` frame.
 
 ## Tests
 
 `tools/tests/lan-stack.test.ts` (relay + stack), `tools/tests/lan-exports.test.ts` (thunks
 against a fake guest address space), `tools/tests/lan-hardening.test.ts` (forged frames, limits,
-reconnect, origin/upgrade handling).
+reconnect, origin/upgrade handling), `tools/tests/lan-hostent.test.ts` (peer name resolution),
+`tools/tests/iphlpapi.test.ts` (adapter enumeration), `tools/tests/lan-peer.test.ts` (the
+synthetic peer).
