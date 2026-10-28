@@ -26,7 +26,11 @@ const MAX_TCP_RX_BYTES = 4 << 20;
 
 export interface LanLink { send(frame: Uint8Array): void }
 /** Wire-level observer; null (the default) costs one check per frame. */
-export interface LanTap { frame(outbound: boolean, frame: Uint8Array): void }
+export interface LanTap {
+    frame(outbound: boolean, frame: Uint8Array): void;
+    /** A guest Winsock lifecycle call and its result; "pass" means the offline stub answered. */
+    call(name: string, detail: string, result: string): void;
+}
 
 /** Real events at the relay boundary: each counter moves only when that thing happened. */
 export interface LanCounters {

@@ -8,6 +8,7 @@ import { Marshaler } from "../core/memory/marshaler";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { WsaSocketTable } from "../modules/wsa-stub-shared";
+import { ipToString } from "../../net/lan-protocol";
 import { E, LanStack, SOL_SOCKET, SO_ERROR } from "./lan-stack";
 
 const SOCKET_ERROR = -1;
@@ -475,7 +476,82 @@ export function createLanExports(d: LanExportDeps): Record<string, Impl> {
         }, SOCKET_ERROR, SO_RCVTIMEO);
     };
 
+    traceCalls(out, stack);
     return out;
+}
+
+/** Sockaddr argument index per call; the rest log the socket and result only. */
+const TRACED: Record<string, number> = {
+    bind: 1, connect: 1, sendto: 4, send: -1, listen: -1, closesocket: -1, shutdown: -1,
+    setsockopt: -1, ioctlsocket: -1, WSAEventSelect: -1, WSAAsyncSelect: -1, WSASendTo: 5, WSAConnect: 1,
+    gethostname: -1, gethostbyname: -1, getsockname: -1, getpeername: -1,
+};
+const HEX_PREVIEW = 48;
+const hexOf = (ptr: number, len: number): string => {
+    const b = ptr && len > 0 ? Mem.readBytes(ptr, Math.min(len, HEX_PREVIEW)) : null;
+    return b ? ` ${len}B ${Array.from(b, x => (x < 16 ? "0" : "") + x.toString(16)).join("")}` : "";
+};
+const cString = (ptr: number): string => {
+    const b = ptr ? Mem.readBytes(ptr, 64) : null;
+    if (!b) return "";
+    const end = b.indexOf(0);
+    return new TextDecoder().decode(end < 0 ? b : b.subarray(0, end));
+};
+const sockaddrText = (ptr: number): string => {
+    const sa = readSockaddr(ptr, 16);
+    return sa ? `${ipToString(sa.ip)}:${sa.port}` : "";
+};
+/** What a call produced, read back from guest memory once it returned. */
+const RESULT_DETAIL: Record<string, (a: number[], r: number) => string> = {
+    gethostname: a => cString(a[0] >>> 0),
+    gethostbyname: (a, r) => {
+        if (!r) return "";
+        const list = Mem.readUint32((r >>> 0) + 12), first = list ? Mem.readUint32(list) : null, b = first ? Mem.readBytes(first, 4) : null;
+        return b ? Array.from(b).join(".") : "";
+    },
+    getsockname: a => sockaddrText(a[1] >>> 0),
+    getpeername: a => sockaddrText(a[1] >>> 0),
+};
+/** Polled calls are logged only when they succeeded: a non-blocking loop calls them 100k times. */
+const TRACED_RECV = ["recv", "recvfrom", "WSARecv", "WSARecvFrom", "accept", "WSAAccept"];
+
+function traceCalls(out: Record<string, Impl>, stack: LanStack): void {
+    const describe = (a: number[], at: number): string => {
+        let d = `s=${a[0] >>> 0}`;
+        if (at > 0) {
+            const to = readSockaddr(a[at] >>> 0, 16);
+            if (to) d += ` ${ipToString(to.ip)}:${to.port}`;
+        }
+        return d;
+    };
+    const outcome = (r: number | Promise<number> | Pass): string => (r === PASS ? "pass" : typeof r === "number" ? String(r | 0) : "async");
+    for (const [name, at] of Object.entries(TRACED)) {
+        const impl = out[name];
+        if (!impl) continue;
+        out[name] = (ctx, mem, a) => {
+            const tap = stack.tap;
+            if (!tap) return impl(ctx, mem, a);
+            let detail = describe(a, at);
+            if (name === "send" || name === "sendto") detail += hexOf(a[1] >>> 0, a[2] | 0);
+            else if (name === "gethostbyname") detail += ` ${cString(a[0] >>> 0)}`;
+            const r = impl(ctx, mem, a);
+            let res = outcome(r);
+            const more = RESULT_DETAIL[name];
+            if (more && typeof r === "number") res += ` ${more(a, r)}`;
+            tap.call(name, detail, res);
+            return r;
+        };
+    }
+    for (const name of TRACED_RECV) {
+        const impl = out[name];
+        if (!impl) continue;
+        out[name] = (ctx, mem, a) => {
+            const r = impl(ctx, mem, a);
+            const tap = stack.tap;
+            if (tap && (typeof r !== "number" || (name.endsWith("ccept") ? r !== SOCKET_ERROR : r > 0))) tap.call(name, `s=${a[0] >>> 0}`, outcome(r));
+            return r;
+        };
+    }
 }
 
 function readFdSet(ptr: number): number[] | null {
@@ -521,6 +597,7 @@ export function wrapSocketCreate(base: Record<string, ThunkImplementation>, d: P
         base[name] = (ctx, mem, args) => {
             const r = stub(ctx, mem, args);
             if (typeof r === "number" && r !== INVALID_SOCKET && d.isActive()) d.stack.create(r >>> 0, d.table.typeOf(r >>> 0));
+            if (d.isActive()) d.stack.tap?.call(name, `af=${args[0] | 0} type=${args[1] | 0}`, String(r));
             return r;
         };
     }

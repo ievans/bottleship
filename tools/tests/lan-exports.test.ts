@@ -18,7 +18,7 @@ function machine(relay: LanRelay, base: number) {
     let err = 0;
     const events: number[] = [];
     const x = createLanExports({
-        stack, table, process: null as never, setError: e => { err = e; },
+        stack, table, process: null as never, setError: e => { err = e; }, captureError: () => e => { err = e; },
         isActive: () => true, clearEvent: h => events.push(h),
     });
     const call = (name: string, ...args: number[]) => x[name](null as never, guest, args);

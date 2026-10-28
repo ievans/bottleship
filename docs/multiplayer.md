@@ -94,7 +94,7 @@ answers `ERROR_NO_DATA` as before.
 - TCP has no flow control: a reader that falls 4 MiB behind has its connection reset (never a silent gap).
 - Relay-side `SO_BROADCAST` is not enforced, and UDP sockets bound to a specific address still see broadcasts.
 - `gethostname`/`gethostbyname` answer with the offline stub's name until the relay has welcomed the tab.
-- Only the lobby handshake of one title has been verified (below); starting a match between two real guests has not.
+- Only one title has been verified end to end (below).
 
 ## Driving and debugging a title
 
@@ -110,9 +110,11 @@ bun tools/lan-peer.ts connect-tcp 192.168.77.2 33336 <hex> --room R --relay ws:/
 
 `--reply-hex` takes a comma-separated list: the Nth segment on a connection gets the Nth reply
 (one value answers every segment). On the guest side, `harness lanState` and `lanTrace` show
-the sockets and the last frames each way, and `lanJoin`/`lanLeave` join a room from a script.
+the sockets and the last frames each way, and `lanJoin`/`lanLeave` join a room from a script. With tracing on, `lanTrace`
+also records the guest's Winsock lifecycle calls and results (`dir:"api"`: socket/bind/connect/send payloads, name
+lookups; failed `recv`/`accept` polls are skipped) — the way to see what a title does with its sockets after a message.
 
-## Verified: Empire Earth lobby
+## Verified: Empire Earth lobby and launch
 
 Empire Earth's "TCP Protocol" (NPIM) lobby runs over plain Winsock + `GetAdaptersInfo`, not
 DirectPlay. `tools/harness/regression/empire-earth-lan.harness.ts` drives a real guest through
@@ -127,6 +129,10 @@ lobby). Observed wire format:
   assigned player id and a roster of `(id, name)` pairs. The client then sends its version
   (`08 01 …`, e.g. `v2.00.2974`) and the host answers the game settings (`08 02 …`) and a closing
   `08 03` frame.
+- Launch: the host broadcasts an encrypted 67-byte datagram to UDP 33334 and sends TCP `08 07`; the client then
+  resolves the host with `gethostbyname("<dotted ip>")` and sends its session request to that address on 33334. A
+  lookup that answers loopback for a dotted-decimal name (the offline stub used to) sends it nowhere, and the client
+  times out after 10 s.
 
 ## Tests
 

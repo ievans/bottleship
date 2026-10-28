@@ -161,7 +161,7 @@ describe("thunk layer", () => {
         const m = peer(relay);
         const table = new WsaSocketTable();
         let err = 0;
-        const x = createLanExports({ stack: m.stack, table, process: null as never, setError: e => { err = e; }, isActive: () => active, clearEvent() {} });
+        const x = createLanExports({ stack: m.stack, table, process: null as never, setError: e => { err = e; }, captureError: () => e => { err = e; }, isActive: () => active, clearEvent() {} });
         const sock = (type: number) => { const s = table.socket(type); m.stack.create(s, type); return s; };
         return { m, table, x, sock, err: () => err, call: (n: string, ...a: number[]) => x[n](null as never, guest, a) };
     }

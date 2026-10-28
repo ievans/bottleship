@@ -154,6 +154,16 @@ export function writeSockaddrInLoopback(addr: number, portHostOrder: number, mem
 
 const LOOPBACK_HOST_NAME = "localhost";
 const LOOPBACK_ADDR_BYTES = new Uint8Array([127, 0, 0, 1]);
+/** Room for "255.255.255.255\0", the longest name a dotted-decimal lookup echoes back. */
+const HOSTENT_NAME_CAP = 16;
+
+/** The four bytes of a strict dotted-decimal IPv4 string, or null for anything that is a host name. */
+function dottedQuad(name: string): Uint8Array | null {
+    if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(name)) return null;
+    const v = parseInetAddr(name);
+    if (v === 0xffffffff && name !== "255.255.255.255") return null;
+    return new Uint8Array([v & 0xff, (v >>> 8) & 0xff, (v >>> 16) & 0xff, (v >>> 24) & 0xff]);
+}
 
 export interface DnsStubs {
     gethostbyname: ThunkImplementation;
@@ -169,6 +179,8 @@ export interface DnsStubs {
  */
 export function createDnsStubs(process: Process, setLastError: (code: number) => void): DnsStubs {
     let hostentAddr = 0;
+    let hostentNameAddr = 0;
+    let hostentAddrBytesAddr = 0;
     let inetNtoaBufAddr = 0;
 
     const ensureLoopbackHostent = (): number => {
@@ -180,7 +192,7 @@ export function createDnsStubs(process: Process, setLastError: (code: number) =>
         //  +8 h_addrtype  (short)
         // +10 h_length    (short)
         // +12 h_addr_list (char**)
-        const hNameAddr = process.memory.alloc(LOOPBACK_HOST_NAME.length + 1, "THUNK_DATA", "rw");
+        const hNameAddr = process.memory.alloc(HOSTENT_NAME_CAP, "THUNK_DATA", "rw");
         const hAliasesAddr = process.memory.alloc(4, "THUNK_DATA", "rw");   // [NULL]
         const hAddrBytesAddr = process.memory.alloc(4, "THUNK_DATA", "rw"); // 127.0.0.1
         const hAddrListAddr = process.memory.alloc(8, "THUNK_DATA", "rw");  // [ptr, NULL]
@@ -210,6 +222,8 @@ export function createDnsStubs(process: Process, setLastError: (code: number) =>
         }
 
         hostentAddr = hEntAddr >>> 0;
+        hostentNameAddr = hNameAddr >>> 0;
+        hostentAddrBytesAddr = hAddrBytesAddr >>> 0;
         return hostentAddr;
     };
 
@@ -242,6 +256,12 @@ export function createDnsStubs(process: Process, setLastError: (code: number) =>
         return 0;
     };
 
+    /** The hostent is one static buffer, as in Winsock: each lookup overwrites the previous answer. */
+    const fillHostent = (name: string, addr: Uint8Array): boolean => {
+        const label = new TextEncoder().encode(`${name}\0`);
+        return Mem.writeBytes(hostentNameAddr, label) === label.length && Mem.writeBytes(hostentAddrBytesAddr, addr) === 4;
+    };
+
     const gethostbyname: ThunkImplementation = (_ctx, mem, args) => {
         const namePtr = args[0] >>> 0;
         if (!namePtr) { setLastError(WSAEFAULT); return 0; }
@@ -251,6 +271,9 @@ export function createDnsStubs(process: Process, setLastError: (code: number) =>
 
         const ptr = ensureLoopbackHostent();
         if (!ptr) { setLastError(WSAENETDOWN); return 0; }
+        // A dotted-decimal string names itself; every other name resolves to loopback.
+        const quad = dottedQuad(name);
+        if (!fillHostent(quad ? name : LOOPBACK_HOST_NAME, quad ?? LOOPBACK_ADDR_BYTES)) { setLastError(WSAENETDOWN); return 0; }
         setLastError(0);
         return ptr;
     };
@@ -262,7 +285,7 @@ export function createDnsStubs(process: Process, setLastError: (code: number) =>
         if (!addrPtr || len < 4 || addrType !== AF_INET) { setLastError(WSAHOST_NOT_FOUND); return 0; }
 
         const ptr = ensureLoopbackHostent();
-        if (!ptr) { setLastError(WSAENETDOWN); return 0; }
+        if (!ptr || !fillHostent(LOOPBACK_HOST_NAME, LOOPBACK_ADDR_BYTES)) { setLastError(WSAENETDOWN); return 0; }
         setLastError(0);
         return ptr;
     };

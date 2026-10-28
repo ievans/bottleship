@@ -8,8 +8,8 @@ const HEX_BYTES = 64;
 export interface LanTraceEntry {
     seq: number;
     tMs: number;
-    dir: "tx" | "rx";
-    proto: "udp" | "tcp" | "ctl";
+    dir: "tx" | "rx" | "api";
+    proto: "udp" | "tcp" | "ctl" | "call";
     /** udp, syn, synack, data, fin, rst, welcome, peerleave */
     kind: string;
     src: string;
@@ -45,6 +45,15 @@ export class LanTrace implements LanTap {
     get nextSeq(): number { return this.seq; }
     get size(): number { return this.ring.length; }
     get overwritten(): number { return this.seq - this.base - this.ring.length; }
+
+    call(name: string, detail: string, result: string): void {
+        const e: LanTraceEntry = {
+            seq: this.seq++, tMs: Math.round(performance.now() * 100) / 100,
+            dir: "api", proto: "call", kind: name, src: detail, dst: result, len: 0, hex: "",
+        };
+        if (this.ring.length >= LAN_TRACE_CAPACITY) this.ring.shift();
+        this.ring.push(e);
+    }
 
     frame(outbound: boolean, frame: Uint8Array): void {
         const m = decode(frame);
