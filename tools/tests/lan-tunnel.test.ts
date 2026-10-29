@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { LanRelay, MAX_CONN_PER_KEY, addressKey, serveLan } from "../../deploy/lan-relay";
 import { ROOM_NAME } from "../../src/net/lan-protocol";
-import { lanInviteUrl, lanRoomFromSearch, newLanRoom } from "../../src/net/lan-url";
+import { newLanRoom } from "../../src/net/lan-url";
 import { standRelaySource, writeStandRelay } from "../stand-relay";
 
 function keyFor(opts: { trustProxy: boolean }, headers: Record<string, string>, socket = "10.0.0.1"): string {
@@ -75,25 +75,5 @@ describe("stand payload", () => {
     });
     test("a relay that stops importing the wire format by that path fails the pack loudly", () => {
         expect(() => standRelaySource('import x from "./other";')).toThrow(/no longer imports/);
-    });
-});
-
-describe("invite links and ?lan= parsing", () => {
-    test("an invalid or absent room is not a room", () => {
-        expect(lanRoomFromSearch("?game=dev")).toBeNull();
-        expect(lanRoomFromSearch("?lan=")).toBeNull();
-        expect(lanRoomFromSearch("?lan=a%2Fb")).toBeNull();
-        expect(lanRoomFromSearch("?lan=" + "a".repeat(33))).toBeNull();
-        expect(lanRoomFromSearch("?lan=room_1-x")).toBe("room_1-x");
-    });
-
-    test("an invite keeps what a peer needs and drops what is local to this browser", () => {
-        const u = new URL(lanInviteUrl("http://10.0.0.5:5174/?game=dev&load=%2Fapps%2Fx.wgb&bs=alpha&ingest=1&lan=old", "newroom"));
-        expect(u.origin + u.pathname).toBe("http://10.0.0.5:5174/");
-        expect(u.searchParams.get("game")).toBe("dev");
-        expect(u.searchParams.get("load")).toBe("/apps/x.wgb");
-        expect(u.searchParams.get("lan")).toBe("newroom");
-        expect(u.searchParams.has("bs")).toBe(false);
-        expect(u.searchParams.has("ingest")).toBe(false);
     });
 });

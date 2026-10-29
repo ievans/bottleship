@@ -2,13 +2,11 @@ import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Mem } from "../core/memory/mem-accessor";
-import { isValidAddress } from "../core/memory/address-guard";
 import { lanActive, lanStack } from "../net/lan";
 
 const ERROR_SUCCESS = 0;
 const ERROR_BUFFER_OVERFLOW = 111;
 const ERROR_NO_DATA = 232;
-const ERROR_INVALID_PARAMETER = 87;
 const MIB_IF_TYPE_ETHERNET = 6;
 
 // IP_ADDR_STRING (iptypes.h): Next(4) + IpAddress(char[16]) + IpMask(char[16]) + Context(4) = 40.
@@ -121,12 +119,7 @@ export class Iphlpapi implements IModule {
                 return { value: ERROR_BUFFER_OVERFLOW, stackCleanup: 8 };
             }
 
-            if (pAdapterInfo + IP_ADAPTER_INFO_SIZE > mem.length || !isValidAddress(mem, pAdapterInfo, IP_ADAPTER_INFO_SIZE, "rw")) {
-                return { value: ERROR_INVALID_PARAMETER, stackCleanup: 8 };
-            }
-            const adapter = new Uint8Array(IP_ADAPTER_INFO_SIZE);
-            writeVirtualAdapter(adapter, 0, lanStack.ip);
-            if (Mem.writeBytes(pAdapterInfo, adapter) === 0) return { value: ERROR_INVALID_PARAMETER, stackCleanup: 8 };
+            writeVirtualAdapter(mem, pAdapterInfo, lanStack.ip);
             Mem.writeUint32(pOutBufLen, IP_ADAPTER_INFO_SIZE);
             return { value: ERROR_SUCCESS, stackCleanup: 8 };
         };

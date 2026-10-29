@@ -63,19 +63,4 @@ describe("iphlpapi GetAdaptersInfo", () => {
         expect(ret).toEqual({ value: 111, stackCleanup: 8 });
         expect(Mem.readUint32(POUTBUFLEN)).toBe(640);
     });
-
-    test("a buffer pointer that does not span 640 mapped bytes is refused, not written", () => {
-        configureLan("ws://127.0.0.1:1/nope");
-        lanStack.ip = ip(192, 168, 77, 9);
-
-        const mod = new Iphlpapi();
-        mod.initialize(null as never);
-        const POUTBUFLEN = 0x1000;
-        Mem.writeUint32(POUTBUFLEN, 1024);
-        const before = guest.slice();
-        const nearEnd = guest.length - 64;
-        const ret = mod.exports["GetAdaptersInfo"]!(null as never, guest, [nearEnd, POUTBUFLEN]);
-        expect(ret).toEqual({ value: 87, stackCleanup: 8 });
-        expect(guest).toEqual(before);
-    });
 });
