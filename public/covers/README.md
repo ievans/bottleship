@@ -43,6 +43,4 @@ Sources for the demo covers added in October 2026:
 
 | `lotr-return-of-the-king-box.jpg` | The Lord of the Rings: The Return of the King (2003), original cover artwork | [Wikipedia cover scan](https://upload.wikimedia.org/wikipedia/en/4/40/Rotkboxart2.jpg) |
 
-| `empire-earth-gold-box.jpg` | Empire Earth: Gold Edition (2001) | [Steam library capsule](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/254760/1348531dd2192660c3e55bf3f1ed072d8fc1be47/library_capsule_2x.jpg) |
-
 Artwork remains copyright of its respective owners.

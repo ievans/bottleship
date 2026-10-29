@@ -510,7 +510,7 @@
     "year": "2000",
     "genre": "Arcade Racing",
     "enabled": true
-  },
+    },
   {
     "id": "crimson-skies-demo",
     "name": "Crimson Skies",
@@ -520,17 +520,6 @@
     "description": "Fly Nathan Zachary's Fortune Hunters over Hawaii in search of Sir Francis Drake's treasure in the original Microsoft trial.",
     "year": "2000",
     "genre": "Arcade Flight",
-    "enabled": true
-  },
-  {
-    "id": "empire-earth-gold",
-    "name": "Empire Earth",
-    "subtitle": "Gold Edition",
-    "wgbUrl": "/apps/external-wgb/empire-earth-gold.wgb",
-    "coverUrl": "/covers/empire-earth-gold-box.jpg",
-    "description": "Lead a civilization from the Stone Age to the Nano Age, with LAN multiplayer over the virtual LAN.",
-    "year": "2001",
-    "genre": "RTS",
     "enabled": true
   }
 ]

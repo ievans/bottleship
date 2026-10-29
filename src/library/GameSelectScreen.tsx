@@ -38,13 +38,7 @@ export interface GameEntry {
    *  Worth it wherever range round-trips are expensive (self-hosted stand behind a
    *  reverse proxy, high-RTT link): one sequential download beats hundreds of reads. */
   preload?: boolean;
-  /** Trial/demo build. Defaults to a "Demo"/"Trial" word in `subtitle`. */
-  demo?: boolean;
   io?: import("@bottleship/formats/wgb/io-profile").WgbIoPolicy;
-}
-
-export function isDemoEntry(g: GameEntry): boolean {
-  return g.demo ?? /\b(demo|trial)\b/i.test(g.subtitle);
 }
 
 interface GameSelectScreenProps {
@@ -158,8 +152,6 @@ export default function GameSelectScreen({
     visibleAdded.sort((a, b) => (b.year ?? 0) - (a.year ?? 0) || a.name.localeCompare(b.name));
   }
 
-  const visibleFull = visibleBuiltin.filter((g) => !isDemoEntry(g));
-  const visibleDemos = visibleBuiltin.filter(isDemoEntry);
   const builtinCount = games.length;
   const gogCount = addedGames.filter(isGogAdded).length;
   const localCount = addedGames.length - gogCount;
@@ -381,11 +373,6 @@ export default function GameSelectScreen({
             </div>
           </div>
 
-          {visibleDemos.length > 0 && (
-            <div className={s["shelfhead"]}>
-              <h3>Full games</h3>
-            </div>
-          )}
           <div className={cx(s, "shelf", view === "list" && "shelf--list")}>
             <article
               className={cx(s, "card", "card--add")}
@@ -410,7 +397,7 @@ export default function GameSelectScreen({
               </div>
             </article>
 
-            {visibleFull.map((game, i) => (
+            {visibleBuiltin.map((game, i) => (
               <BuiltinCard
                 key={game.id}
                 game={game}
@@ -424,7 +411,7 @@ export default function GameSelectScreen({
               <AddedCard
                 key={`byo:${game.key}`}
                 game={game}
-                index={visibleFull.length + i + 1}
+                index={visibleBuiltin.length + i + 1}
                 onPlay={() => onPlayAdded?.(game)}
                 onRemove={() => onRemoveAdded?.(game)}
                 onEdit={() => onEditAdded?.(game)}
@@ -432,26 +419,6 @@ export default function GameSelectScreen({
               />
             ))}
           </div>
-
-          {visibleDemos.length > 0 && (
-            <>
-              <div className={cx(s, "shelfhead", "shelfhead--demos")}>
-                <h3>Demos</h3>
-                <span className={s["sub"]}>{visibleDemos.length}</span>
-              </div>
-              <div className={cx(s, "shelf", view === "list" && "shelf--list")}>
-                {visibleDemos.map((game, i) => (
-                  <BuiltinCard
-                    key={game.id}
-                    game={game}
-                    index={i + 1}
-                    onPlay={() => onSelectGame(game)}
-                    disabled={disableSelection}
-                  />
-                ))}
-              </div>
-            </>
-          )}
 
           <div className={s["statusbar"]}>
             <span className={s["ok"]}>WebGPU ready</span>
