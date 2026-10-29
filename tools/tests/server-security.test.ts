@@ -22,8 +22,26 @@ beforeAll(() => {
     writeFileSync(outside, "secret");
     symlinkSync(outside, path.join(apps, "escape.wgb"));
     symlinkSync(path.join(apps, "ok.wgb"), path.join(apps, "alias.wgb"));
+    symlinkSync(path.join(apps, "page.html"), path.join(apps, "htmllink.wgb"));
     mkdirSync(path.join(apps, "dir.wgb"));
 });
+
+/** Raw request line, so the client cannot normalise the path before it is sent. */
+async function rawStatus(base: string, rawPath: string): Promise<number> {
+    const url = new URL(base);
+    return await new Promise<number>((resolve, reject) => {
+        let buf = "";
+        void Bun.connect({
+            hostname: url.hostname, port: Number(url.port),
+            socket: {
+                open(sock) { sock.write(`GET ${rawPath} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`); },
+                data(_s, d) { buf += d.toString(); },
+                close() { resolve(Number(/^HTTP\/1\.1 (\d+)/.exec(buf)?.[1] ?? 0)); },
+                error(_s, e) { reject(e); },
+            },
+        });
+    });
+}
 
 interface Running { base: string; stop(): Promise<void> }
 const running: Running[] = [];
@@ -112,8 +130,11 @@ describe("Content-Security-Policy", () => {
     test("BS_CSP replaces the policy and a bad mode refuses to start", async () => {
         const { base } = await start({ BS_CSP: "default-src 'none'" });
         expect((await fetch(base + "/")).headers.get(CSP_RO)).toBe("default-src 'none'");
-        const proc = Bun.spawn(["bun", SERVER], { env: { ...process.env, PORT: "1", BS_DIST_DIR: dist, BS_CSP_MODE: "enfroce" }, stdout: "ignore", stderr: "ignore" });
-        expect(await proc.exited).not.toBe(0);
+        const bad = Bun.spawn(["bun", SERVER], { env: { ...process.env, PORT: String(nextPort++), BS_DIST_DIR: dist, BS_CSP_MODE: "enfroce" }, stdout: "ignore", stderr: "ignore" });
+        expect(await bad.exited).not.toBe(0);
+        // the same environment with a valid mode starts, so the exit above was the mode check
+        const { base: ok } = await start({ BS_CSP_MODE: "report" });
+        expect((await fetch(ok + "/healthz")).status).toBe(200);
     });
 });
 
@@ -146,7 +167,41 @@ describe("/apps", () => {
     test("a directory named *.wgb is not a bundle, and traversal is refused", async () => {
         const { base } = await start();
         expect((await fetch(base + "/apps/dir.wgb")).status).toBe(404);
-        expect((await fetch(base + "/apps/../outside.txt")).status).toBeGreaterThanOrEqual(400);
-        expect((await fetch(base + "/apps/%2e%2e/outside.txt")).status).toBeGreaterThanOrEqual(400);
+        for (const p of ["/apps/../outside.txt", "/apps/%2e%2e/outside.txt", "/apps/..%2foutside.txt", "/apps/%2e%2e%2foutside.txt"]) {
+            const status = await rawStatus(base, p);
+            expect(status).toBeGreaterThanOrEqual(400);
+        }
+    });
+    test("an encoded /apps prefix gets the same treatment as the plain one", async () => {
+        const { base } = await start();
+        const r = await fetch(base + "/%61pps/ok.wgb");
+        expect(r.status).toBe(200);
+        expect(r.headers.get("content-security-policy")).toBe("sandbox");
+        expect(r.headers.get("content-disposition")).toBe("attachment");
+        expect(r.headers.get(CSP_RO)).toBeNull();
+    });
+    test("a link named .wgb that points at another file type is not served, however it is requested", async () => {
+        const { base } = await start();
+        for (const p of ["/apps/htmllink.wgb", "/%61pps/htmllink.wgb"]) {
+            const r = await fetch(base + p);
+            expect(r.status).toBe(404);
+            expect(await r.text()).not.toContain("<script>");
+        }
+    });
+    test("bundles are always application/octet-stream", async () => {
+        const { base } = await start();
+        expect((await fetch(base + "/apps/ok.wgb")).headers.get("content-type")).toBe("application/octet-stream");
+    });
+    test("a missing apps folder stops the server with a clear message instead of a stack trace", async () => {
+        const proc = Bun.spawn(["bun", SERVER], { env: { ...process.env, PORT: String(nextPort++), BS_DIST_DIR: dist, BS_APPS_DIR: path.join(root, "nope") }, stdout: "ignore", stderr: "pipe" });
+        expect(await proc.exited).toBe(1);
+        expect(await new Response(proc.stderr).text()).toContain("does not exist or cannot be read");
+    });
+    test.skipIf(process.getuid?.() === 0)("an unreadable bundle is a logged 500, not a quiet 400", async () => {
+        const { chmodSync } = await import("node:fs");
+        writeFileSync(path.join(apps, "locked.wgb"), "x");
+        chmodSync(path.join(apps, "locked.wgb"), 0o000);
+        const { base } = await start();
+        expect((await fetch(base + "/apps/locked.wgb")).status).toBe(500);
     });
 });

@@ -30,7 +30,16 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const DIST = path.resolve(process.env.BS_DIST_DIR ?? path.join(import.meta.dir, "..", "dist"));
 const APPS = process.env.BS_APPS_DIR ? path.resolve(process.env.BS_APPS_DIR) : null;
 // Symlinks resolved once: the mount itself may be one, but nothing inside it may point out.
-const APPS_REAL = APPS ? realpathSync(APPS) : null;
+const APPS_REAL = APPS ? resolveDir(APPS) : null;
+
+function resolveDir(dir: string): string {
+    try {
+        return realpathSync(dir);
+    } catch {
+        console.error(`BS_APPS_DIR "${dir}" does not exist or cannot be read`);
+        process.exit(1);
+    }
+}
 const PORT = parseInt(process.env.PORT ?? "5173");
 
 const AUTH_USER = process.env.BS_AUTH_USER ?? "";
@@ -200,13 +209,25 @@ function applySecurityHeaders(h: Headers, pathname: string): void {
     }
 }
 
-/** A regular .wgb file whose real path is inside the apps mount, else null. */
+/**
+ * A regular .wgb file whose real path is inside the apps mount, else null. The extension is
+ * checked on the resolved file too, so a link named x.wgb cannot serve something else.
+ */
 async function resolveBundle(requested: string): Promise<string | null> {
     if (!APPS_REAL || path.extname(requested).toLowerCase() !== ".wgb") return null;
     const real = await realpath(requested).catch(() => null);
-    if (!real || !real.startsWith(APPS_REAL + path.sep)) return null;
+    if (!real || !real.startsWith(APPS_REAL + path.sep) || path.extname(real).toLowerCase() !== ".wgb") return null;
     const info = await stat(real).catch(() => null);
     return info?.isFile() ? real : null;
+}
+
+/** The path as the router sees it (decoded), so /%61pps/ is /apps/ for headers too. */
+function routedPath(url: URL): string {
+    try {
+        return decodeURIComponent(url.pathname);
+    } catch {
+        return url.pathname;
+    }
 }
 
 Bun.serve({
@@ -218,11 +239,16 @@ Bun.serve({
         let res: Response | undefined;
         try {
             res = await handle(req, server);
-        } catch {
-            // e.g. a malformed %-escape in the path
-            res = new Response("Bad Request", { status: 400 });
+        } catch (err) {
+            if (err instanceof URIError) {
+                // a malformed %-escape in the path is the client's mistake
+                res = new Response("Bad Request", { status: 400 });
+            } else {
+                console.error(`request failed: ${req.method} ${url.pathname}`, err);
+                res = new Response("Internal Server Error", { status: 500 });
+            }
         }
-        if (res) applySecurityHeaders(res.headers, url.pathname);
+        if (res) applySecurityHeaders(res.headers, routedPath(url));
         return res;
     },
 });
