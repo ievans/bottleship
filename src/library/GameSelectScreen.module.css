@@ -197,6 +197,10 @@
 /* Shelf grid */
 .shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(204px, 1fr)); gap: 24px; }
 .shelf--list { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+.shelfhead { display: flex; align-items: baseline; gap: 12px; padding: 0 0 14px; }
+.shelfhead--demos { padding-top: 36px; }
+.shelfhead h3 { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-md, 1rem); letter-spacing: 0.04em; color: var(--fg-2); margin: 0; }
+.shelfhead .sub { font-family: var(--font-mono); font-size: var(--fs-xs); letter-spacing: 0.06em; color: var(--fg-3); }
 
 /* Game card */
 .card {
