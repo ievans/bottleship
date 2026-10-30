@@ -301,7 +301,8 @@ files; see make-wgb/wgb.ts below):
 Debugging workflow — USE THE HARNESS. The AI-agent harness (`src/worker/harness/`, `src/harness/`,
 `tools/harness.ts`, `window.__BS__.harness`) wraps the whole "load a game, make it do X, see what
 happened" loop in fluent, self-judging verbs. Invoke the `/bringup` skill (`.claude/skills/bringup/`)
-for the operational checklist; `bun tools/harness.ts up` does cold-to-ready, then e.g.
+for the operational checklist and see `docs/game-bringup.md` for the whole process, from installer to a real
+multiplayer match; `bun tools/harness.ts up` does cold-to-ready, then e.g.
 `harness().openWgb(..).waitForEvent('dialogShow').click('Play').tickFrames(120).expectSurfaceNonBlack('primary').state([..]).run()`.
 Drive the emulator through the project's own CDP harness (`tools/harness.ts` / `window.__BS__.harness`),
 NOT a browser MCP — an uncoordinated second CDP client fights the harness for the same tab. Several
