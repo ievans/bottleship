@@ -26,6 +26,7 @@ import { scanfCore } from "./crt-scanf";
 import { getCodePageDecoder } from "./codepage-utils";
 import { invalidateLocaleCache, retireLocaleStubTable } from "./kernel32/locale-data";
 import { retireMbwcStubTable } from "./kernel32/codepage-lut";
+import { exports as kernel32LocaleExports, mapStringACore } from "./kernel32/locale";
 import { EmulatorConfig } from "../core/emulator-config-manager";
 import { hypercallDataManager } from "../core/cpu/hypercall-data";
 import { asBufferSource } from "../../dom-buffer";
@@ -111,6 +112,16 @@ export class Msvcrt implements IModule {
     private pioinfoAddr = 0;
     private badioinfoAddr = 0;
     private lcCodepageAddr = 0;  // int __lc_codepage — the CRT's active ANSI codepage
+    // The per-category locale state the CRT exports so other CRT-linked DLLs (msvcp60) can
+    // read it directly instead of calling through: __lc_handle[LC_MAX] (one LCID per category,
+    // 0 = "C"), __lc_collate_cp (LC_COLLATE's codepage, 0 under "C"), and __setlc_active /
+    // __unguarded_readlc_active (count of categories set away from "C"; the second is a
+    // lock-free mirror of the first). setlocale() here only ever changes LC_NUMERIC, so every
+    // category stays "C" and all four stay at their zeroed default.
+    private lcHandleAddr = 0;
+    private lcCollateCpAddr = 0;
+    private setlcActiveAddr = 0;
+    private unguardedReadlcActiveAddr = 0;
     // int _osver/_winmajor/_winminor/_winver — the CRT's cached GetVersion() fields.
     private osVerVarsAddr = 0;   // 4 consecutive ints in the order above
     private appType = 0;
@@ -600,9 +611,34 @@ export class Msvcrt implements IModule {
         exports["islower"] = (ctx, mem, args) => this.ischartype(args[0] ?? 0, 0x0002);
         exports["isalnum"] = (ctx, mem, args) => this.ischartype(args[0] ?? 0, 0x0100 | 0x0001 | 0x0002 | 0x0004);
         exports["isprint"] = (ctx, mem, args) => this.isprint(args[0] ?? 0);
+        exports["isgraph"] = (ctx, mem, args) => this.isgraph(args[0] ?? 0);
         exports["ispunct"] = (ctx, mem, args) => this.ischartype(args[0] ?? 0, 0x0010);
         exports["iscntrl"] = (ctx, mem, args) => this.ischartype(args[0] ?? 0, 0x0020);
         exports["isxdigit"] = (ctx, mem, args) => this.ischartype(args[0] ?? 0, 0x0080);
+
+        // __crtCompareStringA/W and __crtLCMapStringA/W: msvcrt's own locale-aware string
+        // compare/map, used internally by msvcp60's std::collate/std::ctype and imported by
+        // name from other CRT-linked DLLs. Under the "C" locale (the only one setlocale()
+        // here ever leaves LC_COLLATE/LC_CTYPE in) the documented CompareString*/LCMapString*
+        // contract already reduces to the same ordinal comparison/mapping the real CRT's
+        // internal fast path takes, so forwarding to the kernel32 implementation is faithful,
+        // not a shortcut. __crtCompareString* really is the same 6-arg shape as kernel32's
+        // CompareString* (confirmed against ReactOS's msvcrt.spec), but __crtLCMapString* is
+        // 8 args — LCID, dwMapFlags, src, srclen, dst, dstlen, PLUS an explicit code page and
+        // an xflag — so it gets its own implementation that honors the CALLER's code page
+        // instead of always the process's configured one.
+        exports["__crtCompareStringA"] = kernel32LocaleExports["CompareStringA"]!;
+        exports["__crtCompareStringW"] = kernel32LocaleExports["CompareStringW"]!;
+        exports["__crtLCMapStringA"] = (ctx, mem, args) => {
+            const [Locale, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest, codePage] = args;
+            return mapStringACore(mem, Locale ?? 0, dwMapFlags ?? 0, lpSrcStr ?? 0, cchSrc ?? 0,
+                lpDestStr ?? 0, cchDest ?? 0, codePage || EmulatorConfig.getInstance().ansiCodePage);
+        };
+        // __crtLCMapStringW's extra code-page/xflag args only matter for ANSI byte decode,
+        // which a wide-to-wide map never does, so it forwards to kernel32's LCMapStringW
+        // (the thunk still reads all 8 stack slots per the api.ts arity, so nothing past it
+        // is misread even though this handler only consumes the first 6).
+        exports["__crtLCMapStringW"] = kernel32LocaleExports["LCMapStringW"]!;
         exports["isleadbyte"] = () => 0;
         exports["iswalpha"] = (ctx, mem, args) => this.iswctype(args[0] ?? 0, 0x0100 | 0x0001 | 0x0002);
         exports["iswdigit"] = (ctx, mem, args) => this.iswctype(args[0] ?? 0, 0x0004);
@@ -848,6 +884,10 @@ export class Msvcrt implements IModule {
         this.pioinfoAddr = 0;
         this.badioinfoAddr = 0;
         this.lcCodepageAddr = 0;
+        this.lcHandleAddr = 0;
+        this.lcCollateCpAddr = 0;
+        this.setlcActiveAddr = 0;
+        this.unguardedReadlcActiveAddr = 0;
         this.osVerVarsAddr = 0;
         this.acmdlnVarAddr = 0;
         this.adjustFdivAddr = 0;
@@ -880,6 +920,24 @@ export class Msvcrt implements IModule {
         if (this.lcCodepageAddr === 0) {
             this.lcCodepageAddr = this.process.memory.alloc(4, "THUNK_DATA", "rw");
             Mem.writeUint32(this.lcCodepageAddr, EmulatorConfig.getInstance().ansiCodePage);
+        }
+        if (this.lcHandleAddr === 0) {
+            // LC_ID __lc_handle[LC_MAX] (LC_ALL, LC_COLLATE, LC_CTYPE, LC_MONETARY, LC_NUMERIC,
+            // LC_TIME) — zeroed, meaning every category is still "C".
+            this.lcHandleAddr = this.process.memory.alloc(6 * 4, "THUNK_DATA", "rw");
+            for (let i = 0; i < 6; i++) Mem.writeUint32(this.lcHandleAddr + i * 4, 0);
+        }
+        if (this.lcCollateCpAddr === 0) {
+            this.lcCollateCpAddr = this.process.memory.alloc(4, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.lcCollateCpAddr, 0);
+        }
+        if (this.setlcActiveAddr === 0) {
+            this.setlcActiveAddr = this.process.memory.alloc(4, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.setlcActiveAddr, 0);
+        }
+        if (this.unguardedReadlcActiveAddr === 0) {
+            this.unguardedReadlcActiveAddr = this.process.memory.alloc(4, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.unguardedReadlcActiveAddr, 0);
         }
         if (this.osVerVarsAddr === 0) {
             this.osVerVarsAddr = this.process.memory.alloc(16, "THUNK_DATA", "rw");
@@ -1107,6 +1165,10 @@ export class Msvcrt implements IModule {
         tg.registerDataExport("msvcrt", "__mb_cur_max", this.mbCurMaxAddr);
         tg.registerDataExport("msvcrt", "_pctype", this.pctypeVarAddr);
         tg.registerDataExport("msvcrt", "__lc_codepage", this.lcCodepageAddr);
+        tg.registerDataExport("msvcrt", "__lc_handle", this.lcHandleAddr);
+        tg.registerDataExport("msvcrt", "__lc_collate_cp", this.lcCollateCpAddr);
+        tg.registerDataExport("msvcrt", "__setlc_active", this.setlcActiveAddr);
+        tg.registerDataExport("msvcrt", "__unguarded_readlc_active", this.unguardedReadlcActiveAddr);
         tg.registerDataExport("msvcrt", "_osver", this.osVerVarsAddr);
         tg.registerDataExport("msvcrt", "_winmajor", this.osVerVarsAddr + 4);
         tg.registerDataExport("msvcrt", "_winminor", this.osVerVarsAddr + 8);
@@ -3830,6 +3892,12 @@ export class Msvcrt implements IModule {
     private isprint(ch: number): number {
         const c = ch & 0xff;
         return (c >= 0x20 && c <= 0x7e) ? 1 : 0;
+    }
+
+    /** isgraph: a printing character other than the space itself. */
+    private isgraph(ch: number): number {
+        const c = ch & 0xff;
+        return (c > 0x20 && c <= 0x7e) ? 1 : 0;
     }
 
     // ==================== Memory (new) ====================
