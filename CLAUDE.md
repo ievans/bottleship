@@ -399,6 +399,8 @@ Quality Gate (mandatory order):
      descriptors must carry onUnimplemented, and a makeFunc factory must spread its overrides)
  10. bun tools/validate-file-cursor.ts
  11. bun tools/validate-jit-exports.ts   (checks the BUILT v86 artifact — skips cleanly if absent)
+     bun tools/validate-wasm-lock.ts    (every tracked .wasm matches public/wasm.lock.json; a binary
+     change needs `--update` and shows up as a reviewable lock diff. Not a rebuild-from-source proof)
  12. bun tools/validate-guest-pointer-guards.ts   (ddraw + d3d9 HANDLER tables. It models
      `Iface_Method: (ctx, mem, args) => …`; the d3d9 backend draw paths take guest pointers
      too and are outside that model — a code-shape gap, not a scope one)

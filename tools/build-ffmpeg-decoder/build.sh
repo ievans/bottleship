@@ -66,11 +66,17 @@ fi
 echo "[build] Emscripten: $(emcc --version | head -1)"
 
 # ── Clone / update FFmpeg ──────────────────────────────────────────────────────
+# n6.1 is a movable ref; the commit is what the decoder was built against.
+FFMPEG_COMMIT=d4ff0020b40b524a490cf62eccbd3a318f4c0e58
 if [[ ! -d "$FFMPEG_DIR/.git" ]]; then
-    echo "[build] Cloning FFmpeg (n6.1 branch) …"
+    echo "[build] Cloning FFmpeg (n6.1) …"
     git clone --depth 1 --branch n6.1 https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_DIR"
 else
     echo "[build] FFmpeg already present at $FFMPEG_DIR"
+fi
+if [[ "$(git -C "$FFMPEG_DIR" rev-parse HEAD)" != "$FFMPEG_COMMIT" ]]; then
+    echo "ERROR: FFmpeg checkout is not $FFMPEG_COMMIT" >&2
+    exit 1
 fi
 
 # ── Configure FFmpeg for WASM ──────────────────────────────────────────────────
