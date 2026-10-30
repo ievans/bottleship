@@ -68,8 +68,9 @@ Keep plans and notes in the ignored `plan/` folder, and evidence in the ignored 
 
 A harness command can exit 0 after a step failed. Read the result for `"ok": false`, and confirm a
 game really loaded with `report()` and `shot`, since a failed load leaves the CPU at its reset
-address behind a "Couldn't load the game" dialog. Early screens can stay black during a slow load,
-so give a game time before calling it stuck, especially with other guests running.
+address behind a "Couldn't load the game" dialog. A screenshot can also catch a black screen
+between intro videos or during a load, so give a game time before calling it stuck. Empire Earth
+takes a while to reach its menu because its intro is long.
 
 ## Phase 1: Quick check
 
