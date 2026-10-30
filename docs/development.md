@@ -36,7 +36,10 @@ bun run deploy/server.ts      # static server: COOP/COEP + HTTP Range (for WGB s
 The server must send `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp` (SAB) and honor HTTP `Range` requests (so large
 `.wgb` bundles stream instead of fully downloading). `deploy/server.ts` does both; any static
-host works as long as it sets those headers and supports ranges. A reverse proxy in front must
+host works as long as it sets those headers and supports ranges. Every response also carries `nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` and a restrictive
+`Permissions-Policy`; `/apps/*` serves only regular `.wgb` files whose real path (symlinks resolved) is inside
+`BS_APPS_DIR`, as an attachment with `Content-Security-Policy: sandbox`. Move the policy from `report` to `enforce` after
+playing a real session with the console open. A reverse proxy in front must
 preserve `Range`, `If-Range`, `ETag`, `Content-Range` and the 206 status. Streaming requires
 a strong ETag; otherwise the loader stages a full local copy. Serve browser traffic
 through a TLS reverse proxy with HTTP/2: the Bun server itself uses plain HTTP/1.1,
@@ -50,6 +53,8 @@ Optional env, all off by default:
 | `BS_DIST_DIR` | serve a build from elsewhere (default `../dist`) |
 | `BS_APPS_DIR` | serve `/apps/*.wgb` off a separate mount — the self-hosted equivalent of the R2 bucket behind `functions/apps/[[path]].ts`, so multi-GB bundles stay out of `dist` |
 | `BS_AUTH_USER` + `BS_AUTH_PASS` | HTTP Basic auth over the whole site (private stands). `/healthz` stays open for container probes |
+| `BS_CSP_MODE` | `report` (default): send the Content-Security-Policy as Report-Only, so nothing is blocked and violations show in the browser console; `enforce`; or `off` |
+| `BS_CSP` | replace the default policy (`DEFAULT_CSP` in `deploy/server.ts`, with the reason for each source) |
 
 ### Containers
 
