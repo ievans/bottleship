@@ -197,6 +197,13 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_strnicmp", 3),
         makeFunc("strchr", 2),
         makeFunc("strrchr", 2),
+        // __crtCompareString*/__crtLCMapString* — msvcrt's own locale-aware compare/map,
+        // same 6-param shape as the kernel32 CompareString*/LCMapString* they wrap. Other
+        // CRT-linked DLLs (msvcp60) import these BY NAME for std::collate/std::ctype.
+        makeFunc("__crtCompareStringA", 6),
+        makeFunc("__crtCompareStringW", 6),
+        makeFunc("__crtLCMapStringA", 6),
+        makeFunc("__crtLCMapStringW", 6),
         // --- msvcr80 (VC8) additions. A 2005-era image imports these BY NAME, so a missing
         // declaration is not a missing feature: the import cannot be bound and the whole
         // image fails to load. The 64-bit values occupy two stack slots each.
@@ -482,6 +489,7 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("islower", 1),
         makeFunc("isalnum", 1),
         makeFunc("isprint", 1),
+        makeFunc("isgraph", 1),
         makeFunc("ispunct", 1),
         makeFunc("iscntrl", 1),
         makeFunc("isxdigit", 1),

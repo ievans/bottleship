@@ -18,6 +18,7 @@ import { cpuViews } from "../core/cpu/cpu-views";
 import {
     vc6StringAppendCharCount,
     vc6StringAppendCStrCount,
+    vc6StringAppendRange,
     vc6StringAssignCStrCount,
     vc6StringAssignRange,
     vc6StringConcat,
@@ -38,6 +39,7 @@ import {
     vc6StringInsert,
     vc6StringLess,
     vc6StringSplit,
+    vc6StringSubstr,
     vc6StringTidy,
     type CppStringHeap,
 } from "./crt-cppstring-vc6";
@@ -59,6 +61,18 @@ export class Msvcp60 implements IModule {
     private badCastVtableAddr = 0;
     private exceptionVtableAddr = 0;
     private unknownExceptionAddr = 0;
+    // std::cout / std::cerr: opaque "this" addresses for the no-op ostream operators above —
+    // nothing ever dereferences their contents, only chains the pointer through.
+    private coutAddr = 0;
+    private cerrAddr = 0;
+    // IEEE 754 special-value statics <limits>/<float.h> read directly: _Inf/_Snan (double,
+    // 8 bytes), _FInf/_FSnan (float, 4 bytes). Bit patterns per IEEE 754: infinity is all
+    // exponent bits set with a zero mantissa; a SIGNALING NaN sets the exponent too but
+    // clears the mantissa's leading (quiet) bit while keeping the mantissa non-zero.
+    private infAddr = 0;
+    private snanAddr = 0;
+    private finfAddr = 0;
+    private fsnanAddr = 0;
 
     setMsvcrt(msvcrt: Msvcrt): void {
         this.msvcrt = msvcrt;
@@ -78,6 +92,29 @@ export class Msvcp60 implements IModule {
         if (this.refcntAddr === 0) {
             this.refcntAddr = process.memory.alloc(2, "THUNK_DATA", "rw");
             Mem.writeUint16(this.refcntAddr, 1);
+        }
+        if (this.coutAddr === 0) this.coutAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
+        if (this.cerrAddr === 0) this.cerrAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
+        if (this.infAddr === 0) {
+            // IEEE 754 double +infinity: exponent all-ones, mantissa zero.
+            this.infAddr = process.memory.alloc(8, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.infAddr, 0x00000000);
+            Mem.writeUint32(this.infAddr + 4, 0x7ff00000);
+        }
+        if (this.snanAddr === 0) {
+            // IEEE 754 double signaling NaN: exponent all-ones, mantissa nonzero with its
+            // top ("quiet") bit clear.
+            this.snanAddr = process.memory.alloc(8, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.snanAddr, 0x00000001);
+            Mem.writeUint32(this.snanAddr + 4, 0x7ff00000);
+        }
+        if (this.finfAddr === 0) {
+            this.finfAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.finfAddr, 0x7f800000);
+        }
+        if (this.fsnanAddr === 0) {
+            this.fsnanAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
+            Mem.writeUint32(this.fsnanAddr, 0x7f800001);
         }
         if (this.logicErrorVtableAddr === 0) {
             const tg = process.thunkGenerator;
@@ -144,8 +181,16 @@ export class Msvcp60 implements IModule {
 
     private registerDataExports(process: Process): void {
         const tg = process.thunkGenerator;
-        tg?.registerDataExport?.(this.name, `?npos@${BS}@@2IB`, this.nposAddr);
-        tg?.registerDataExport?.(this.name, `?_C@?1??_Nullstr@${BS}@@CAPBDXZ@4DB`, this.nullstrAddr);
+        // Literal "msvcp60" (not `this.name`) so tools/preflight-imports.ts's static source
+        // scan for registerDataExport("<dll>", "<export>" can see these are bound.
+        tg?.registerDataExport("msvcp60", `?npos@${BS}@@2IB`, this.nposAddr);
+        tg?.registerDataExport("msvcp60", `?_C@?1??_Nullstr@${BS}@@CAPBDXZ@4DB`, this.nullstrAddr);
+        tg?.registerDataExport("msvcp60", "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", this.coutAddr);
+        tg?.registerDataExport("msvcp60", "?cerr@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", this.cerrAddr);
+        tg?.registerDataExport("msvcp60", "_Inf", this.infAddr);
+        tg?.registerDataExport("msvcp60", "_Snan", this.snanAddr);
+        tg?.registerDataExport("msvcp60", "_FInf", this.finfAddr);
+        tg?.registerDataExport("msvcp60", "_FSnan", this.fsnanAddr);
     }
 
     reregisterExports(process: Process): void {
@@ -157,6 +202,12 @@ export class Msvcp60 implements IModule {
         this.badCastVtableAddr = 0;
         this.exceptionVtableAddr = 0;
         this.unknownExceptionAddr = 0;
+        this.coutAddr = 0;
+        this.cerrAddr = 0;
+        this.infAddr = 0;
+        this.snanAddr = 0;
+        this.finfAddr = 0;
+        this.fsnanAddr = 0;
         this.ensureRuntimeStorage(process);
         this.ensureExceptionStorage(process);
         this.registerDataExports(process);
@@ -307,6 +358,16 @@ export class Msvcp60 implements IModule {
             return vc6StringAppendCharCount(ctx.ecx >>> 0, args[0] ?? 0, args[1] ?? 0, heap, nullstr());
         };
 
+        this.exports[`?append@${BS}@@QAEAAV12@ABV12@II@Z`] = (ctx, _mem, args) => {
+            return vc6StringAppendRange(ctx.ecx >>> 0, args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
+        };
+
+        // substr(pos, count) returns a NEW string, so args[0] is the caller's hidden
+        // return-value slot (same convention as the operator+ overloads below).
+        this.exports[`?substr@${BS}@@QBE?AV12@II@Z`] = (ctx, _mem, args) => {
+            return vc6StringSubstr(args[0] ?? 0, ctx.ecx >>> 0, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
+        };
+
         this.exports["??8std@@YA_NABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@0@0@Z"] = (_ctx, _mem, args) => {
             return vc6StringEquals(args[0] ?? 0, args[1] ?? 0, nullstr());
         };
@@ -416,6 +477,24 @@ export class Msvcp60 implements IModule {
         // operator<<(basic_ostream&, const char*) — no real stream; chain return for iostream static init.
         this.exports["??6std@@YAAAV?$basic_ostream@DU?$char_traits@D@std@@@0@AAV10@PBD@Z"] = (_ctx, _mem, args) => {
             return args[0] ?? 0;
+        };
+
+        // basic_ostream::operator<<(int) — same "no real stream" no-op, chained off `this`.
+        this.exports["??6?$basic_ostream@DU?$char_traits@D@std@@@std@@QAEAAV01@H@Z"] = (ctx, _mem, _args) => {
+            return ctx.ecx >>> 0;
+        };
+
+        // basic_istream::get() / get(char&) / putback(char) — no real stream to read from,
+        // so every read behaves as one already at EOF: get() answers EOF, get(char&) leaves
+        // the destination untouched, putback() is a no-op. All chain off `this` like the
+        // ostream operators above.
+        const EOF_VALUE = -1;
+        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEHXZ"] = () => EOF_VALUE;
+        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@AAD@Z"] = (ctx, _mem, _args) => {
+            return ctx.ecx >>> 0;
+        };
+        this.exports["?putback@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@D@Z"] = (ctx, _mem, _args) => {
+            return ctx.ecx >>> 0;
         };
 
         // ios_base::Init / std::_Winit — CRT iostream bootstrap objects; no-op in HLE.

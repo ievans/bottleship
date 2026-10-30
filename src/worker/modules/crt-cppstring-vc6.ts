@@ -366,6 +366,52 @@ export function vc6StringInsert(
     return ptr;
 }
 
+/** append(const basic_string& right, pos, count) — right's [pos, pos+count) range, clamped
+ *  the same way vc6StringAssignRange clamps its source range. */
+export function vc6StringAppendRange(
+    dst: number,
+    src: number,
+    pos: number,
+    count: number,
+    heap: CppStringHeap,
+    nullstr: number,
+): number {
+    const srcLen = readSize(src);
+    const start = pos >>> 0;
+    let n = count >>> 0;
+    if (start > srcLen) n = 0;
+    else if (start + n > srcLen) n = srcLen - start;
+
+    const add = readObjectBytes(src, nullstr).subarray(start, start + n);
+    const cur = readObjectBytes(dst, nullstr);
+    const merged = new Uint8Array(cur.length + add.length);
+    merged.set(cur, 0);
+    merged.set(add, cur.length);
+    vc6StringReplace(dst, merged, heap, nullstr);
+    return dst;
+}
+
+/** substr(pos, count) — constructs the NEW string at `dstNew` (the hidden return-value
+ *  slot the caller allocated) from src's [pos, pos+count) range, clamped like append/assign. */
+export function vc6StringSubstr(
+    dstNew: number,
+    src: number,
+    pos: number,
+    count: number,
+    heap: CppStringHeap,
+    nullstr: number,
+): number {
+    const srcLen = readSize(src);
+    const start = pos >>> 0;
+    let n = count >>> 0;
+    if (start > srcLen) n = 0;
+    else if (start + n > srcLen) n = srcLen - start;
+
+    initEmpty(dstNew, nullstr);
+    vc6StringReplace(dstNew, readObjectBytes(src, nullstr).subarray(start, start + n), heap, nullstr);
+    return dstNew;
+}
+
 export function vc6StringAppendCStrCount(
     ptr: number,
     cstr: number,
