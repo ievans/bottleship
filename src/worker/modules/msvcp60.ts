@@ -199,8 +199,10 @@ export class Msvcp60 implements IModule {
 
     private registerDataExports(process: Process): void {
         const tg = process.thunkGenerator;
-        // Literal "msvcp60" (not `this.name`) so tools/preflight-imports.ts's static source
-        // scan for registerDataExport("<dll>", "<export>" can see these are bound.
+        // Literal "msvcp60" (not `this.name`) so the static source scans in
+        // tools/preflight-imports.ts and tools/validate-data-export-binding.ts, which look
+        // for a call whose first two arguments are both string literals, can see these are
+        // bound rather than reading them as unresolvable.
         tg?.registerDataExport("msvcp60", `?npos@${BS}@@2IB`, this.nposAddr);
         tg?.registerDataExport("msvcp60", `?_C@?1??_Nullstr@${BS}@@CAPBDXZ@4DB`, this.nullstrAddr);
         tg?.registerDataExport("msvcp60", "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A", this.coutAddr);
