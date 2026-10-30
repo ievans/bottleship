@@ -43,13 +43,17 @@ bun install
 
 # Slot 1 shown; add 10 to each port for slot 2, and so on.
 export BS_TAB=<name>
-export BS_VITE_PORT=5184 BS_DEV_URL="http://localhost:5184/?game=dev"
+export BS_VITE_PORT=5184 LAN_PORT=5185
 export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
-export LAN_PORT=5185
 export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
+export BS_WGB_ROOTS=<folder holding your bundles>
 
+bun run dev:lan &    # the multiplayer relay
 bun tools/harness.ts up
 ```
+
+See [Separate worktrees](harness.md#separate-worktrees). The dev servers only serve bundles from the
+repository and `BS_WGB_ROOTS`, so a bundle anywhere else fails to load with an HTTP 403.
 
 Memory sets the limit on parallel work. A guest can take several GB, so 2-3 running at once is the
 sane range on a desktop, and two Empire Earth guests don't fit in 8 GB.
@@ -59,6 +63,13 @@ sane range on a desktop, and two Empire Earth guests don't fit in 8 GB.
 - Take timing measurements only with a single guest running.
 
 Keep plans and notes in the ignored `plan/` folder, and evidence in the ignored `logs/` folder.
+
+## Check what the harness tells you
+
+A harness command can exit 0 after a step failed. Read the result for `"ok": false`, and confirm a
+game really loaded with `report()` and `shot`, since a failed load leaves the CPU at its reset
+address behind a "Couldn't load the game" dialog. Early screens can stay black during a slow load,
+so give a game time before calling it stuck, especially with other guests running.
 
 ## Phase 1: Quick check
 
