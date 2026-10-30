@@ -28,6 +28,10 @@
       "sha256": "f09897ea68bcf1bbba79565f4a904a049f53e1b8d9340f6c58a7339bc414bf1c",
       "bytes": 2727629
     },
+    "public/video-decoder.wasm": {
+      "sha256": "52a80088679e4dc42b0a5a164da9eca86003763312152d1224a31a179c0d9b74",
+      "bytes": 3143031
+    },
     "tools/build-unpack-buffered/pkg-node/unpack_buffered.d.ts": {
       "sha256": "aad0623e67d04e0ed241da7c682b0f0a316298c066a6189445777c1c637c0963",
       "bytes": 1169
