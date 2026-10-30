@@ -133,6 +133,7 @@ BottleShip is free and open source. If it brought a game back to life for you, y
 - [Importing games](docs/bundles.md) · [GOG import](docs/gog-import.md)
 - [Development & self-hosting](docs/development.md)
 - [Multiplayer (virtual LAN)](docs/multiplayer.md)
+- [Bringing up a game](docs/game-bringup.md)
 - [Release notes](docs/releases/0.7.md) · [Versioning](docs/releases/README.md)
 - [Automation harness](docs/harness.md) — driving and observing games
 - [Child processes](docs/headless-child-processes.md) — execution, display routing and diagnostics

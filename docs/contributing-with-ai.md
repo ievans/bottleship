@@ -30,7 +30,8 @@ Any coding agent works. If you use [Claude Code](https://claude.com/claude-code)
 is pre-wired: `CLAUDE.md` is the project's system prompt (memory architecture, thunk
 invariants, debugging discipline) and the `/bringup` skill walks the operational checklist.
 Point your agent at the repo, tell it which game you're bringing up, and it has everything
-it needs.
+it needs. [Bringing up a game](game-bringup.md) lays out the whole process, from installer to a
+real multiplayer match, including running several agents side by side.
 
 ```bash
 git clone --recurse-submodules <repo-url> && cd bottleship && bun install
