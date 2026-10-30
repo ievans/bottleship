@@ -1186,21 +1186,41 @@ function initModuleFunctions(): void {
         // whose static object lists must not survive into the next menu session). The
         // old image bytes stay mapped: safer than a real unmap, and any straggler
         // pointer into the old code keeps working instead of faulting.
-        registry!.unregister(mod.name);
-        for (const [k, v] of loadLibraryHandleCache) {
-            if (v === hModule) loadLibraryHandleCache.delete(k);
+        const unload = (): void => {
+            registry!.unregister(mod.name);
+            for (const [k, v] of loadLibraryHandleCache) {
+                if (v === hModule) loadLibraryHandleCache.delete(k);
+            }
+            handleToPathCache.delete(hModule);
+            const prefix = `${hModule}:`;
+            const ordPrefix = `${hModule}#`;
+            for (const k of getProcAddressCache.keys()) {
+                if (k.startsWith(prefix) || k.startsWith(ordPrefix)) getProcAddressCache.delete(k);
+            }
+            for (const k of getProcAddressPointerCache.keys()) {
+                if (k.startsWith(prefix) || k.startsWith(ordPrefix)) getProcAddressPointerCache.delete(k);
+            }
+            Logger.log(LogCategory.KERNEL32,
+                `FreeLibrary(0x${hModule.toString(16)}): unloaded "${mod.name}" (image left mapped; next LoadLibrary maps fresh)`);
+        };
+
+        // DllMain(DLL_PROCESS_DETACH) undoes what ATTACH did to process-global state (e.g. a
+        // top-level exception filter chained to the previous one). Skipping it lets the next
+        // load of the same image capture its own stale filter as "previous" and recurse.
+        // The module stays resolvable while DETACH runs, as on NT: it unlinks after DllMain
+        // returns. If the chain never starts the module stays loaded and attached, so a
+        // later FreeLibrary retries instead of silently losing the detach.
+        if (mod.isRealDll && mod.initialized && mod.entryPoint !== 0) {
+            return Promise.resolve({
+                value: 1,
+                stackCleanup: 4,
+                dllInits: [{
+                    baseAddress: mod.baseAddress, entryPoint: mod.baseAddress + mod.entryPoint, name: mod.name, reason: 0,
+                    onReturn: () => { mod.initialized = false; unload(); },
+                }],
+            });
         }
-        handleToPathCache.delete(hModule);
-        const prefix = `${hModule}:`;
-        const ordPrefix = `${hModule}#`;
-        for (const k of getProcAddressCache.keys()) {
-            if (k.startsWith(prefix) || k.startsWith(ordPrefix)) getProcAddressCache.delete(k);
-        }
-        for (const k of getProcAddressPointerCache.keys()) {
-            if (k.startsWith(prefix) || k.startsWith(ordPrefix)) getProcAddressPointerCache.delete(k);
-        }
-        Logger.log(LogCategory.KERNEL32,
-            `FreeLibrary(0x${hModule.toString(16)}): unloaded "${mod.name}" (image left mapped; next LoadLibrary maps fresh)`);
+        unload();
         return { value: 1, stackCleanup: 4 };
     };
 

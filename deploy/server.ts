@@ -150,6 +150,14 @@ async function serveFile(filePath: string, req: Request, extraHeaders: Record<st
     return new Response(isHead ? null : file, { headers });
 }
 
+// Virtual-LAN relay for multiplayer (/lan/<room>). Optional so a stand that ships only
+// server.ts keeps working; see docs/multiplayer.md.
+const lan = await import("./lan-relay").then((m) => m.serveLan()).catch((err: Error & { code?: string }) => {
+    // Only an absent relay file is "not installed"; a broken one must not hide.
+    if (err.code !== "ERR_MODULE_NOT_FOUND" && !/Cannot find module/.test(String(err.message))) console.error("lan relay failed to load:", err);
+    return null;
+});
+
 /**
  * What the app needs, and why (each line was checked by loading the production build with the
  * policy enforced and watching the emulator core start):
@@ -225,11 +233,12 @@ function routedPath(url: URL): string {
 Bun.serve({
     port: PORT,
     hostname: "0.0.0.0",
-    async fetch(req) {
+    websocket: lan?.websocket ?? { message() {} },
+    async fetch(req, server) {
         const url = new URL(req.url);
         let res: Response | undefined;
         try {
-            res = await handle(req);
+            res = await handle(req, server);
         } catch (err) {
             if (err instanceof URIError) {
                 // a malformed %-escape in the path is the client's mistake
@@ -244,7 +253,7 @@ Bun.serve({
     },
 });
 
-async function handle(req: Request): Promise<Response | undefined> {
+async function handle(req: Request, server: Parameters<NonNullable<typeof lan>["upgrade"]>[1]): Promise<Response | undefined> {
     const url = new URL(req.url);
     let pathname = decodeURIComponent(url.pathname);
 
@@ -256,6 +265,10 @@ async function handle(req: Request): Promise<Response | undefined> {
             status: 401,
             headers: { "WWW-Authenticate": `Basic realm="${AUTH_REALM}", charset="UTF-8"`, ...COOP_COEP },
         });
+    }
+
+    if (pathname.startsWith("/lan/")) {
+        return lan ? lan.upgrade(req, server) : new Response("LAN relay not installed", { status: 404 });
     }
 
     // Bundles live on their own mount, not in dist (multi-GB, uploaded separately).
@@ -292,5 +305,6 @@ async function handle(req: Request): Promise<Response | undefined> {
 
 console.log(`Serving ${DIST} on http://0.0.0.0:${PORT}`);
 if (APPS) console.log(`  /apps/* → ${APPS}`);
+console.log(`  lan relay: ${lan ? "/lan/<room>" : "not installed"}`);
 console.log(`  csp: ${CSP_MODE}`);
 console.log(`  auth: ${AUTH_ENABLED ? `Basic (user "${AUTH_USER}")` : "disabled"}`);

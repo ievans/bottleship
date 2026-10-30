@@ -2,6 +2,7 @@
  * Assemble a self-hosted stand payload — the bind-mount tree deploy/docker-compose.yml expects:
  *
  *   <out>/server.ts            copy of deploy/server.ts
+ *   <out>/lan-relay.ts + lan-protocol.ts   the virtual-LAN relay (/lan/<room>)
  *   <out>/docker-compose.yml   copy of deploy/docker-compose.yml
  *   <out>/dist/                `bun run build` output, with a catalog listing ONLY this stand's games
  *   <out>/apps/<id>.wgb        the bundles those entries point at
@@ -19,6 +20,7 @@
  */
 import fs from "fs";
 import path from "path";
+import { writeStandRelay } from "./stand-relay";
 import type { WgbIoPolicy } from "@bottleship/formats/wgb/io-profile";
 
 interface StandGame {
@@ -113,6 +115,7 @@ if (config.allowedBrowsers?.length) {
 }
 fs.copyFileSync(path.join(REPO, "deploy", "server.ts"), path.join(out, "server.ts"));
 fs.copyFileSync(path.join(REPO, "deploy", "wgb-etag.ts"), path.join(out, "wgb-etag.ts"));
+writeStandRelay(REPO, out);
 // The compose file is deployment-local config once it lands (passwords, host paths,
 // network name), so ship the template only when the stand doesn't have one yet.
 const compose = path.join(out, "docker-compose.yml");
@@ -121,4 +124,4 @@ if (!fs.existsSync(compose)) fs.copyFileSync(path.join(REPO, "deploy", "docker-c
 const mb = (p: string) => (fs.statSync(p).size / 1048576).toFixed(1);
 console.log(`stand payload → ${out}`);
 for (const g of catalog) console.log(`  ${g.id.padEnd(20)} ${mb(path.join(appsOut, `${g.id}.wgb`))} MB  ${g.name}`);
-console.log(`  dist/ + server.ts + wgb-etag.ts + docker-compose.yml`);
+console.log(`  dist/ + server.ts + wgb-etag.ts + lan-relay.ts + lan-protocol.ts + docker-compose.yml`);

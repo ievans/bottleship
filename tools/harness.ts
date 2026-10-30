@@ -260,6 +260,9 @@ async function cmdUp(): Promise<void> {
     if (h.vite && !h.viteTransform) {
         console.warn("[harness up] WARNING: Vite answers the root but will not transform modules — the page will load and render nothing. Restart the dev server (wait for :5174 to be released first); do not debug the guest until this is green.");
     }
+    if (h.devTab && !h.devTabResponsive) {
+        console.warn(`[harness up] WARNING: the ?game=dev tab is listed but its renderer does not answer${h.devTabCrashed ? ` — ${h.devTabCrashed}` : ""}`);
+    }
     if (h.logArchive) {
         console.warn(`[harness up] WARNING: the log archive is degraded — ${h.logArchive.droppedLines} lines dropped, ` +
             `${h.logArchive.writeErrors} failed appends${h.logArchive.lastError ? ` (${h.logArchive.lastError})` : ""}. ` +

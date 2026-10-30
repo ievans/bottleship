@@ -49,6 +49,10 @@ export interface DllInitEntry {
     entryPoint: number;
     /** Module name for logging */
     name: string;
+    /** DllMain fdwReason; DLL_PROCESS_ATTACH (1) when omitted */
+    reason?: number;
+    /** Called by the chain driver once this DllMain has returned (never if it did not run). */
+    onReturn?: (ret: number) => void;
 }
 
 /**
@@ -299,12 +303,30 @@ export class PELoader {
     }
 
     /**
-     * Return DLLs that need DllMain(DLL_PROCESS_ATTACH) called at boot time.
-     * Consumed by bootloader trampoline; clears the list after retrieval.
+     * Runtime LoadLibrary* / CoCreateInstance: drain the queued DllMains. A module counts as
+     * attached only when its DllMain returns (onReturn), because a drained chain can be dropped
+     * before it runs and FreeLibrary must not DETACH a DLL that never attached.
      */
     getPendingDllInits(): DllInitEntry[] {
         const inits = this.pendingDllInits;
         this.pendingDllInits = [];
+        for (const init of inits) {
+            init.onReturn = () => {
+                const mod = this.moduleRegistry?.getByBase?.(init.baseAddress);
+                if (mod) mod.initialized = true;
+            };
+        }
+        return inits;
+    }
+
+    /** Boot: the bootloader trampoline runs every drained DllMain unconditionally. */
+    takeBootDllInits(): DllInitEntry[] {
+        const inits = this.pendingDllInits;
+        this.pendingDllInits = [];
+        for (const init of inits) {
+            const mod = this.moduleRegistry?.getByBase?.(init.baseAddress);
+            if (mod) mod.initialized = true;
+        }
         return inits;
     }
 

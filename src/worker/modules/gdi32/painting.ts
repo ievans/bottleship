@@ -9,7 +9,7 @@ import { profiler } from '../../core/profiler';
 import { EmulatorConfig } from '../../core/emulator-config-manager';
 import { SystemResourceProvider } from '../../core/resources/system-resource-provider';
 import { toPlainGuestMemory } from '../../core/memory/guest-memory';
-import { LOGPEN_OFFSETS, LOGPEN_SIZE } from './gdi-objects';
+import { LOGPEN_OFFSETS, LOGPEN_SIZE, STOCK_NULL_BRUSH } from './gdi-objects';
 import { writeBackDibSectionRect } from './bitmap-resolve';
 import { patBlt } from './gdi-blit';
 import { extTextOut } from './ext-text-out';
@@ -809,20 +809,26 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
 
     // HBRUSH CreateBrushIndirect(const LOGBRUSH *lplb)
     // LOGBRUSH is { UINT lbStyle; COLORREF lbColor; ULONG_PTR lbHatch } on Win32.
-    // The renderer supports solid brushes; return failure for patterns/hatches rather
-    // than pretending an unsupported brush can draw correctly.
+    // BS_HOLLOW is the stock NULL_BRUSH; BS_HATCHED is approximated by its foreground colour.
     exports['CreateBrushIndirect'] = (ctx, mem, args): number => {
         const lplb = args[0] >>> 0;
         if (!lplb || lplb + 12 > mem.byteLength) return 0;
         const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
         const style = view.getUint32(lplb, true);
         const color = view.getUint32(lplb + 4, true);
-        if (style !== 0 /* BS_SOLID */) {
-            Logger.verbose(LogCategory.GDI32, `CreateBrushIndirect style=${style} unsupported`);
-            return 0;
+        const gdi = System.getInstance().gdiContext;
+        switch (style) {
+            case 0: // BS_SOLID
+            case 2: // BS_HATCHED
+                return gdi.createSolidBrush(color);
+            case 1: // BS_NULL / BS_HOLLOW
+                return (0x80000000 | STOCK_NULL_BRUSH) >>> 0;
+            case 3: // BS_PATTERN
+                return gdi.createPatternBrush(view.getUint32(lplb + 8, true));
+            default:
+                Logger.verbose(LogCategory.GDI32, `CreateBrushIndirect style=${style} unsupported`);
+                return 0;
         }
-        Logger.verbose(LogCategory.GDI32, `CreateBrushIndirect solid color=0x${color.toString(16)}`);
-        return System.getInstance().gdiContext.createSolidBrush(color);
     };
 
     exports['CreatePatternBrush'] = (ctx, mem, args): number => {
@@ -2040,26 +2046,29 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         const iFirst = args[1];
         const iLast = args[2];
         const lpBuffer = args[3];
-        Logger.verbose(LogCategory.GDI32, `GetCharWidthA(hdc=0x${hdc.toString(16)}, ${iFirst}-${iLast})`);
-        if (lpBuffer) {
-            const gdi = System.getInstance().gdiContext;
-            const dcCtx = gdi.getMeasureContext(hdc);
-            const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-            const count = iLast - iFirst + 1;
-            for (let i = 0; i < count; i++) {
-                const ch = String.fromCharCode(iFirst + i);
-                let width = 8;
-                if (dcCtx) {
-                    try {
-                        width = Math.round(dcCtx.measureText(ch).width);
-                        if (width < 1) width = 1;
-                    } catch (_) { /* keep fallback */ }
-                }
-                view.setInt32(lpBuffer + i * 4, width, true);
+        Logger.verbose(LogCategory.GDI32, `GetCharWidth(hdc=0x${hdc.toString(16)}, ${iFirst}-${iLast})`);
+        if (!lpBuffer || iLast < iFirst || iLast > 0xffff) return 0;
+        const gdi = System.getInstance().gdiContext;
+        const dcCtx = gdi.getMeasureContext(hdc);
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        const count = iLast - iFirst + 1;
+        if (!isValidAddress(mem, lpBuffer, count * 4, 'rw')) return 0;
+        for (let i = 0; i < count; i++) {
+            const ch = String.fromCharCode(iFirst + i);
+            let width = 8;
+            if (dcCtx) {
+                try {
+                    width = Math.round(dcCtx.measureText(ch).width);
+                    if (width < 1) width = 1;
+                } catch (_) { /* keep fallback */ }
             }
+            view.setInt32(lpBuffer + i * 4, width, true);
         }
         return 1; // success
     };
+    exports['GetCharWidthW'] = exports['GetCharWidthA'];
+    exports['GetCharWidth32A'] = exports['GetCharWidthA'];
+    exports['GetCharWidth32W'] = exports['GetCharWidthA'];
 
     exports['ExtTextOutA'] = (_ctx, _mem, args) => extTextOut(args, false);
     exports['ExtTextOutW'] = (_ctx, _mem, args) => extTextOut(args, true);

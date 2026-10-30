@@ -17,6 +17,7 @@ import { AudioEngine, AudioPlayEncodedPayload, AudioPlayPayload, AudioUpdatePayl
 import { getLogClient, sendLogToServer, writeDebugFile, writeDebugFileBase64, rotateLogFile, logArtifactPath } from "../utils/log-client";
 import { bundleLogName } from "../utils/bundle-url";
 import { sessionFromLocation } from "../harness/session";
+import { lanRelayUrl } from "../net/lan-url";
 import { installHarnessFacade } from "../harness/facade";
 import { getCachedGamepadMeta, initGamepadCache, readLiveGamepad, rescanGamepads } from "../gamepad-cache";
 import GameSelectScreen, { type GameEntry } from "../library/GameSelectScreen";
@@ -1018,6 +1019,10 @@ export default function App() {
       // dumps it emits, and those must name the session's own directory — an agent sent
       // to logs/debug/ while its PNG went to logs/alpha/debug/ reads a sibling's evidence.
       globalWorker.postMessage({ type: "set_session", session: sessionFromLocation(window.location.search) });
+
+      // Multiplayer: ?lan=<room> joins that virtual-LAN room on this origin's relay.
+      const lanUrl = lanRelayUrl(window.location);
+      if (lanUrl) globalWorker.postMessage({ type: "set_lan", url: lanUrl });
 
       // A self re-exec asked us to reload (see the "reexec" message). Hand the worker the
       // launcher's command line BEFORE any bundle load — it replaces the manifest's `args`

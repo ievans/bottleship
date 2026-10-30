@@ -15,5 +15,5 @@ export interface PendingAsyncRestoreDescriptor {
   esp: number;
   returnAddr: number;
   deferredWrites?: AsyncRestoreDeferredWrite[];
-  dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string }>;
+  dllInits?: Array<{ baseAddress: number; entryPoint: number; name: string; reason?: number; onReturn?: (ret: number) => void }>;
 }

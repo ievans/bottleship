@@ -124,3 +124,30 @@ export function shouldSuppress3DGdiOverlay(
     if (!ddrawHasPrimary(ddrawCtx)) return true; // pure 3D presenter — it owns the canvas outright
     return ddrawOwnsScreen(ddrawCtx);
 }
+
+/**
+ * FlipToGDISurface: the GDI surface becomes the visible one again. When a flip chain was on
+ * screen, remember the content-present count so the display counts as GDI's until the app
+ * writes the primary again.
+ */
+export function noteFlipToGdiSurface(ddrawCtx: DDrawContext): void {
+    if (!ddrawCtx.gdiSurfaceVisible && isDDrawExclusiveFullscreen(ddrawCtx)) {
+        ddrawCtx.gdiFlippedAtPresent = ddrawCtx.presenter?.contentPresentCount?.() ?? 0;
+    }
+    ddrawCtx.gdiSurfaceVisible = true;
+}
+
+/**
+ * The display shows the GDI surface: a flip chain was on screen, FlipToGDISurface took it
+ * back, and nothing has put pixels on the primary since. The last presented frame is then
+ * not what the screen shows — GDI window output is.
+ *
+ * A front-buffer write (Blt, Unlock, a Flip) lands in the displayed memory and ends the
+ * state; a palette change or FlipToGDISurface's own present puts nothing new on the primary
+ * (presenter `displayOnly`), so neither does.
+ */
+export function gdiSurfaceOnDisplay(ddrawCtx: DDrawContext | null | undefined): boolean {
+    const at = ddrawCtx?.gdiFlippedAtPresent;
+    if (at === undefined || !ddrawCtx?.gdiSurfaceVisible || !isDDrawExclusiveFullscreen(ddrawCtx)) return false;
+    return (ddrawCtx.presenter?.contentPresentCount?.() ?? 0) === at;
+}

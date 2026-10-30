@@ -33,9 +33,12 @@ export const SIDECAR_PORT = Number(process.env.BS_SIDECAR_PORT ?? 3001);
 export const GAME_DEV_FILTER = "game=dev";
 const IS_MAC = process.platform === "darwin";
 const IS_WIN = process.platform === "win32";
+const IS_LINUX = process.platform === "linux";
 const CHROME_PATH = IS_MAC
     ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-    : "C:/Program Files/Google/Chrome/Application/chrome.exe";
+    : IS_LINUX
+        ? (process.env.BS_CHROME_PATH ?? "chromium")
+        : "C:/Program Files/Google/Chrome/Application/chrome.exe";
 /** Where a detached Chrome's stdout/stderr land — see launchChrome. */
 export const CHROME_STDIO_DIR = `${process.cwd()}/logs/chrome`;
 const DEFAULT_PROFILE = process.env.BS_CHROME_PROFILE ?? (IS_MAC
@@ -163,7 +166,16 @@ async function launchChrome(port: number, profile: string, autoplay: boolean): P
         ...(process.env.BS_CHROME_FLAGS ? process.env.BS_CHROME_FLAGS.split(" ").filter(Boolean) : []),
         "about:blank",
     ];
-    if (IS_MAC) {
+    if (IS_LINUX) {
+        // Headless unless a display exists. Flags a container needs (--no-sandbox,
+        // --disable-dev-shm-usage, WebGPU on a software adapter) come from BS_CHROME_FLAGS.
+        mkdirSync(CHROME_STDIO_DIR, { recursive: true });
+        const out = openSync(`${CHROME_STDIO_DIR}/stdout.log`, "a");
+        const err = openSync(`${CHROME_STDIO_DIR}/stderr.log`, "a");
+        Bun.spawn([CHROME_PATH, ...(process.env.DISPLAY ? [] : ["--headless=new"]), ...args], {
+            stdio: ["ignore", out, err],
+        }).unref();
+    } else if (IS_MAC) {
         // Detach so Chrome outlives this bun process. `open -na` launches a fresh
         // instance with our args even if Chrome is already running under another profile.
         Bun.spawn(["open", "-na", "Google Chrome", "--args", ...args], {
@@ -251,12 +263,30 @@ export async function findOrCreateTab(url = DEFAULT_DEV_URL, opts: { port?: numb
     throw new Error(`failed to open tab ${target} (PUT and GET both rejected)`);
 }
 
+/** What a caller is told when the tab's renderer process dies under it. */
+export const RENDERER_CRASH_HINT =
+    "the tab's RENDERER PROCESS died (Inspector.targetCrashed) — the guest is gone, not slow. "
+    + "A renderer hosting a bundle needs the manifest's emulator.memory.ram (v86 WASM memory) PLUS the "
+    + "bundle bytes PLUS the WebGPU backend's allocations in ONE process, so the usual cause is host "
+    + "memory: check `free -m` against the manifest's ram, and re-run `harness up` to get a live tab.";
+
+/** Commands the BROWSER process answers, so they still work — and are the only way back —
+ *  after the renderer has died. These must never be short-circuited by the crash latch:
+ *  Page.reload/navigate is exactly how `harness up` revives a crashed tab. */
+function survivesRendererCrash(method: string): boolean {
+    return method === "Page.reload" || method === "Page.navigate" || method === "Page.close"
+        || method.startsWith("Target.") || method.startsWith("Browser.") || method.startsWith("Inspector.");
+}
+
 /** A live CDP WebSocket session with id-correlated requests + event fan-out. */
 export class CdpSession {
     private ws: WebSocket;
     private nextId = 1;
     private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
     private listeners = new Map<string, Array<(params: any, sessionId?: string) => void>>();
+    private crashed: string | null = null;
+    private crashWaiters: Array<(reason: string) => void> = [];
+    private recoveryIds = new Set<number>();
 
     private constructor(ws: WebSocket) {
         this.ws = ws;
@@ -265,10 +295,12 @@ export class CdpSession {
             if (m.id && this.pending.has(m.id)) {
                 const p = this.pending.get(m.id)!;
                 this.pending.delete(m.id);
+                this.recoveryIds.delete(m.id);
                 if (m.error) p.reject(new Error(`${m.error.message ?? "CDP error"} (${m.error.code ?? "?"})`));
                 else p.resolve(m);
                 return;
             }
+            if (m.method === "Inspector.targetCrashed") this.latchCrash(RENDERER_CRASH_HINT);
             if (m.method) {
                 const ls = this.listeners.get(m.method);
                 if (ls) for (const l of ls) l(m.params, m.sessionId);
@@ -276,24 +308,61 @@ export class CdpSession {
         };
     }
 
-    static connect(wsUrl: string): Promise<CdpSession> {
-        return new Promise((resolve, reject) => {
+    /** A dead renderer answers NOTHING, forever: the browser keeps the target listed, so
+     *  every in-flight and future command just spends its deadline. Fail them all at the
+     *  moment of the crash instead, with the reason, or a chain sits out its whole budget
+     *  (a 9-minute sleep) and then reports a bare timeout. */
+    private latchCrash(reason: string): void {
+        if (this.crashed) return;
+        this.crashed = reason;
+        for (const [id, p] of this.pending) {
+            if (this.recoveryIds.has(id)) continue;
+            this.pending.delete(id);
+            p.reject(new Error(reason));
+        }
+        const waiters = this.crashWaiters.splice(0);
+        for (const w of waiters) w(reason);
+    }
+
+    /** Non-null once the renderer has crashed. */
+    crashReason(): string | null { return this.crashed; }
+
+    /** Resolves when the renderer crashes; never resolves otherwise (race it). */
+    whenCrashed(): Promise<string> {
+        if (this.crashed) return Promise.resolve(this.crashed);
+        return new Promise((resolve) => { this.crashWaiters.push(resolve); });
+    }
+
+    static async connect(wsUrl: string): Promise<CdpSession> {
+        const session = await new Promise<CdpSession>((resolve, reject) => {
             const ws = new WebSocket(wsUrl);
             ws.onopen = () => resolve(new CdpSession(ws));
             ws.onerror = (e) => reject(new Error(`CDP ws connect failed: ${String((e as any)?.message ?? e)}`));
         });
+        // Inspector.targetCrashed only fires on an ENABLED domain, and arming it here is what
+        // makes crash detection unconditional for every caller. Meaningless on the browser
+        // endpoint (captureTrace), hence the catch.
+        await session.send("Inspector.enable", {}, undefined, { timeoutMs: 5_000 }).catch(() => { /* not a page session */ });
+        return session;
     }
 
     /** `timeoutMs` is opt-in: CDP has no deadline of its own, and several commands here
      *  (Tracing, navigation) are legitimately unbounded. Give it to any command that can
      *  wait on the RENDERER — a request that never settles spends wall-clock silently. */
     send(method: string, params: any = {}, sessionId?: string, opts?: { timeoutMs?: number }): Promise<any> {
+        const recoverable = survivesRendererCrash(method);
+        if (this.crashed && !recoverable) return Promise.reject(new Error(this.crashed));
         const id = this.nextId++;
         const payload: any = { id, method, params };
         if (sessionId) payload.sessionId = sessionId;
         this.ws.send(JSON.stringify(payload));
+        // A completed reload/navigate IS a fresh renderer, so the latch has to lift with it —
+        // otherwise one crash poisons the session that recovered from it.
+        const revives = method === "Page.reload" || method === "Page.navigate";
         return new Promise((resolve, reject) => {
-            this.pending.set(id, { resolve, reject });
+            if (recoverable) this.recoveryIds.add(id);
+            const onResolve = revives ? (v: any) => { this.crashed = null; resolve(v); } : resolve;
+            this.pending.set(id, { resolve: onResolve, reject });
             const ms = opts?.timeoutMs;
             if (!ms) return;
             const timer = setTimeout(() => {
@@ -458,9 +527,16 @@ export async function pageEval(session: CdpSession, expr: string, opts: { timeou
             // reject without user activation, which no harness verb can otherwise grant.
             userGesture: opts.userGesture ?? false,
         }),
+        session.whenCrashed().then((reason) => ({ __crashed: reason } as any)),
         Bun.sleep(timeoutMs).then(() => ({ __timeout: true } as any)),
     ]);
-    if ((r as any).__timeout) throw new Error(`pageEval timed out after ${timeoutMs}ms`);
+    if ((r as any).__crashed) throw new Error((r as any).__crashed);
+    if ((r as any).__timeout) {
+        throw new Error(
+            `pageEval timed out after ${timeoutMs}ms`
+            + (session.crashReason() ? ` — ${session.crashReason()}` : ""),
+        );
+    }
     const res = (r as any).result;
     if (res?.exceptionDetails) {
         throw new Error(`page eval exception: ${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description ?? ""}`);
@@ -756,6 +832,12 @@ export interface HealthReport {
     logServer: boolean;
     chrome: boolean;
     devTab: boolean;
+    /** The tab's renderer ANSWERS. `devTab` is only "a target with this URL is listed", and the
+     *  browser keeps listing a target whose renderer has died — so a crashed tab reported green
+     *  while every subsequent verb silently spent its full deadline. */
+    devTabResponsive: boolean;
+    /** Present only when the renderer is known to have crashed (Inspector.targetCrashed). */
+    devTabCrashed?: string;
     /** The sidecar answering /health says nothing about whether it can WRITE. Present only
      *  when the archive is degraded — a session losing log lines must not read as green. */
     logArchive?: { droppedLines: number; writeErrors: number; bufferedMB: number; lastError: string | null };
@@ -1001,14 +1083,28 @@ export async function health(opts: { port?: number } = {}): Promise<HealthReport
         try { return (await (await fetch(`http://localhost:${SIDECAR_PORT}/health`)).text()).trim() === "OK"; } catch { return false; }
     })();
     const logArchive = logServer ? await sidecarArchiveHealth() : undefined;
-    let chrome = false, devTab = false;
+    let chrome = false, devTab = false, devTabResponsive = false;
+    let devTabCrashed: string | undefined;
     try {
         await fetchJson(port, "/json/version");
         chrome = true;
-        await findTab(GAME_DEV_FILTER, { port });
+        const tab = await findTab(GAME_DEV_FILTER, { port });
         devTab = true;
+        const session = await CdpSession.connect(tab.webSocketDebuggerUrl);
+        try {
+            await pageEval(session, "1", { timeoutMs: 10_000 });
+            devTabResponsive = true;
+        } catch {
+            devTabCrashed = session.crashReason() ?? undefined;
+        } finally {
+            session.close();
+        }
     } catch { /* */ }
-    return { vite, viteTransform, logServer, chrome, devTab, ...(logArchive ? { logArchive } : {}) };
+    return {
+        vite, viteTransform, logServer, chrome, devTab, devTabResponsive,
+        ...(devTabCrashed ? { devTabCrashed } : {}),
+        ...(logArchive ? { logArchive } : {}),
+    };
 }
 
 interface SidecarStats {

@@ -1670,6 +1670,10 @@ export class Scheduler {
                 if (current?.state === ThreadState.TERMINATED) current = null;
             } else {
                 this.transitionTo(current, ThreadState.READY, null, context);
+                // Bootstrap preference is "run to your first wait", not "outrank every peer for
+                // life": a child that busy-polls (never blocks) would otherwise starve every
+                // thread outside the set, including the one it is polling for.
+                this.bootstrapUntilFirstWait.delete(current.id);
             }
         } else if (current && this.currentThreadId === current.id && current.context === null &&
                    current.state === ThreadState.SUSPENDED) {

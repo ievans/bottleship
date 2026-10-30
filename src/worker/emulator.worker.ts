@@ -195,6 +195,7 @@ import { noteAppliedWorkerFlag } from "./harness/cmds/dbg";
 // onmessage handler families (static imports — worker bundled with inlineDynamicImports).
 import { handleAudioBridgeMessage } from "./worker-handlers/audio-bridge";
 import { handleLoggingMessage } from "./worker-handlers/logging";
+import { configureLan } from "./net/lan";
 import { handleDebugMonitorMessage } from "./worker-handlers/debug-monitor";
 import { handleRegistryMessage } from "./worker-handlers/registry";
 
@@ -474,7 +475,7 @@ const gdiPresentOnce = () => {
     // screen the moment it is drawn. Coalesced to one blit per composite, and only while
     // GDI owns the screen — under any other plan that output is not visible on Windows
     // either, so publishing it would just leak the game's window into the dialog rects.
-    if (plan.mode === 'full') flushHeldWindowDCs();
+    if (plan.mode === 'full' || (plan.mode === 'rects' && plan.gdiOwnsDisplay)) flushHeldWindowDCs();
     const gdiDirty = gdi.isOverlayDirty();
 
     if (plan.mode !== 'full') {
@@ -1255,7 +1256,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false): Promi
     }
 
     // Collect DLLs that need DllMain(DLL_PROCESS_ATTACH) before EXE entry
-    const pendingDllInits = system.process.loader.getPendingDllInits();
+    const pendingDllInits = system.process.loader.takeBootDllInits();
     if (pendingDllInits.length > 0) {
       Logger.warn(LogCategory.SYSTEM,
         `DllMain trampoline: ${pendingDllInits.length} DLL(s): ${pendingDllInits.map(d => `${d.name}@0x${d.entryPoint.toString(16)}`).join(', ')}`);
@@ -3384,6 +3385,12 @@ const handleWorkerMessage = (event: MessageEvent): void => {
       : null;
     Logger.log(LogCategory.SYSTEM,
       `[ReExec] boot from host: image "${pendingReExecImage ?? "(manifest)"}" args "${pendingReExecArgs ?? ""}"`);
+    return;
+  }
+
+  if (message?.type === "set_lan") {
+    // Virtual-LAN relay endpoint for multiplayer; null leaves the LAN.
+    configureLan(typeof message.url === "string" && message.url ? message.url : null);
     return;
   }
 

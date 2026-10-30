@@ -25,6 +25,9 @@ const BUILD_SHA = (
 // cert). Opt into a self-signed HTTPS dev/preview server with VITE_SSL=1.
 const useSsl = !!process.env.VITE_SSL;
 
+// Multiplayer relay (deploy/lan-dev.ts), proxied so the page reaches it on its own origin.
+const lanProxy = { "/lan": { target: "ws://127.0.0.1:5175", ws: true } };
+
 const coopCoepHeaders = {
   "Cross-Origin-Opener-Policy": "same-origin",
   "Cross-Origin-Embedder-Policy": "require-corp"
@@ -108,6 +111,17 @@ function pipeAndCleanup(stream: fs.ReadStream, res: ServerResponse): void {
   stream.pipe(res);
 }
 
+// Vite's static server answers a public/apps bundle with a weak ETag, which the sparse cache
+// refuses to resume from, so those URLs are served by the same route as /__wgb/.
+function publicAppsBundle(urlPath: string): string | null {
+  if (!urlPath.startsWith("/apps/") || !urlPath.toLowerCase().endsWith(".wgb")) return null;
+  let rel: string;
+  try { rel = decodeURIComponent(urlPath.slice("/apps/".length)); } catch { return null; }
+  const appsDir = path.resolve(__dirname, "public", "apps");
+  const file = path.resolve(appsDir, rel);
+  return file.startsWith(appsDir + path.sep) ? file : null;
+}
+
 function serveWgbFromDisk(): Plugin {
   const ROUTE = "/__wgb/";
   const LIST_ROUTE = "/__wgb/list";
@@ -119,7 +133,9 @@ function serveWgbFromDisk(): Plugin {
       // Registered in the body (not a returned post-hook) so it runs BEFORE Vite's
       // internal static/SPA-fallback middlewares and reliably intercepts the route.
       server.middlewares.use(async (req, res, next) => {
-        if (!req.url || !req.url.startsWith(ROUTE)) return next();
+        if (!req.url) return next();
+        const staticFile = req.url.startsWith(ROUTE) ? null : publicAppsBundle(req.url.split("?")[0]!);
+        if (!req.url.startsWith(ROUTE) && !staticFile) return next();
         for (const [k, v] of Object.entries(coopCoepHeaders)) res.setHeader(k, v);
         // The dev bundle browser (src/debug/WgbBrowser.tsx): what is loadable off disk
         // WITHOUT registering it in the library catalog. Enumerating the same roots the
@@ -132,20 +148,25 @@ function serveWgbFromDisk(): Plugin {
           res.end(JSON.stringify(listing));
           return;
         }
-        // Caller supplies the absolute disk path via ?path= (URLSearchParams decodes it).
-        const qi = req.url.indexOf("?");
-        const abs = qi >= 0 ? new URLSearchParams(req.url.slice(qi + 1)).get("path") : null;
-        if (!abs) { res.statusCode = 400; res.end("missing ?path=<absolute .wgb path>"); return; }
-        if (isUnc(abs)) { res.statusCode = 403; res.end("UNC paths are refused"); return; }
-        const file = path.resolve(abs);
-        if (isUnc(file)) { res.statusCode = 403; res.end("UNC paths are refused"); return; }
-        if (!file.toLowerCase().endsWith(".wgb")) { res.statusCode = 403; res.end("only .wgb files"); return; }
-        // Same confinement as the sidecar's /wgb — a fallback route that serves anything
-        // the sidecar would refuse means the confinement only holds when :3001 is up.
-        if (!underAnyRoot(file, roots)) {
-          res.statusCode = 403;
-          res.end("path is outside the configured roots (set BS_WGB_ROOTS)");
-          return;
+        let file: string;
+        if (staticFile) {
+          file = staticFile;
+        } else {
+          // Caller supplies the absolute disk path via ?path= (URLSearchParams decodes it).
+          const qi = req.url.indexOf("?");
+          const abs = qi >= 0 ? new URLSearchParams(req.url.slice(qi + 1)).get("path") : null;
+          if (!abs) { res.statusCode = 400; res.end("missing ?path=<absolute .wgb path>"); return; }
+          if (isUnc(abs)) { res.statusCode = 403; res.end("UNC paths are refused"); return; }
+          file = path.resolve(abs);
+          if (isUnc(file)) { res.statusCode = 403; res.end("UNC paths are refused"); return; }
+          if (!file.toLowerCase().endsWith(".wgb")) { res.statusCode = 403; res.end("only .wgb files"); return; }
+          // Same confinement as the sidecar's /wgb — a fallback route that serves anything
+          // the sidecar would refuse means the confinement only holds when :3001 is up.
+          if (!underAnyRoot(file, roots)) {
+            res.statusCode = 403;
+            res.end("path is outside the configured roots (set BS_WGB_ROOTS)");
+            return;
+          }
         }
         let size: number;
         try {
@@ -237,10 +258,13 @@ export default defineConfig({
   },
   server: {
     host: true,
+    // Vite refuses Host headers it does not know; set for a dev server reached by name.
+    ...process.env.BS_ALLOWED_HOSTS ? { allowedHosts: process.env.BS_ALLOWED_HOSTS.split(",") } : {},
     port: 5174,
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
+    proxy: lanProxy,
     watch: {
       // Chokidar registers one fs.watch handle PER FILE and its defaults ignore only
       // .git/node_modules/the cache dir. These trees hold no importable module and tens of
@@ -257,6 +281,7 @@ export default defineConfig({
   },
   preview: {
     host: true,
+    proxy: lanProxy,
     ...useSsl ? { https: true } : {},
     headers: coopCoepHeaders
   },

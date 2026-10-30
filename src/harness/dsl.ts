@@ -498,6 +498,17 @@ export class HarnessChain {
      *  once `readbacksCompared` > 0. */
     readLockDivergence(opts?: { reset?: boolean }): this { return this.push("readLockDivergence", [opts]); }
 
+    // ── virtual LAN ──
+    /** Join a LAN room at run time (no reload), like the 🌐 button. The relay URL is this page's
+     *  origin + /lan/<room> unless `url` is given. */
+    lanJoin(room: string, url?: string): this { return this.push("lanJoin", [room, url]); }
+    lanLeave(): this { return this.push("lanLeave", []); }
+    /** Link state, our address, peers heard from, relay-boundary counters and open sockets. */
+    lanState(): this { return this.push("lanState", []); }
+    /** Ring of the last 512 relay frames (tx/rx, proto, src/dst, tcp kind, len, first 64 bytes hex).
+     *  Off until `enable:true`; `since` is a seq cursor (use the returned `next`). */
+    lanTrace(opts?: { enable?: boolean; since?: number; limit?: number; reset?: boolean }): this { return this.push("lanTrace", [opts]); }
+
     // ── time ──
     time(action: "freeze" | "advance" | "realtime", ms?: number): this { return this.push("time", [action, ms]); }
     /** Sample the guest clock against wall clock — `rate` <1 means game time is losing. */
