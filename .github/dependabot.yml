@@ -1,0 +1,21 @@
+# Keeps the SHA-pinned actions and the lockfiles current. The cooldown delays adopting a
+# release so a malicious version has time to be yanked before it reaches a PR.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    groups:
+      actions: { patterns: ["*"] }
+  - package-ecosystem: bun
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+  - package-ecosystem: cargo
+    directories:
+      - /tools/build-unpack-streaming
+      - /tools/build-unpack-buffered
+      - /tools/aot/opt/compiler
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
