@@ -55,6 +55,24 @@ so any timing you read while two are running is noise — `harness trace` refuse
 second guest tab is open. Each tab also costs a full emulator (its own worker, SAB and VRAM), so
 memory, not CPU, sets the ceiling; 2-3 concurrent bring-ups is the sane range on a normal desktop.
 
+### Separate worktrees
+
+`BS_TAB` sessions share one dev server, so they all run the same code. To run different code side by
+side, give each worktree its own stack, and start its relay if you need multiplayer:
+
+```bash
+export BS_TAB=alpha
+export BS_VITE_PORT=5184 LAN_PORT=5185
+export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
+export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
+
+bun run dev:lan &                  # optional: the /lan relay
+bun tools/harness.ts up
+```
+
+`bun tools/lan-peer.ts` reaches that relay with `--relay ws://localhost:5184`. Rooms are per stack,
+so two stacks can use the same room name without meeting.
+
 ## Driving a game
 
 The harness exposes a fluent, self-checking DSL. A bring-up script reads like the steps a human

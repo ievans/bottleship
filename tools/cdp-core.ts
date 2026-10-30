@@ -28,7 +28,7 @@ import { attachEmulatorWorker } from "./cdp-worker-session";
 export const DEFAULT_CDP_PORT = Number(process.env.BS_CDP_PORT ?? 9333);
 /** BS_DEV_URL / BS_SIDECAR_PORT point the tools at a SECOND dev stack (an isolated
  *  worktree, a test rig) so it never drives or writes into the first one's. */
-export const DEFAULT_DEV_URL = process.env.BS_DEV_URL ?? "http://localhost:5174/?game=dev";
+export const DEFAULT_DEV_URL = process.env.BS_DEV_URL ?? `http://localhost:${process.env.BS_VITE_PORT ?? 5174}/?game=dev`;
 export const SIDECAR_PORT = Number(process.env.BS_SIDECAR_PORT ?? 3001);
 export const GAME_DEV_FILTER = "game=dev";
 const IS_MAC = process.platform === "darwin";
@@ -942,10 +942,14 @@ function spawnVite(): void {
 }
 
 function killWedgedVite(): void {
-    if (!IS_WIN) { Bun.spawnSync(["pkill", "-f", "vite"]); return; }
     // By PID via the listening socket — matching 'vite' on the command line kills every
     // Vite on the machine, including other agents' and other checkouts'.
     const port = new URL(DEFAULT_DEV_URL).port || "5174";
+    if (!IS_WIN) {
+        const pids = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"]).stdout.toString().split(/\s+/).filter(Boolean);
+        if (pids.length > 0) Bun.spawnSync(["kill", ...pids]);
+        return;
+    }
     Bun.spawnSync(["powershell", "-NoProfile", "-Command",
         `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
         `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
