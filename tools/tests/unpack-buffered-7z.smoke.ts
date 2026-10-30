@@ -5,7 +5,7 @@
  * Asserts exactly 10 entries at exact uncompressed sizes.
  *
  * Run manually (NOT in committed vitest — needs the local 51MB file + nodejs wasm build):
- *   bun run build:unpack-buffered        # tools/build-unpack-buffered/build-wasm.sh
+ *   bun run build:unpack-buffered        # tools/build-wasm
  *   bun tools/tests/unpack-buffered-7z.smoke.ts
  */
 import { readFileSync } from "node:fs";

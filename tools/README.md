@@ -52,6 +52,7 @@ Public dev/build tooling. Game-specific RE/debug one-offs live in
 
 ## Builds
 
+- **build-wasm/** — reproducible build + digest lock for every shipped `.wasm` (`build:wasm`; `validate-wasm-lock` gates it).
 - **build-ffmpeg-decoder/** — WASM video-decoder build (`build:video-decoder`).
 - **build-unpack-streaming/** — Rust→WASM installer-unpack build (`build:unpack-streaming`).
 - **video-test/** — standalone decoder test page (no emulator dependency).

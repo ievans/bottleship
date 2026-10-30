@@ -42,9 +42,12 @@ bun run dev                                  # http://localhost:5174
 If you forgot `--recurse-submodules`: `git submodule update --init --recursive`.
 
 Requirements: [Bun](https://bun.sh/), a WebGPU-capable browser (Chrome/Edge 113+). The
-engine core (`vendor/v86`) is Rust→WASM; rebuilding it needs the `wasm32-unknown-unknown`
-target, clang, and Node — see `vendor/v86/build-wasm.sh`. You only need that if you change
-the emulator core; most work is in TypeScript and needs no WASM rebuild.
+app's `.wasm` files (v86 core, texture kernels, unpackers, video decoder) are not committed:
+`bun run build:wasm` builds them from source with pinned toolchains (rustup reads
+`rust-toolchain.toml`; also `clang` 18, Node, and `wasm-bindgen-cli` 0.2.123) and checks each
+against `tools/build-wasm/wasm.lock.json`. `bun run dev` and `bun run build` run it for you and
+skip anything already built; the video decoder builds in Docker. A different toolchain produces
+different bytes, so a mismatch names the tool to fix.
 
 ## The quality gate (required before every PR)
 

@@ -13,8 +13,8 @@
 #
 # Output: public/video-decoder.wasm   (+ public/video-decoder.js glue)
 #
-# The pre-built output is committed to git so developers without emsdk
-# don't need to rebuild.  Re-run only when decoder_api.c changes.
+# Normally run via `bun run build:video-decoder` (tools/build-wasm), which runs this script in
+# the pinned Docker image and checks the result against tools/build-wasm/wasm.lock.json.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -114,7 +114,7 @@ bottleship/
 │       └── runtime/             # VFS, bundle loader, input, dialogs
 ├── packages/                    # standalone libraries (formats, repack)
 ├── tools/                       # build, bundling, harness, RE, quality-gate scripts
-├── public/                      # static assets (fonts, covers, prebuilt wasm, bios)
+├── public/                      # static assets (fonts, covers, bios; built .wasm is gitignored)
 ├── deploy/                      # production static server
 └── vendor/v86/                  # x86 emulator core (submodule)
 ```
@@ -122,7 +122,7 @@ bottleship/
 ## The v86 core
 
 `vendor/v86/` is a fork of [v86](https://github.com/copy/v86), vendored as a submodule
-(clone with `--recurse-submodules`). It is built to WebAssembly with
-`vendor/v86/build-wasm.sh`; the generated Rust files are produced by that script and are not
-checked in. From TypeScript, always access v86 properties with bracket notation
+(clone with `--recurse-submodules`). `public/v86.wasm` is built by `bun run build:v86` (tools/build-wasm, which mirrors the wasm half
+of `vendor/v86/build-wasm.sh`); `libv86.mjs` still comes from that script. The generated Rust
+files are not checked in. From TypeScript, always access v86 properties with bracket notation
 (`this["prop"]`) — the Closure Compiler advanced pass renames dot-notation properties.
