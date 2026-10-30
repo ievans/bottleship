@@ -56,8 +56,13 @@ debug-config.json
 vendor/*
 !vendor/v86
 !vendor/v86/**
-# Rust→wasm build output for our owned crates (sources + bindgen glue are tracked)
+# Reproducible wasm build (tools/build-wasm): binaries and bindgen glue are built, never committed
+/public/*.wasm
+/.build-wasm/
 tools/build-unpack-buffered/target/
+tools/build-unpack-buffered/pkg/
+tools/build-unpack-buffered/pkg-node/
+tools/build-unpack-streaming/target/
 
 # Build artifacts
 .build-ffmpeg/

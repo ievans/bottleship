@@ -13,8 +13,8 @@
 #
 # Output: public/video-decoder.wasm   (+ public/video-decoder.js glue)
 #
-# The pre-built output is committed to git so developers without emsdk
-# don't need to rebuild.  Re-run only when decoder_api.c changes.
+# Normally run via `bun run build:video-decoder` (tools/build-wasm), which runs this script in
+# the pinned Docker image and checks the result against tools/build-wasm/wasm.lock.json.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -66,11 +66,17 @@ fi
 echo "[build] Emscripten: $(emcc --version | head -1)"
 
 # ── Clone / update FFmpeg ──────────────────────────────────────────────────────
+# n6.1 is a movable ref; the commit is what the decoder was built against.
+FFMPEG_COMMIT=d4ff0020b40b524a490cf62eccbd3a318f4c0e58
 if [[ ! -d "$FFMPEG_DIR/.git" ]]; then
-    echo "[build] Cloning FFmpeg (n6.1 branch) …"
+    echo "[build] Cloning FFmpeg (n6.1) …"
     git clone --depth 1 --branch n6.1 https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_DIR"
 else
     echo "[build] FFmpeg already present at $FFMPEG_DIR"
+fi
+if [[ "$(git -C "$FFMPEG_DIR" rev-parse HEAD)" != "$FFMPEG_COMMIT" ]]; then
+    echo "ERROR: FFmpeg checkout is not $FFMPEG_COMMIT" >&2
+    exit 1
 fi
 
 # ── Configure FFmpeg for WASM ──────────────────────────────────────────────────

@@ -6,7 +6,7 @@
  *   - inflateRaw  — raw DEFLATE (zip / InstallShield cabinet codecs)
  *   - lzmaDecode  — raw LZMA1 with explicit props/dict/size
  *
- * The wasm is built by tools/build-unpack-buffered/build-wasm.sh, which emits the
+ * The wasm is built by `bun run build:unpack-buffered` (tools/build-wasm), which emits the
  * wasm-bindgen `--target web` glue under pkg/ and mirrors the core .wasm to
  * public/unpack-buffered.wasm (Vite serves it from there — same pattern as
  * /v86.wasm and /unpack.wasm).

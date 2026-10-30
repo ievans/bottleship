@@ -20,7 +20,7 @@
 #     -v bs-ffmpeg-build:/ffbuild -e BS_FFMPEG_BUILD_DIR=/ffbuild -w /project \
 #     bottleship-ffmpeg-builder bash tools/build-ffmpeg-decoder/build.lf.sh
 
-FROM emscripten/emsdk:3.1.64
+FROM emscripten/emsdk:3.1.64@sha256:8847dad4171ebc8a53d9ae5cda86a2546ef5b2e68834c14dc1ba2b2962e125cc
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git make pkg-config python3 \

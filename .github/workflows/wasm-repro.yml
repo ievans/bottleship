@@ -1,0 +1,57 @@
+name: Wasm reproducibility
+
+# Builds every .wasm from two separate checkouts and requires both to match
+# tools/build-wasm/wasm.lock.json, i.e. the bytes do not depend on the build path or machine.
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  pull_request:
+    paths:
+      - "tools/build-wasm/**"
+      - "tools/build-ffmpeg-decoder/**"
+      - "tools/build-unpack-*/**"
+      - "tools/build-dxt-kernel/**"
+      - "rust-toolchain.toml"
+      - "vendor/v86"
+      - ".github/workflows/wasm-repro.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      WASM_BINDGEN_VERSION: "0.2.123"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: first/bottleship
+          submodules: true
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: second/checkout/bottleship
+          submodules: true
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install pinned toolchain
+        run: |
+          cd first/bottleship && rustup toolchain install
+          sudo apt-get install -y --no-install-recommends clang-18
+          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          cargo install wasm-bindgen-cli --locked --version "$WASM_BINDGEN_VERSION"
+
+      - name: Build and verify (first path)
+        working-directory: first/bottleship
+        run: bun tools/build-wasm/build.ts --force
+
+      - name: Build and verify (second path)
+        working-directory: second/checkout/bottleship
+        run: bun tools/build-wasm/build.ts --force

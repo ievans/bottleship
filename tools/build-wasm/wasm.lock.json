@@ -1,0 +1,68 @@
+{
+  "toolchain": {
+    "clang": "18.1.3",
+    "rustc": "rustc 1.97.0 (2d8144b78 2026-07-07)",
+    "wasm-bindgen": "wasm-bindgen 0.2.123"
+  },
+  "recipes": {
+    "vendor/v86/build-wasm.sh": "226310cab671577c8bc2c12c7fa9f6e77e6455cc22387818580d212c2ef224df"
+  },
+  "outputs": {
+    "public/dxt-kernel-simd.wasm": {
+      "sha256": "dc6613182ef554713bf934367e39d89f3859e7da22a0044d99a9d012456a4a68",
+      "bytes": 15427
+    },
+    "public/dxt-kernel.wasm": {
+      "sha256": "6a216d9d9f2aea68a39834a21367da0d2344e2b47cb99acfbaf505451d056554",
+      "bytes": 5935
+    },
+    "public/unpack-buffered.wasm": {
+      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "bytes": 225878
+    },
+    "public/unpack-streaming.wasm": {
+      "sha256": "e783a4b224b58765727eef0f321f4aea6fb26b1fec420465dd97752c81a8a1ae",
+      "bytes": 62365
+    },
+    "public/v86.wasm": {
+      "sha256": "f09897ea68bcf1bbba79565f4a904a049f53e1b8d9340f6c58a7339bc414bf1c",
+      "bytes": 2727629
+    },
+    "public/video-decoder.wasm": {
+      "sha256": "52a80088679e4dc42b0a5a164da9eca86003763312152d1224a31a179c0d9b74",
+      "bytes": 3143031
+    },
+    "tools/build-unpack-buffered/pkg-node/unpack_buffered.d.ts": {
+      "sha256": "aad0623e67d04e0ed241da7c682b0f0a316298c066a6189445777c1c637c0963",
+      "bytes": 1169
+    },
+    "tools/build-unpack-buffered/pkg-node/unpack_buffered.js": {
+      "sha256": "6ae4f53bbc02cee12ae5bd6db67f5f0e2e935ddc88b7606483e32a72cbf3ace5",
+      "bytes": 7934
+    },
+    "tools/build-unpack-buffered/pkg-node/unpack_buffered_bg.wasm": {
+      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "bytes": 225878
+    },
+    "tools/build-unpack-buffered/pkg-node/unpack_buffered_bg.wasm.d.ts": {
+      "sha256": "b478ae9025ba8a002dd339ff1f967a3b1b3d5b5d52105ec600982b8d8263b4a3",
+      "bytes": 609
+    },
+    "tools/build-unpack-buffered/pkg/unpack_buffered.d.ts": {
+      "sha256": "7524b048cd0637f95c81ffefed48867b6e90490f9875e2f33ffed57dbd94f032",
+      "bytes": 2721
+    },
+    "tools/build-unpack-buffered/pkg/unpack_buffered.js": {
+      "sha256": "11b69143670198b68f14605c879628a650111f3bdbc619cc95c8b9b6c0d03c88",
+      "bytes": 11056
+    },
+    "tools/build-unpack-buffered/pkg/unpack_buffered_bg.wasm": {
+      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "bytes": 225878
+    },
+    "tools/build-unpack-buffered/pkg/unpack_buffered_bg.wasm.d.ts": {
+      "sha256": "b478ae9025ba8a002dd339ff1f967a3b1b3d5b5d52105ec600982b8d8263b4a3",
+      "bytes": 609
+    }
+  }
+}
