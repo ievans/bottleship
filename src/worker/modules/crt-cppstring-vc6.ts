@@ -32,6 +32,13 @@ function readSize(ptr: number): number {
     return readU32(ptr + OFF_LEN);
 }
 
+/** Public accessor for a string's current length — callers that must validate a `pos`
+ *  argument against `size()` BEFORE mutating (append/substr's out_of_range contract) need
+ *  this ahead of calling the mutating helper below. */
+export function vc6StringSize(ptr: number): number {
+    return readSize(ptr);
+}
+
 function writeSize(ptr: number, size: number): void {
     writeU32(ptr + OFF_LEN, size);
 }

@@ -38,6 +38,7 @@ import {
     vc6StringGrow,
     vc6StringInsert,
     vc6StringLess,
+    vc6StringSize,
     vc6StringSplit,
     vc6StringSubstr,
     vc6StringTidy,
@@ -61,8 +62,19 @@ export class Msvcp60 implements IModule {
     private badCastVtableAddr = 0;
     private exceptionVtableAddr = 0;
     private unknownExceptionAddr = 0;
-    // std::cout / std::cerr: opaque "this" addresses for the no-op ostream operators above —
-    // nothing ever dereferences their contents, only chains the pointer through.
+    // std::cout / std::cerr: our own HLE operator<< overloads treat these purely as opaque
+    // "this" pointers, but cout/cerr are REAL basic_ostream<char> objects in the guest's own
+    // ABI — guest-compiled inline code (an operator void*()/good() check, say) can read their
+    // vtable/state fields directly without ever calling one of our exported handlers. Wine's
+    // msvcp60/msvcp.h (ios_base: vtable@0, state@4 IOSB_iostate, goodbit=0) gives a verified
+    // layout for the non-virtual ios_base header; basic_ostream reaches it through a virtual
+    // base whose exact offset within basic_ostream itself isn't verified here, so this is
+    // NOT byte-exact ABI compatibility. STREAM_OBJ_SIZE is sized generously past the verified
+    // 52-byte ios_base+basic_ios_char span so a stray read within the object hits zeroed
+    // memory — state=0=goodbit at the verified offset 4 is also the CORRECT initial value for
+    // a stream that hasn't failed — rather than unrelated heap, which is the concrete,
+    // verifiable half of this fix; true virtual-base fidelity is unresolved follow-up work.
+    private static readonly STREAM_OBJ_SIZE = 64;
     private coutAddr = 0;
     private cerrAddr = 0;
     // IEEE 754 special-value statics <limits>/<float.h> read directly: _Inf/_Snan (double,
@@ -93,8 +105,14 @@ export class Msvcp60 implements IModule {
             this.refcntAddr = process.memory.alloc(2, "THUNK_DATA", "rw");
             Mem.writeUint16(this.refcntAddr, 1);
         }
-        if (this.coutAddr === 0) this.coutAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
-        if (this.cerrAddr === 0) this.cerrAddr = process.memory.alloc(4, "THUNK_DATA", "rw");
+        if (this.coutAddr === 0) {
+            this.coutAddr = process.memory.alloc(Msvcp60.STREAM_OBJ_SIZE, "THUNK_DATA", "rw");
+            Mem.writeBytes(this.coutAddr, new Uint8Array(Msvcp60.STREAM_OBJ_SIZE));
+        }
+        if (this.cerrAddr === 0) {
+            this.cerrAddr = process.memory.alloc(Msvcp60.STREAM_OBJ_SIZE, "THUNK_DATA", "rw");
+            Mem.writeBytes(this.cerrAddr, new Uint8Array(Msvcp60.STREAM_OBJ_SIZE));
+        }
         if (this.infAddr === 0) {
             // IEEE 754 double +infinity: exponent all-ones, mantissa zero.
             this.infAddr = process.memory.alloc(8, "THUNK_DATA", "rw");
@@ -358,14 +376,23 @@ export class Msvcp60 implements IModule {
             return vc6StringAppendCharCount(ctx.ecx >>> 0, args[0] ?? 0, args[1] ?? 0, heap, nullstr());
         };
 
+        // append(right, pos, count) and substr(pos, count) both document pos > right.size()
+        // (pos > size() for substr) as std::out_of_range — real for EVERY pos past the end,
+        // including a zero count, so this checks BEFORE the mutating helper clamps count and
+        // proceeds as if nothing were wrong. Routed through the same _Xran the real VC6 STL
+        // calls for this exact violation (already wired below to throwRuntimeError).
         this.exports[`?append@${BS}@@QAEAAV12@ABV12@II@Z`] = (ctx, _mem, args) => {
-            return vc6StringAppendRange(ctx.ecx >>> 0, args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
+            const right = args[0] ?? 0;
+            if ((args[1] ?? 0) >>> 0 > vc6StringSize(right)) return throwRuntimeError("_Xran");
+            return vc6StringAppendRange(ctx.ecx >>> 0, right, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
         };
 
         // substr(pos, count) returns a NEW string, so args[0] is the caller's hidden
         // return-value slot (same convention as the operator+ overloads below).
         this.exports[`?substr@${BS}@@QBE?AV12@II@Z`] = (ctx, _mem, args) => {
-            return vc6StringSubstr(args[0] ?? 0, ctx.ecx >>> 0, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
+            const self = ctx.ecx >>> 0;
+            if ((args[1] ?? 0) >>> 0 > vc6StringSize(self)) return throwRuntimeError("_Xran");
+            return vc6StringSubstr(args[0] ?? 0, self, args[1] ?? 0, args[2] ?? 0, heap, nullstr());
         };
 
         this.exports["??8std@@YA_NABV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@0@0@Z"] = (_ctx, _mem, args) => {
@@ -485,12 +512,26 @@ export class Msvcp60 implements IModule {
         };
 
         // basic_istream::get() / get(char&) / putback(char) — no real stream to read from,
-        // so every read behaves as one already at EOF: get() answers EOF, get(char&) leaves
-        // the destination untouched, putback() is a no-op. All chain off `this` like the
-        // ostream operators above.
+        // so every read behaves as one already at EOF. get() answers EOF (-1) per its
+        // documented int-return contract — a caller testing the RETURN VALUE (the common,
+        // standard-recommended idiom: `while ((c = stream.get()) != EOF)`) sees a correct
+        // failure. get(char&) stores charT() ('\0') into the output char on failure, which
+        // is also the documented contract for that overload and under our control.
+        //
+        // KNOWN GAP: get(char&)/putback(char) return `istream&` (always *this*), not a status
+        // code, so a caller testing failure via the stream's own boolean conversion
+        // (`while (stream.get(ch))`) relies on an eofbit/failbit flag inside the istream
+        // object — which we do not set. Wine's msvcp60/msvcp.h verifies ios_base::state sits
+        // at offset 4 (goodbit=0/eofbit=1/failbit=2/badbit=4), but basic_istream reaches
+        // ios_base through a VIRTUAL base, and the vbtable offset that locates it within a
+        // basic_istream object isn't verified from that source — writing a flag at a guessed
+        // offset risks corrupting an unrelated field in guest-allocated memory, which is worse
+        // than the status quo. Left unfixed pending a verified basic_istream<char> layout.
         const EOF_VALUE = -1;
         this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEHXZ"] = () => EOF_VALUE;
-        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@AAD@Z"] = (ctx, _mem, _args) => {
+        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@AAD@Z"] = (ctx, _mem, args) => {
+            const out = args[0] ?? 0;
+            if (out) Mem.writeUint8(out, 0);
             return ctx.ecx >>> 0;
         };
         this.exports["?putback@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@D@Z"] = (ctx, _mem, _args) => {
