@@ -12,9 +12,9 @@
   color-scheme: dark;
 
   /* — Type — */
-  --font-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
-  --font-body: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
-  --font-mono: "IBM Plex Mono", "Consolas", "Monaco", monospace;
+  --font-display: "Segoe UI", system-ui, sans-serif;
+  --font-body: "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Consolas", "Monaco", monospace;
 
   --fs-2xs: 0.68rem;
   --fs-xs: 0.74rem;
