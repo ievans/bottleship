@@ -26,7 +26,7 @@ const BUILD_SHA = (
 const useSsl = !!process.env.VITE_SSL;
 
 // Multiplayer relay (deploy/lan-dev.ts), proxied so the page reaches it on its own origin.
-const lanProxy = { "/lan": { target: "ws://127.0.0.1:5175", ws: true } };
+const lanProxy = { "/lan": { target: `ws://127.0.0.1:${process.env.LAN_PORT ?? 5175}`, ws: true } };
 
 const coopCoepHeaders = {
   "Cross-Origin-Opener-Policy": "same-origin",
@@ -260,7 +260,8 @@ export default defineConfig({
     host: true,
     // Vite refuses Host headers it does not know; set for a dev server reached by name.
     ...process.env.BS_ALLOWED_HOSTS ? { allowedHosts: process.env.BS_ALLOWED_HOSTS.split(",") } : {},
-    port: 5174,
+    // BS_VITE_PORT runs a second dev stack beside the first, as with BS_SIDECAR_PORT.
+    port: Number(process.env.BS_VITE_PORT ?? 5174),
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
