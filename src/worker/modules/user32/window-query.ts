@@ -243,6 +243,19 @@ export function registerWindowQueryExports(exports: Record<string, ThunkImplemen
                 result = getChildZOrderSibling(hWnd, 'next');
             } else if (uCmd === 3 /* GW_HWNDPREV */) {
                 result = getChildZOrderSibling(hWnd, 'prev');
+            } else if (uCmd === 0 /* GW_HWNDFIRST */ || uCmd === 1 /* GW_HWNDLAST */) {
+                // First/last in hWnd's OWN z-order list: its parent's children for a child
+                // window, or the top-level list (every window with no parent) for a top-level
+                // one — there was no case here at all, so a perfectly valid hWnd fell through
+                // to the 0 default. A real EE2 build hits this once at startup via
+                // GetWindow(ownHwnd, GW_HWNDFIRST) to check whether it's already the frontmost
+                // top-level window; the silent 0 seeded a GW_HWNDNEXT walk starting from NULL
+                // that never terminates (GetWindow(0, ...) is also always 0), which reads as a
+                // hung main thread spinning GetWindow/IsWindowVisible forever.
+                const siblings = window.parent !== undefined
+                    ? (windows.get(window.parent)?.children ?? [])
+                    : [...windows.values()].filter((w) => w.parent === undefined).map((w) => w.handle);
+                result = siblings.length > 0 ? (uCmd === 0 ? siblings[0]! : siblings[siblings.length - 1]!) : 0;
             }
         }
         Logger.verbose(LogCategory.USER32, `GetWindow(0x${hWnd.toString(16)}, ${uCmd}) -> 0x${result.toString(16)}`);
