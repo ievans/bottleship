@@ -128,6 +128,71 @@ function enumCalendarInfo(
     };
 }
 
+/**
+ * LCMapStringA's core: case mapping / sort keys over an explicit ANSI code page. Shared by
+ * the kernel32 export (always the process's configured ansiCodePage) and msvcrt's
+ * __crtLCMapStringA (which carries its own codepage argument — see the note on the
+ * __crtCompareString and __crtLCMapString family in msvcrt.ts).
+ */
+export function mapStringACore(
+    mem: Uint8Array, Locale: number, dwMapFlags: number,
+    lpSrcStr: number, cchSrc: number, lpDestStr: number, cchDest: number,
+    codePage: number,
+): number {
+    if (lpSrcStr === 0) return 0;
+
+    const LCMAP_SORTKEY = 0x00000400;
+
+    // Read ANSI source string
+    let srcLen: number;
+    if (cchSrc === -1) {
+        srcLen = 0;
+        while (lpSrcStr + srcLen < mem.length && mem[lpSrcStr + srcLen] !== 0) srcLen++;
+        srcLen++; // include null terminator
+    } else {
+        srcLen = cchSrc;
+    }
+
+    if (dwMapFlags & LCMAP_SORTKEY) {
+        // Sort key is a byte array: copy bytes + add null terminator
+        // Simple sort key: each byte as-is, terminated by 0x01, 0x01, 0x00
+        const keyLen = srcLen + 3; // bytes + separator + separator + null
+        if (cchDest === 0) return keyLen;
+        if (!lpDestStr) return 0;
+
+        const toWrite = Math.min(keyLen, cchDest);
+        for (let i = 0; i < Math.min(srcLen, toWrite); i++) {
+            mem[lpDestStr + i] = mem[lpSrcStr + i] || 0x01; // replace nulls with 0x01
+        }
+        // Append terminators if space allows
+        let pos = Math.min(srcLen, toWrite);
+        if (pos < toWrite) mem[lpDestStr + pos++] = 0x01;
+        if (pos < toWrite) mem[lpDestStr + pos++] = 0x01;
+        if (pos < toWrite) mem[lpDestStr + pos++] = 0x00;
+        return toWrite;
+    }
+
+    // Case mapping
+    const src = getCodePageDecoder(codePage).decode(asBufferSource(mem.subarray(lpSrcStr, lpSrcStr + srcLen)));
+    let result: string;
+    if (dwMapFlags & 0x00000100) { // LCMAP_LOWERCASE
+        result = src.toLowerCase();
+    } else if (dwMapFlags & 0x00000200) { // LCMAP_UPPERCASE
+        result = src.toUpperCase();
+    } else {
+        result = src;
+    }
+
+    const resultLen = cchSrc === -1 ? result.length : srcLen;
+    if (cchDest === 0) return resultLen;
+    if (!lpDestStr) return 0;
+
+    const toWrite = Math.min(resultLen, cchDest);
+    const resultBytes = encodeAnsi(result);
+    mem.set(resultBytes.subarray(0, toWrite), lpDestStr);
+    return toWrite;
+}
+
 export const exports: Record<string, ThunkImplementation> = {
     'GetSystemDefaultLangID': (ctx, mem, args) => {
         // LANGID = low word of LCID
@@ -522,59 +587,7 @@ export const exports: Record<string, ThunkImplementation> = {
         const cchSrc = args[3] | 0;
         const lpDestStr = args[4];
         const cchDest = args[5] | 0;
-
-        if (lpSrcStr === 0) return 0;
-
-        const LCMAP_SORTKEY = 0x00000400;
-
-        // Read ANSI source string
-        let srcLen: number;
-        if (cchSrc === -1) {
-            srcLen = 0;
-            while (lpSrcStr + srcLen < mem.length && mem[lpSrcStr + srcLen] !== 0) srcLen++;
-            srcLen++; // include null terminator
-        } else {
-            srcLen = cchSrc;
-        }
-
-        if (dwMapFlags & LCMAP_SORTKEY) {
-            // Sort key is a byte array: copy bytes + add null terminator
-            // Simple sort key: each byte as-is, terminated by 0x01, 0x01, 0x00
-            const keyLen = srcLen + 3; // bytes + separator + separator + null
-            if (cchDest === 0) return keyLen;
-            if (!lpDestStr) return 0;
-
-            const toWrite = Math.min(keyLen, cchDest);
-            for (let i = 0; i < Math.min(srcLen, toWrite); i++) {
-                mem[lpDestStr + i] = mem[lpSrcStr + i] || 0x01; // replace nulls with 0x01
-            }
-            // Append terminators if space allows
-            let pos = Math.min(srcLen, toWrite);
-            if (pos < toWrite) mem[lpDestStr + pos++] = 0x01;
-            if (pos < toWrite) mem[lpDestStr + pos++] = 0x01;
-            if (pos < toWrite) mem[lpDestStr + pos++] = 0x00;
-            return toWrite;
-        }
-
-        // Case mapping
-        const src = getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage).decode(asBufferSource(mem.subarray(lpSrcStr, lpSrcStr + srcLen)));
-        let result: string;
-        if (dwMapFlags & 0x00000100) { // LCMAP_LOWERCASE
-            result = src.toLowerCase();
-        } else if (dwMapFlags & 0x00000200) { // LCMAP_UPPERCASE
-            result = src.toUpperCase();
-        } else {
-            result = src;
-        }
-
-        const resultLen = cchSrc === -1 ? result.length : srcLen;
-        if (cchDest === 0) return resultLen;
-        if (!lpDestStr) return 0;
-
-        const toWrite = Math.min(resultLen, cchDest);
-        const resultBytes = encodeAnsi(result);
-        mem.set(resultBytes.subarray(0, toWrite), lpDestStr);
-        return toWrite;
+        return mapStringACore(mem, Locale, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest, EmulatorConfig.getInstance().ansiCodePage);
     },
 
     'LCMapStringEx': (ctx, mem, args) => {

@@ -26,7 +26,7 @@ import { scanfCore } from "./crt-scanf";
 import { getCodePageDecoder } from "./codepage-utils";
 import { invalidateLocaleCache, retireLocaleStubTable } from "./kernel32/locale-data";
 import { retireMbwcStubTable } from "./kernel32/codepage-lut";
-import { exports as kernel32LocaleExports } from "./kernel32/locale";
+import { exports as kernel32LocaleExports, mapStringACore } from "./kernel32/locale";
 import { EmulatorConfig } from "../core/emulator-config-manager";
 import { hypercallDataManager } from "../core/cpu/hypercall-data";
 import { asBufferSource } from "../../dom-buffer";
@@ -622,10 +622,22 @@ export class Msvcrt implements IModule {
         // here ever leaves LC_COLLATE/LC_CTYPE in) the documented CompareString*/LCMapString*
         // contract already reduces to the same ordinal comparison/mapping the real CRT's
         // internal fast path takes, so forwarding to the kernel32 implementation is faithful,
-        // not a shortcut.
+        // not a shortcut. __crtCompareString* really is the same 6-arg shape as kernel32's
+        // CompareString* (confirmed against ReactOS's msvcrt.spec), but __crtLCMapString* is
+        // 8 args — LCID, dwMapFlags, src, srclen, dst, dstlen, PLUS an explicit code page and
+        // an xflag — so it gets its own implementation that honors the CALLER's code page
+        // instead of always the process's configured one.
         exports["__crtCompareStringA"] = kernel32LocaleExports["CompareStringA"]!;
         exports["__crtCompareStringW"] = kernel32LocaleExports["CompareStringW"]!;
-        exports["__crtLCMapStringA"] = kernel32LocaleExports["LCMapStringA"]!;
+        exports["__crtLCMapStringA"] = (ctx, mem, args) => {
+            const [Locale, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest, codePage] = args;
+            return mapStringACore(mem, Locale ?? 0, dwMapFlags ?? 0, lpSrcStr ?? 0, cchSrc ?? 0,
+                lpDestStr ?? 0, cchDest ?? 0, codePage || EmulatorConfig.getInstance().ansiCodePage);
+        };
+        // __crtLCMapStringW's extra code-page/xflag args only matter for ANSI byte decode,
+        // which a wide-to-wide map never does, so it forwards to kernel32's LCMapStringW
+        // (the thunk still reads all 8 stack slots per the api.ts arity, so nothing past it
+        // is misread even though this handler only consumes the first 6).
         exports["__crtLCMapStringW"] = kernel32LocaleExports["LCMapStringW"]!;
         exports["isleadbyte"] = () => 0;
         exports["iswalpha"] = (ctx, mem, args) => this.iswctype(args[0] ?? 0, 0x0100 | 0x0001 | 0x0002);

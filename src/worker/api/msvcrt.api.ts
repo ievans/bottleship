@@ -197,13 +197,22 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_strnicmp", 3),
         makeFunc("strchr", 2),
         makeFunc("strrchr", 2),
-        // __crtCompareString*/__crtLCMapString* — msvcrt's own locale-aware compare/map,
-        // same 6-param shape as the kernel32 CompareString*/LCMapString* they wrap. Other
-        // CRT-linked DLLs (msvcp60) import these BY NAME for std::collate/std::ctype.
+        // __crtCompareString*/__crtLCMapString* — msvcrt's own locale-aware compare/map.
+        // Other CRT-linked DLLs (msvcp60) import these BY NAME for std::collate/std::ctype.
+        // Arities confirmed against ReactOS's msvcrt.spec (the classic msvcrt.dll export
+        // table, not the UCRT's __acrt_* equivalents): __crtCompareString* is `long long str
+        // long str long` — the SAME 6-param shape as kernel32 CompareString*, so these
+        // forward to it directly. __crtLCMapString* is `long long str long ptr long long
+        // long` — LCID, dwMapFlags, src, srclen, dst, dstlen, PLUS an explicit code page and
+        // an xflag the UCRT equivalent (__acrt_LCMapStringA's bError) uses for strict
+        // invalid-character handling. The extra code page is load-bearing: it lets a
+        // CRT-linked caller map a string in a DIFFERENT code page than the process's
+        // configured ANSI one, so it has its own 8-arg implementation (mapStringACore with
+        // an explicit code page) rather than forwarding to the 6-arg kernel32 export.
         makeFunc("__crtCompareStringA", 6),
         makeFunc("__crtCompareStringW", 6),
-        makeFunc("__crtLCMapStringA", 6),
-        makeFunc("__crtLCMapStringW", 6),
+        makeFunc("__crtLCMapStringA", 8),
+        makeFunc("__crtLCMapStringW", 8),
         // --- msvcr80 (VC8) additions. A 2005-era image imports these BY NAME, so a missing
         // declaration is not a missing feature: the import cannot be bound and the whole
         // image fails to load. The 64-bit values occupy two stack slots each.
