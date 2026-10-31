@@ -631,8 +631,12 @@ export class Msvcrt implements IModule {
         exports["__crtCompareStringW"] = kernel32LocaleExports["CompareStringW"]!;
         exports["__crtLCMapStringA"] = (ctx, mem, args) => {
             const [Locale, dwMapFlags, lpSrcStr, cchSrc, lpDestStr, cchDest, codePage] = args;
-            return mapStringACore(mem, Locale ?? 0, dwMapFlags ?? 0, lpSrcStr ?? 0, cchSrc ?? 0,
-                lpDestStr ?? 0, cchDest ?? 0, codePage || EmulatorConfig.getInstance().ansiCodePage);
+            // Thunk args are unsigned DWORDs: a guest's cchSrc=-1 (the documented "NUL-
+            // terminated, compute the length" sentinel) arrives as 4294967295, not -1, and
+            // mapStringACore's `cchSrc === -1` check would miss it — exactly as kernel32's
+            // own LCMapStringA already converts with `| 0` above.
+            return mapStringACore(mem, Locale ?? 0, dwMapFlags ?? 0, lpSrcStr ?? 0, (cchSrc ?? 0) | 0,
+                lpDestStr ?? 0, (cchDest ?? 0) | 0, codePage || EmulatorConfig.getInstance().ansiCodePage);
         };
         // __crtLCMapStringW's extra code-page/xflag args only matter for ANSI byte decode,
         // which a wide-to-wide map never does, so it forwards to kernel32's LCMapStringW
