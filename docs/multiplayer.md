@@ -146,6 +146,33 @@ lobby). Observed wire format:
   lookup that answers loopback for a dotted-decimal name (the offline stub used to) sends it nowhere, and the client
   times out after 10 s.
 
+## Verified: Empire Earth II LAN lobby (host leg; join leg partial)
+
+EE2's LAN lobby ("Multiplayer" → "LAN / Direct Connect") runs entirely over one UDP socket on
+port 26000 — no TCP socket is opened at any point observed (`lanState` shows a single bound UDP
+socket throughout hosting), unlike Empire Earth's UDP+TCP split above.
+`tools/harness/regression/empire-earth-2-lan.harness.ts` drives a real guest through both
+directions against a synthetic peer:
+
+- **Host**: creating a game broadcasts a periodic (~4 s) UDP 26000 announce: magic `ffff0001`,
+  a 1-byte opcode (`04` for announce), a 4-byte tick, then a `u16`-length-prefixed game name
+  (UTF-8, e.g. `Player's Game`) and a `u16`-length-prefixed version string (`1.2`), then a ~20-byte
+  trailer not decoded further. A synthetic peer sniffing the room decodes the name and confirms
+  the host keeps announcing.
+- **Join**: a synthetic peer broadcasting a spoofed copy of that announce is enough for the guest
+  to list it under "Available Games" — EE2 appears to trust any heard announce with no challenge,
+  gossip-style. Selecting it and clicking "Join Selected Game" sends a well-formed 56-byte binary
+  join-request datagram (same `ffff0001` magic, opcode `09`-ish, incrementing sequence, then a
+  negotiation-shaped body: `u32` fields that read as `44` (self length), `1`, `1400`, `4096`, `3`,
+  `10000`, `10000`, `5000`, `2`, `2` — plausibly MTU/buffer/retry/timeout parameters) directly to
+  the announced host's address, retried three times on a backoff when unanswered. The guest then
+  surfaces a clean "Unable to join game" dialog and stays healthy — no fault, no hang.
+- **Not reverse engineered**: the join-accept reply format. Two plausible replies (echoing the
+  join request back, and replying with the announce shape) were both tried live and neither
+  satisfied the client, so the harness's synthetic peer only announces and does not complete a
+  full join. This needs a disassembled `EE2.exe` (`tools/re/`'s pyghidra backend needs a JVM,
+  which this capture session's machine did not have installed) rather than more guessing.
+
 ## Tests
 
 `tools/tests/lan-stack.test.ts` (relay + stack), `tools/tests/lan-exports.test.ts` (thunks
