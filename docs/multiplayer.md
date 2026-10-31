@@ -154,19 +154,30 @@ socket throughout hosting), unlike Empire Earth's UDP+TCP split above.
 `tools/harness/regression/empire-earth-2-lan.harness.ts` drives a real guest through both
 directions against a synthetic peer:
 
-- **Host**: creating a game broadcasts a periodic (~4 s) UDP 26000 announce: magic `ffff0001`,
-  a 1-byte opcode (`04` for announce), a 4-byte tick, then a `u16`-length-prefixed game name
-  (UTF-8, e.g. `Player's Game`) and a `u16`-length-prefixed version string (`1.2`), then a ~20-byte
-  trailer not decoded further. A synthetic peer sniffing the room decodes the name and confirms
-  the host keeps announcing.
+- **Host**: creating a game broadcasts a periodic (~4 s) UDP 26000 announce, 70 bytes, with these
+  offsets confirmed across multiple independently-captured real packets FROM DIFFERENT HOSTING
+  SESSIONS (everything between is left explicitly undecoded, not assumed contiguous with its
+  neighbors — byte `[5]` looked like a fixed "announce opcode" (`04`) across one session's 5
+  captures, but reads `00` in another session, so it is NOT validated on): magic `ffff0001` at
+  `[0:4]`; a `00` pad byte at `[4]`; 23 further bytes at `[5:28]` not decoded; a `u16` LE game-name
+  length at `[28:30]` followed by the UTF-8 name itself (e.g. `Player's Game`); immediately after,
+  a `u16` LE version-string length followed by the version (`1.2`); then a ~20-byte trailer, not
+  decoded. A synthetic peer sniffing the room decodes the name and confirms the host keeps
+  announcing.
 - **Join**: a synthetic peer broadcasting a spoofed copy of that announce is enough for the guest
   to list it under "Available Games" — EE2 appears to trust any heard announce with no challenge,
   gossip-style. Selecting it and clicking "Join Selected Game" sends a well-formed 56-byte binary
-  join-request datagram (same `ffff0001` magic, opcode `09`-ish, incrementing sequence, then a
-  negotiation-shaped body: `u32` fields that read as `44` (self length), `1`, `1400`, `4096`, `3`,
-  `10000`, `10000`, `5000`, `2`, `2` — plausibly MTU/buffer/retry/timeout parameters) directly to
-  the announced host's address, retried three times on a backoff when unanswered. The guest then
-  surfaces a clean "Unable to join game" dialog and stays healthy — no fault, no hang.
+  join-request datagram directly to the announced host's address, retried three times (~3 s apart)
+  on a backoff when unanswered. Confirmed offsets (within one join attempt's 3 retries; not yet
+  cross-checked across separate attempts the way the host announce above was): magic `ffff0001` at
+  `[0:4]`; a `00` pad at `[4]`; a byte at `[5]` that stays constant across the 3 retries of one
+  attempt; a 4-byte LE value at `[6:10]` that increases by roughly the real elapsed ms between
+  retries (a tick); 2 more bytes at `[10:12]`, zero; then a negotiation-shaped body of ten `u32`
+  fields at `[12:56]` — BIG-endian, unlike every other multi-byte field decoded in this protocol
+  so far — that read as `0x02ff0100` (raw), `44` (= `56 - 12`, this body's own length), `1`, `1400`,
+  `4096`, `3`, `10000`, `10000`, `5000`, `2`, `2` — plausibly flags/version, then MTU/buffer/retry/
+  timeout parameters. The guest then surfaces a clean "Unable to join game" dialog
+  and stays healthy — no fault, no hang.
 - **Not reverse engineered**: the join-accept reply format. Two plausible replies (echoing the
   join request back, and replying with the announce shape) were both tried live and neither
   satisfied the client, so the harness's synthetic peer only announces and does not complete a

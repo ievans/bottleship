@@ -36,7 +36,7 @@
  * past that first run, as any repeated local or CI run will be after the first.
  */
 import { harness } from "../../harness";
-import { LanPeer, parseIp, sniff } from "../../lan-peer";
+import { LanPeer, parseIp, relayUrl, sniff } from "../../lan-peer";
 import { ipToString } from "../../../src/net/lan-protocol";
 
 const wgb = process.env.WGB;
@@ -81,7 +81,10 @@ async function noFault(when: string): Promise<void> {
 }
 
 // ---- boot and reach the LAN lobby --------------------------------------------------------
-await step("boot", harness().openWgb(bundle).lanJoin(ROOM).lanTrace({ enable: true, reset: true }).sleep(25_000)
+// lanJoin's own URL default resolves against the PAGE's origin (same-origin /lan/ proxy), which
+// is NOT necessarily RELAY — pass the same relayUrl(RELAY, ROOM) explicitly so the guest and
+// the synthetic peers below are provably on the same relay, not just usually on the same one.
+await step("boot", harness().openWgb(bundle).lanJoin(ROOM, relayUrl(RELAY, ROOM)).lanTrace({ enable: true, reset: true }).sleep(25_000)
     .key("Escape").sleep(4000).key("Escape").sleep(10_000));
 await step("multiplayer", click(UI.multiplayer, 3500));
 await step("hosting warning", click(UI.warningOk, 3500));
@@ -90,18 +93,35 @@ await noFault("at the LAN lobby");
 await step("lan lobby shot", harness().shot({ save: "empire-earth-2-lan/00-lobby.png" }));
 
 // ---- HOST leg: create a game, a synthetic peer sniffs the announce -----------------------
+// Confirmed layout (docs/multiplayer.md): magic ffff0001 [0:4], pad 00 [4], then (leaving
+// [5:28] explicitly undecoded — byte [5] looked like a fixed "announce opcode" (04) across
+// one hosting session's 5 captures, but reads 00 in another session: it is NOT a stable
+// marker, don't validate on it) a u16-LE name length at [28:30] + the UTF-8 name, immediately
+// followed by a u16-LE version length + the version string.
+function parseAnnounce(hex: string): { name: string; version: string } | null {
+    const b = Buffer.from(hex, "hex");
+    if (b.length < 30 || b.readUInt32BE(0) !== 0xffff0001 || b[4] !== 0x00) return null;
+    const nameLen = b.readUInt16LE(28);
+    const nameEnd = 30 + nameLen;
+    if (nameEnd + 2 > b.length) return null;
+    const verLen = b.readUInt16LE(nameEnd);
+    const verEnd = nameEnd + 2 + verLen;
+    if (verEnd > b.length) return null;
+    return { name: b.subarray(30, nameEnd).toString("utf8"), version: b.subarray(nameEnd + 2, verEnd).toString("utf8") };
+}
+
 const sniffing = sniff({ room: ROOM, relay: RELAY, ms: 20_000, log: () => {} });
 await step("create game dialog", click(UI.createGame, 3500));
 await step("confirm create", click(UI.createGameConfirm, 4000));
 await step("create-game warning", click(UI.createWarningOk, 3500));
 await harness().sleep(9000).run();
 const hostResult = await sniffing;
-const announces = hostResult.events.filter((e) => e.op === "udp" && e.dstPort === UDP_PORT && e.len > 0);
-if (announces.length < 2) fail(`expected at least 2 host announces on UDP ${UDP_PORT}, saw ${announces.length}`);
-const body = Buffer.from(announces[0]!.hex, "hex");
-const nameLen = body.readUInt16LE(28);
-const name = body.subarray(30, 30 + nameLen).toString("utf8");
-if (name !== "Player's Game") fail(`host announce carried an unexpected game name: ${JSON.stringify(name)}`);
+const announces = hostResult.events
+    .filter((e) => e.op === "udp" && e.dstPort === UDP_PORT && e.len > 0)
+    .map((e) => parseAnnounce(e.hex))
+    .filter((a): a is { name: string; version: string } => a !== null && a.name === "Player's Game");
+if (announces.length < 2) fail(`expected at least 2 valid host announces (name "Player's Game") on UDP ${UDP_PORT}, saw ${announces.length}`);
+const name = announces[0]!.name;
 await noFault("after hosting");
 await step("host shot", harness().shot({ save: "empire-earth-2-lan/01-hosting.png" }));
 
@@ -109,6 +129,21 @@ await step("cancel hosting", click(UI.cancelHosting, 2500));
 await noFault("after cancelling hosting");
 
 // ---- JOIN leg: a synthetic peer announces; the guest discovers and attempts to join -------
+// The guest is always the first peer to join the room (in the "boot" step above, before any
+// synthetic peer here), so it is provably 192.168.77.2 — this is also the convention
+// empire-earth-lan.harness.ts uses for the same reason.
+const GUEST_IP = parseIp("192.168.77.2")!;
+// Confirmed layout (docs/multiplayer.md): magic ffff0001 [0:4], pad 00 [4], exactly 56 bytes,
+// with a self-length field at [16:20] that reads 44 (= 56 - 12, the negotiation body's own
+// length) in every capture seen.
+function isJoinRequest(data: Uint8Array): boolean {
+    if (data.length !== 56) return false;
+    const b = Buffer.from(data);
+    // The negotiation body's own fields are big-endian, unlike the announce packet's
+    // little-endian string-length prefixes — confirmed empirically, not a typo.
+    return b.readUInt32BE(0) === 0xffff0001 && b[4] === 0x00 && b.readUInt32BE(16) === 44;
+}
+
 const peer = await LanPeer.join({ room: ROOM, relay: RELAY, log: () => {} });
 const SOCK_UDP = 2;
 const s = peer.socket(SOCK_UDP);
@@ -119,7 +154,7 @@ const broadcast = parseIp("broadcast")!;
 const joinRequests: string[] = [];
 let lastAnnounce = 0;
 const joinStart = Date.now();
-let clicked = false;
+let joinClick: Promise<{ ok: boolean; error?: unknown }> | null = null;
 while (Date.now() - joinStart < 20_000) {
     if (Date.now() - lastAnnounce > 3000) {
         peer.stack.sendTo(s, broadcast, UDP_PORT, ANNOUNCE);
@@ -128,28 +163,32 @@ while (Date.now() - joinStart < 20_000) {
     for (;;) {
         const r = peer.stack.recv(s, 65535, false);
         if (r.err !== 0) break;
-        if (r.data.length !== ANNOUNCE.length) {
+        // Must be addressed to us specifically (not a broadcast this peer also just happens
+        // to receive) and structurally a join request, not incidental traffic of some other
+        // length and shape.
+        if (r.ip === GUEST_IP && isJoinRequest(r.data)) {
             joinRequests.push(Buffer.from(r.data).toString("hex"));
             // No accept-reply format is known (see header comment) — the request itself,
             // arriving well-formed and addressed to us, is what this leg verifies.
         }
     }
-    if (!clicked && Date.now() - joinStart > 1500) {
-        clicked = true;
-        harness().clickAt(...UI.gameListRow).sleep(1000).clickAt(...UI.joinSelectedGame).sleep(1000)
+    if (!joinClick && Date.now() - joinStart > 1500) {
+        joinClick = harness().clickAt(...UI.gameListRow).sleep(1000).clickAt(...UI.joinSelectedGame).sleep(1000)
             .clickAt(...UI.joinSelectedGame).sleep(3000).shot({ save: "empire-earth-2-lan/02-join-attempt.png" })
-            .run().catch(() => {});
+            .run();
     }
     await new Promise((r) => setTimeout(r, 120));
 }
 peer.leave();
 
+if (!joinClick) fail("the join click chain never started");
+const joinClickResult = await joinClick;
+if (!joinClickResult.ok) fail(`the join click chain failed: ${JSON.stringify(joinClickResult.error)}`);
+
 if (joinRequests.length === 0) {
-    fail("the guest never sent a join request to the announced synthetic host");
+    fail("the guest never sent a valid join request, from itself, to the announced synthetic host");
 }
-const magic = joinRequests[0]!.slice(0, 8);
-if (magic !== "ffff0001") fail(`join request did not carry the expected magic: ${joinRequests[0]!.slice(0, 16)}`);
 await noFault("after attempting to join");
 console.log(`empire-earth-2-lan: host leg ok (announce "${name}" decoded), join leg ok ` +
-    `(${joinRequests.length} join request(s) reached the synthetic host, magic ${magic}); ` +
+    `(${joinRequests.length} valid join request(s) reached the synthetic host from the guest); ` +
     `full join-accept not exercised (reply format unknown — see header comment)`);
