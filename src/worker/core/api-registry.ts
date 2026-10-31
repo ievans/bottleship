@@ -11,6 +11,7 @@ import { xinput1_3Module } from "../api/xinput1_3.api";
 import { msvcp140Module } from "../api/msvcp140.api";
 import { bcryptModule } from "../api/bcrypt.api";
 import { d3dim700Module } from "../api/d3dim700.api";
+import { steamApiModule } from "../api/steam_api.api";
 import { kernel32VistaSupplement } from "../api/kernel32-vista-supplement";
 import { REFERENCE_ARG_COUNTS } from "../reference-argcounts.generated";
 import { Logger, LogCategory } from "./logger";
@@ -97,6 +98,7 @@ export class APIRegistry {
         this.registerModule(msvcp140Module);
         this.registerModule(bcryptModule);
         this.registerModule(d3dim700Module);
+        this.registerModule(steamApiModule);
 
         try {
             const apiModules = import.meta.glob('../api/*.api.ts', { eager: true });
