@@ -96,6 +96,7 @@ export const winmmModule: ModuleDescriptor = {
         makeFunc("mmioSeek", 3),
         makeFunc("mmioGetInfo", 3),
         makeFunc("mmioSetInfo", 3),
+        makeFunc("mmioSetBuffer", 4),
         makeFunc("mmioDescend", 4),
         makeFunc("mmioAscend", 3),
         makeFunc("mmioAdvance", 3),

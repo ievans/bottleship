@@ -899,9 +899,10 @@ export function createSurfaceBltFlipExports(context: DDrawContext): Record<strin
         let colorKeyOverride: { low: number; high: number } | undefined;
         if ((dwFlags & DDBLT_KEYSRCOVERRIDE) && lpDDBltFx && isValidAddress(mem, lpDDBltFx, DDBLTFX_SIZE)) {
             const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+            // A DDCOLORKEY is one value (see SetColorKey); dwColorSpaceHighValue is stack garbage unless the app
+            // set it, and masked to the pixel format it would form an empty range.
             const low = view.getUint32(lpDDBltFx + DDBLTFX_OFFSETS.ddckSrcColorkey, true);
-            const high = view.getUint32(lpDDBltFx + DDBLTFX_OFFSETS.ddckSrcColorkey + 4, true);
-            colorKeyOverride = { low, high };
+            colorKeyOverride = { low, high: low };
         }
         const colorKey = colorKeyOverride ?? (((dwFlags & DDBLT_KEYSRC) && srcState.srcColorKey) ? srcState.srcColorKey : undefined);
         const useColorKey = !!colorKey;

@@ -532,5 +532,53 @@
     "year": "2001",
     "genre": "RTS",
     "enabled": true
+  },
+  {
+    "id": "civilization3-complete",
+    "name": "Sid Meier's Civilization III",
+    "subtitle": "Complete",
+    "wgbUrl": "/apps/external-wgb/civilization3-complete.wgb",
+    "coverUrl": "",
+    "description": "Build an empire to stand the test of time, with the Play the World and Conquests expansions included.",
+    "year": "2001",
+    "genre": "Strategy",
+    "gogUrl": "https://www.gog.com/en/game/sid_meiers_civilization_iii_complete",
+    "enabled": false
+  },
+  {
+    "id": "close-combat-2",
+    "name": "Close Combat II",
+    "subtitle": "A Bridge Too Far",
+    "wgbUrl": "/apps/external-wgb/close-combat-2.wgb",
+    "coverUrl": "",
+    "description": "Squad-level real-time tactics over Operation Market Garden, commanding infantry and armor through a living, morale-driven battlefield.",
+    "year": "1997",
+    "genre": "Tactical Strategy",
+    "gogUrl": "https://www.gog.com/en/game/close_combat_2",
+    "enabled": true
+  },
+  {
+    "id": "simcity-3000-unlimited",
+    "name": "SimCity 3000",
+    "subtitle": "Unlimited",
+    "wgbUrl": "/apps/external-wgb/simcity-3000-unlimited.wgb",
+    "coverUrl": "",
+    "description": "Plan, zone and manage a city from a rural town to a sprawling metropolis, with the Unlimited expansion's extra buildings and scenarios.",
+    "year": "1999",
+    "genre": "City Builder",
+    "gogUrl": "https://www.gog.com/en/game/simcity_3000_unlimited",
+    "enabled": true
+  },
+  {
+    "id": "rollercoaster-tycoon-deluxe",
+    "name": "RollerCoaster Tycoon",
+    "subtitle": "Deluxe",
+    "wgbUrl": "/apps/external-wgb/rollercoaster-tycoon-deluxe.wgb",
+    "coverUrl": "",
+    "description": "Design and run a theme park, building coasters and rides while keeping guests happy and the books balanced.",
+    "year": "1999",
+    "genre": "Simulation",
+    "gogUrl": "https://www.gog.com/en/game/rollercoaster_tycoon_deluxe",
+    "enabled": false
   }
 ]

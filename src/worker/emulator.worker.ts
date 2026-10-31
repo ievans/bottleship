@@ -2647,6 +2647,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcp140.setMsvcrt(msvcrt);
       msvcp140.initialize(process);
       msvcp60.setMsvcrt(msvcrt);
+      msvcrt.setMsvcp60(msvcp60);
       msvcp60.initialize(process);
       crtdll.initialize(process);
       winspool.initialize(process);
