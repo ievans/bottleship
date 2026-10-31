@@ -15,6 +15,8 @@ import { patBlt } from './gdi-blit';
 import { extTextOut } from './ext-text-out';
 import { Mem } from '../../core/memory/mem-accessor';
 import { isValidAddress } from '../../core/memory/address-guard';
+import { getFontSetEpoch } from './font-resource';
+import { measureVerticalMetrics } from './text-metrics';
 // Track GetPixel HDC usage for profiling
 const getPixelHdcStats = new Map<number, { count: number; maxX: number; maxY: number }>();
 
@@ -605,28 +607,51 @@ function dibToCanvas(
 /**
  * Measure text extent using the DC's current font, writing SIZE struct (cx, cy)
  */
+const EXTENT_CACHE_MAX_PER_FONT = 4096;
+const extentCache = new Map<string, Map<string, readonly [number, number]>>();
+let extentCacheEpoch = -1;
+
 function measureTextExtent(hdc: number, text: string, lpSize: number, mem: Uint8Array): void {
     const gdi = System.getInstance().gdiContext;
     const dcCtx = gdi.getMeasureContext(hdc);
-    const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
 
-    let cx = text.length * 8; // fallback: 8px per char
-    let cy = 16;              // fallback: 16px height
+    // The measurement is a pure function of (selected font, text) and the installed font set.
+    const epoch = getFontSetEpoch();
+    if (epoch !== extentCacheEpoch) {
+        extentCache.clear();
+        extentCacheEpoch = epoch;
+    }
+    const font = dcCtx ? gdi.hdcStates.get(hdc)?.font : undefined;
+    let perFont = font !== undefined ? extentCache.get(font) : undefined;
+    let hit = perFont?.get(text);
 
-    if (dcCtx) {
-        try {
-            const metrics = dcCtx.measureText(text);
-            cx = Math.round(metrics.width);
-            if (metrics.fontBoundingBoxAscent !== undefined) {
-                cy = Math.ceil(metrics.fontBoundingBoxAscent + metrics.fontBoundingBoxDescent);
+    if (hit === undefined) {
+        let cx = text.length * 8; // fallback: 8px per char
+        let cy = 16;              // fallback: 16px height
+        if (dcCtx) {
+            try {
+                cx = Math.round(dcCtx.measureText(text).width);
+                cy = measureVerticalMetrics(dcCtx).height;
+            } catch (_) {
+                // keep defaults
             }
-        } catch (_) {
-            // keep defaults
+            if (font !== undefined) {
+                if (!perFont) {
+                    perFont = new Map();
+                    extentCache.set(font, perFont);
+                }
+                if (perFont.size >= EXTENT_CACHE_MAX_PER_FONT) perFont.clear();
+                hit = [cx, cy];
+                perFont.set(text, hit);
+            }
         }
+        if (hit === undefined) hit = [cx, cy];
     }
 
-    view.setInt32(lpSize, cx, true);     // SIZE.cx
-    view.setInt32(lpSize + 4, cy, true); // SIZE.cy
+    const plain = toPlainGuestMemory(mem);
+    const cx = hit[0], cy = hit[1];
+    plain[lpSize] = cx; plain[lpSize + 1] = cx >>> 8; plain[lpSize + 2] = cx >>> 16; plain[lpSize + 3] = cx >>> 24;
+    plain[lpSize + 4] = cy; plain[lpSize + 5] = cy >>> 8; plain[lpSize + 6] = cy >>> 16; plain[lpSize + 7] = cy >>> 24;
 }
 
 function writeTextMetrics(hdc: number, lptm: number, mem: Uint8Array): void {
@@ -641,11 +666,9 @@ function writeTextMetrics(hdc: number, lptm: number, mem: Uint8Array): void {
 
     if (dcCtx) {
         try {
-            const m = dcCtx.measureText('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz');
-            if (m.fontBoundingBoxAscent !== undefined) {
-                ascent   = Math.ceil(m.fontBoundingBoxAscent);
-                descent  = Math.ceil(m.fontBoundingBoxDescent);
-            }
+            const vm = measureVerticalMetrics(dcCtx);
+            ascent = vm.ascent;
+            descent = vm.descent;
             aveWidth = Math.round(dcCtx.measureText('x').width);
             maxWidth = 0;
             for (let code = 32; code <= 255; code++) {
@@ -1675,6 +1698,25 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         return count > 0 ? count : 0;
     };
 
+    // AnimatePalette - replaces only the entries flagged PC_RESERVED
+    exports['AnimatePalette'] = (ctx, mem, args): number => {
+        const hPal = args[0];
+        const iStart = args[1] >>> 0;
+        const cEntries = args[2] >>> 0;
+        const pPalEntries = args[3] >>> 0;
+        const entries = paletteStore.get(hPal);
+        if (!entries || !pPalEntries) return 0;
+        const PC_RESERVED = 1;
+        const end = Math.min(iStart + cEntries, 256);
+        for (let i = iStart; i < end; i++) {
+            if (!(entries[i * 4 + 3] & PC_RESERVED)) continue;
+            const src = pPalEntries + (i - iStart) * 4;
+            for (let b = 0; b < 4; b++) entries[i * 4 + b] = mem[src + b];
+        }
+        Logger.verbose(LogCategory.GDI32, `AnimatePalette(hPal=0x${hPal.toString(16)}, start=${iStart}, count=${cEntries})`);
+        return 1;
+    };
+
     // GetPaletteEntries - retrieves entries from a logical palette
     exports['GetPaletteEntries'] = (ctx, mem, args): number => {
         const hPal = args[0];
@@ -1952,8 +1994,7 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         const lpString = args[1];
         const c = args[2];
         const lpsz = args[3];
-        const text = Marshaler.readString(mem, lpString).substring(0, c);
-        Logger.verbose(LogCategory.GDI32, `GetTextExtentPointA: '${text}'`);
+        const text = Marshaler.readCountedString(mem, lpString, c);
         if (lpsz) {
             measureTextExtent(hdc, text, lpsz, mem);
         }
@@ -1965,8 +2006,7 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         const lpString = args[1];
         const c = args[2];
         const lpSize = args[3];
-        const text = Marshaler.readString(mem, lpString).substring(0, c);
-        Logger.verbose(LogCategory.GDI32, `GetTextExtentPoint32A: hdc=0x${hdc.toString(16)}, '${text}', len=${c}`);
+        const text = Marshaler.readCountedString(mem, lpString, c);
         if (lpSize) {
             measureTextExtent(hdc, text, lpSize, mem);
         }
@@ -2006,10 +2046,7 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
                 for (let i = 0; i < text.length; i++) {
                     cum[i] = Math.round(dcCtx.measureText(text.substring(0, i + 1)).width);
                 }
-                const fm = dcCtx.measureText(text || 'Wg');
-                if (fm.fontBoundingBoxAscent !== undefined) {
-                    cy = Math.ceil(fm.fontBoundingBoxAscent + fm.fontBoundingBoxDescent);
-                }
+                cy = measureVerticalMetrics(dcCtx).height;
             } catch (_) { /* fall through to 8px/char fallback below */ }
         }
         for (let i = 0; i < text.length; i++) {

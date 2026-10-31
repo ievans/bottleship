@@ -926,7 +926,7 @@ export class Ole32 implements IModule {
         // DirectMusic and multimedia-streaming classes answer for their own interfaces: one
         // object is reached as several (IDirectMusicObject, IPersistStream, the class's own),
         // none by IID alone.
-        for (const name of ["dmusic", "amstream"]) {
+        for (const name of ["dmusic", "amstream", "dpnet"]) {
             const provider = this.process.modules.get(name) as
                 { coCreateInstance?: (clsid: string, iid: string, ppv: number) => number | null } | undefined;
             const result = provider?.coCreateInstance?.(clsidNormalized, iidNormalized, ppv);

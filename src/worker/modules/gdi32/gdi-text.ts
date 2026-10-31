@@ -9,6 +9,7 @@ import { Logger, LogCategory } from "../../core/logger";
 import { drawTextPrefixOptions, fillTextWithMnemonic, parseMnemonicText } from "../win32-text";
 import { pullDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
 import type { GDIContext } from './context';
+import { measureVerticalMetrics } from './text-metrics';
 
 const NONANTIALIASED_QUALITY = 3;
 
@@ -142,7 +143,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         if (hAlign === TA_CENTER) x -= metrics.width / 2;
         else if (hAlign === TA_RIGHT) x -= metrics.width;
         const vAlign = align & TA_BASELINE;
-        if (vAlign === TA_BASELINE) y -= metrics.fontBoundingBoxAscent ?? state.fontSize * 0.8;
+        if (vAlign === TA_BASELINE) y -= measureVerticalMetrics(ctx, state.fontSize).ascent;
         else if (vAlign === TA_BOTTOM) y -= state.fontSize;
         if (updateCp) gdi.setCurrentPosition(hdc, x + metrics.width, refY);
     }
@@ -318,17 +319,7 @@ interface LaidOutLine {
  *  (writeTextMetrics), so a guest that sizes its own rects from tmHeight agrees with what we
  *  lay out: a rect one tmHeight tall must hold exactly one line. */
 function lineAdvance(ctx: TextCtx, fontSize: number, externalLeading: boolean): number {
-    let ascent = fontSize * 0.8;
-    let descent = fontSize * 0.2;
-    try {
-        const m = ctx.measureText('ABCgjpqy');
-        if (m.fontBoundingBoxAscent !== undefined) {
-            ascent = m.fontBoundingBoxAscent;
-            descent = m.fontBoundingBoxDescent;
-        }
-    } catch { /* keep the font-size estimate */ }
-    ascent = Math.ceil(ascent);
-    const height = Math.max(1, ascent + Math.ceil(descent));
+    const { ascent, height } = measureVerticalMetrics(ctx, fontSize);
     return externalLeading ? height + Math.round(ascent * 0.15) : height;
 }
 

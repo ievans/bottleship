@@ -254,7 +254,7 @@ export function pullDibSectionRect(
  * draw that never wrote back is discarded there). Mirrors the canvas rect into 32bpp
  * bits as B,G,R, preserving the reserved/alpha byte the app owns; into 24bpp as B,G,R;
  * into 16bpp through the section's colour masks; into 1bpp as MSB-first colour-table
- * indices. No-op for the palettized depths in between.
+ * indices, into 8bpp as the nearest colour-table index. No-op for 4bpp.
  */
 export function writeBackDibSectionRect(
     hBitmap: number,
@@ -265,7 +265,8 @@ export function writeBackDibSectionRect(
     const obj = unwrapBitmapObj(hBitmap);
     if (!obj || !obj.bitsPtr || !obj.dibStride) return;
     const bpp = obj.dibBpp ?? 32;
-    if (bpp !== 32 && bpp !== 24 && bpp !== 16 && bpp !== 1) return;
+    if (bpp !== 32 && bpp !== 24 && bpp !== 16 && bpp !== 8 && bpp !== 1) return;
+    if (bpp === 8 && !obj.dibPalette?.length) return;
     // Per-pixel write-back below; getCurrentMemory() hands out v86's Proxy, whose
     // per-element trap V8 cannot JIT. Nothing here re-enters the guest, so the plain
     // view cannot go stale mid-call.
@@ -284,6 +285,10 @@ export function writeBackDibSectionRect(
         writeBackMonochromeRect(obj, mem, src, cx, cy, cw, ch, bh);
         return;
     }
+    if (bpp === 8) {
+        writeBackIndexedRect(obj, mem, src, cx, cy, cw, ch, bh);
+        return;
+    }
     if (bpp === 16 || bpp === 24) {
         writeBackRgbRect(obj, mem, src, cx, cy, cw, ch, bh, bpp);
         return;
@@ -296,6 +301,46 @@ export function writeBackDibSectionRect(
             mem[o] = src[si + 2];
             mem[o + 1] = src[si + 1];
             mem[o + 2] = src[si];
+        }
+    }
+}
+
+/**
+ * 8bpp stores colour-table INDICES. A pixel whose colour already equals the entry its
+ * current index names keeps that index (tables repeat colours, and re-picking would rewrite
+ * data the app owns); otherwise the nearest entry wins, memoized per colour.
+ */
+function writeBackIndexedRect(
+    obj: BitmapUserObj,
+    mem: Uint8Array,
+    src: Uint8ClampedArray,
+    cx: number, cy: number, cw: number, ch: number, bh: number,
+): void {
+    const palette = obj.dibPalette!;
+    const n = Math.min(palette.length, 256);
+    const nearest = new Map<number, number>();
+    const rgb = (c: number) => c & 0xffffff;
+    for (let ry = 0; ry < ch; ry++) {
+        const dibY = obj.dibTopDown ? cy + ry : bh - 1 - (cy + ry);
+        let o = obj.bitsPtr! + dibY * obj.dibStride! + cx;
+        let si = ry * cw * 4;
+        for (let rx = 0; rx < cw; rx++, si += 4, o++) {
+            const r = src[si]!, g = src[si + 1]!, b = src[si + 2]!;
+            const key = (r << 16) | (g << 8) | b;
+            const current = mem[o]!;
+            if (current < n && rgb(palette[current]!) === key) continue;
+            let index = nearest.get(key);
+            if (index === undefined) {
+                let best = Infinity;
+                index = 0;
+                for (let i = 0; i < n; i++) {
+                    const c = palette[i]!;
+                    const d = (r - ((c >>> 16) & 0xff)) ** 2 + (g - ((c >>> 8) & 0xff)) ** 2 + (b - (c & 0xff)) ** 2;
+                    if (d < best) { best = d; index = i; if (d === 0) break; }
+                }
+                nearest.set(key, index);
+            }
+            mem[o] = index;
         }
     }
 }

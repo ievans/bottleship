@@ -357,8 +357,8 @@ export interface PendingTimerCallback {
     sourceTimer?: WinMMTimer;
     /** If set, use these args directly instead of [timerId, 0, dwUser, 0, 0] */
     args?: number[];
-    /** Runs once the guest callback has returned (a thread-pool callback instance ending). */
-    onReturn?: () => void;
+    /** Runs once the guest callback has returned, with its EAX (a thread-pool callback instance ending). */
+    onReturn?: (eax: number) => void;
 }
 
 interface WaveFormat {
@@ -965,7 +965,7 @@ export class WinMM implements IModule {
      * The callback is self-cleaning stdcall (dispatch passes callerCleanup=0). No-op if the
      * pump could not be created.
      */
-    postGuestCallback(callbackAddr: number, args: number[], onReturn?: () => void): boolean {
+    postGuestCallback(callbackAddr: number, args: number[], onReturn?: (eax: number) => void): boolean {
         if (!callbackAddr) return false;
         this.ensureTimerThread();
         if (this.timerThreadId === 0) return false;
@@ -993,11 +993,11 @@ export class WinMM implements IModule {
     }
 
     /** The timer-pump callback that just returned: finish a posted callback's instance. */
-    notePostedCallbackReturned(callbackAddr: number): void {
+    notePostedCallbackReturned(callbackAddr: number, eax: number): void {
         const cb = this.dispatchingPosted;
         if (!cb || cb.callbackAddr !== (callbackAddr >>> 0)) return;
         this.dispatchingPosted = null;
-        cb.onReturn?.();
+        cb.onReturn?.(eax >>> 0);
     }
 
     /**

@@ -74,6 +74,14 @@ export function registerGdiCommands(svc: HarnessService): void {
             probe.font = state.font;
             const expected = probe.font;
             const metrics = ctx?.measureText(opts.text ?? 'H');
+            let alphabetic: { ascent: number; descent: number } | null = null;
+            if (ctx) {
+                const saved = ctx.textBaseline;
+                ctx.textBaseline = 'alphabetic';
+                const am = ctx.measureText(opts.text ?? 'H');
+                alphabetic = { ascent: am.fontBoundingBoxAscent, descent: am.fontBoundingBoxDescent };
+                ctx.textBaseline = saved;
+            }
             return {
                 hdc: hex(hdc), hFont: hex(state.hFont), hBitmap: hex(state.hBitmap),
                 width: ctx?.canvas.width ?? 0, height: ctx?.canvas.height ?? 0,
@@ -84,6 +92,8 @@ export function registerGdiCommands(svc: HarnessService): void {
                     advance: metrics.width, left: metrics.actualBoundingBoxLeft, right: metrics.actualBoundingBoxRight,
                     ascent: metrics.fontBoundingBoxAscent, descent: metrics.fontBoundingBoxDescent,
                 } : null,
+                textBaseline: ctx?.textBaseline ?? null,
+                alphabetic,
             };
         });
         const mismatches = dcs.filter(dc => dc.mismatch).length;

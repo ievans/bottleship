@@ -4,6 +4,7 @@
 import { MemoryGuard } from "./mem-guard";
 import { EmulatorConfig, getCodePageDecoder, encodeAnsiString } from "../emulator-config-manager";
 import { asBufferSource } from "../../../dom-buffer";
+import { toPlainGuestMemory } from "./guest-memory";
 
 export interface StructField {
     name: string;
@@ -15,6 +16,23 @@ export interface StructDef {
     name: string;
     size: number;
     fields: StructField[];
+}
+
+const ASCII_FAST_MAX = 64;
+
+/** ANSI bytes → string. Every supported code page maps 0x00-0x7F to ASCII, so short pure-ASCII runs skip TextDecoder. */
+function decodeAnsiRange(plain: Uint8Array, start: number, end: number): string {
+    if (end - start <= ASCII_FAST_MAX) {
+        let s = '';
+        let i = start;
+        for (; i < end; i++) {
+            const b = plain[i];
+            if (b >= 0x80) break;
+            s += String.fromCharCode(b);
+        }
+        if (i === end) return s;
+    }
+    return getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage).decode(asBufferSource(plain.subarray(start, end)));
 }
 
 export class Marshaler {
@@ -105,12 +123,19 @@ export class Marshaler {
 
     static readString(memory: Uint8Array, address: number): string {
         if (address <= 0 || address >= memory.length) return '';
-        // Find null terminator
-        let end = address;
-        while (end < memory.length && memory[end] !== 0) end++;
+        // A plain view: indexing v86's Proxy traps per byte, indexOf runs natively.
+        const plain = toPlainGuestMemory(memory);
+        let end = plain.indexOf(0, address);
+        if (end < 0) end = plain.length;
         if (end === address) return '';
-        return getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage)
-            .decode(asBufferSource(memory.subarray(address, end)));
+        return decodeAnsiRange(plain, address, end);
+    }
+
+    /** Exactly `count` bytes at `address` (GetTextExtentPoint32A-style counted strings: no NUL scan). */
+    static readCountedString(memory: Uint8Array, address: number, count: number): string {
+        if (address <= 0 || count <= 0 || address >= memory.length) return '';
+        const plain = toPlainGuestMemory(memory);
+        return decodeAnsiRange(plain, address, Math.min(address + count, plain.length));
     }
 
     static readStringW(memory: Uint8Array, address: number): string {

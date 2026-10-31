@@ -469,9 +469,6 @@ export class CallbackManager {
                     callback.ownerThreadId ?? 0,
                     callback.callbackAddress >>> 0
                 );
-                (System.getInstance().process?.getModule('winmm') as
-                    { notePostedCallbackReturned?(addr: number): void } | undefined)
-                    ?.notePostedCallbackReturned?.(callback.callbackAddress >>> 0);
                 // End the cycle slice: the return resumes at the spin loop, which v86
                 // would otherwise honestly execute until the next tick boundary.
                 sch.onWinmmTimerCallbackReturned?.();
@@ -500,6 +497,14 @@ export class CallbackManager {
         }
 
         const returnValue = view.getUint32(esp, true);
+        // EAX holds the callback id at this OUT; the guest's real return value is the PUSH EAX on the stack.
+        if ((callback.source ?? '') === 'winmm_timer') {
+            try {
+                (System.getInstance().process?.getModule('winmm') as
+                    { notePostedCallbackReturned?(addr: number, eax: number): void } | undefined)
+                    ?.notePostedCallbackReturned?.(callback.callbackAddress >>> 0, returnValue);
+            } catch { }
+        }
         let callerRet = view.getUint32(esp + 4, true) >>> 0;
         let callerRetInStubPool = callerRet >= this.stubPoolBase && callerRet < this.stubPoolEnd;
         let callerRetLowAddress = callerRet < 0x100000;
