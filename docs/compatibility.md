@@ -105,18 +105,27 @@ Miles) and the resolution/rasterizer values the installer writes under
 game, so its bundle carries both installed folders and also
 `HKCU\Software\Mad Doc Software\EE-AOC`.
 
-§ GOG edition, checked 2026-10-30 with the unmodified Gold Edition (v1.2) game files:
+§ GOG edition, checked 2026-10-30/31 with the unmodified Gold Edition (v1.2) game files:
 boots through the real production UI — main menu, Single Player → Play Skirmish setup
 (player/civ/map/environment), launch, and into actual gameplay with a lit, textured
-world and a live HUD (resources, build queue, minimap). Not yet covered: unit control,
-save/load, the campaign, and multiplayer — this is a boot/render milestone, not the
-full loop `playable` requires for the original Empire Earth above. Needed a 2048MB
-(not the installer-default 1536MB) manifest RAM to avoid a `LMemorySystemPool::Alloc`
-guest OOM partway through a session; bundle otherwise matches Empire Earth's recipe:
-1024 × 768 × 32, `--os winxp --ram 2048`, `--app-dir-dlls "binkw32.dll,mss32.dll"`.
-See issue #8 for the bring-up history (`GetWindow` null-handle spin, a vertex/index
-buffer Release leak, and a `Clear()` rect-handling bug that left the world viewport
-black while the HUD rendered fine — all generic engine fixes, not EE2-specific).
+world and a live HUD (resources, build queue, minimap). Also verified: native Save Game
+from the in-game menu, Quit this Game → Yes to the post-game statistics screen, and
+Single Player → Play Saved Game loading that save back (same worker) into the identical
+world state with time continuing from the save point — no fault either direction. LAN
+lobby host and join network plumbing also verified against `tools/lan-peer.ts`
+(`tools/harness/regression/empire-earth-2-lan.harness.ts`): hosting broadcasts a
+decodable UDP announce, and joining a synthetic peer's announce sends a well-formed
+join-request datagram — see `docs/multiplayer.md` for the wire format and the one open
+gap (the join-accept reply isn't reverse engineered, so a full join isn't exercised).
+Not yet covered: unit control, the campaign, and an actual two-guest multiplayer match —
+this is a boot/save-load/LAN-plumbing milestone, not the full loop `playable` requires
+for the original Empire Earth above. Needed a 2048MB (not the installer-default 1536MB)
+manifest RAM to avoid a `LMemorySystemPool::Alloc` guest OOM partway through a session;
+bundle otherwise matches Empire Earth's recipe: 1024 × 768 × 32, `--os winxp --ram 2048`,
+`--app-dir-dlls "binkw32.dll,mss32.dll"`. See issue #8 for the bring-up history
+(`GetWindow` null-handle spin, a vertex/index buffer Release leak, and a `Clear()`
+rect-handling bug that left the world viewport black while the HUD rendered fine — all
+generic engine fixes, not EE2-specific).
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,
 with targeted stack, stream, lifetime and parser regressions. The October 12 integration
