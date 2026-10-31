@@ -6,6 +6,7 @@ import { ThunkImplementation } from '../../core/thunking/thunk-dispatcher';
 import { Logger, LogCategory } from '../../core/logger';
 import { Mem } from '../../core/memory/mem-accessor';
 import { System } from '../../core/system';
+import { freeComObject } from '../../core/com/com-memory';
 import {
     addComRef,
     clearRenderTargetOverrideForSurface,
@@ -1057,6 +1058,8 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         }
         device?.releaseBuffer("vb", vbPtr);
         resourceToDevice.delete(vbPtr);
+        const process = System.getInstance().process;
+        if (process) freeComObject(process.memory, vbPtr);
         return 0;
     };
 
@@ -1074,6 +1077,8 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         }
         device?.releaseBuffer("ib", ibPtr);
         resourceToDevice.delete(ibPtr);
+        const process = System.getInstance().process;
+        if (process) freeComObject(process.memory, ibPtr);
         return 0;
     };
 

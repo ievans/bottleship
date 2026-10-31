@@ -611,10 +611,25 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
      * leak is not theoretical: it is the difference between a short demo and a real session.
      */
     releaseBuffer(kind: "vb" | "ib", ptr: number): void {
+        // A Release can land between a recorded programmable draw and its submit — that draw
+        // still references this GPUBuffer when flush() finally submits it. Flush first so the
+        // batch hits the GPU with a live buffer instead of validation-failing and dropping it.
+        this.flushProgrammablePending();
+
         const gpuBuffers = kind === "vb" ? this.vbGpuBuffers : this.ibGpuBuffers;
         gpuBuffers.get(ptr)?.destroy();
         gpuBuffers.delete(ptr);
         (kind === "vb" ? this.vbDirty : this.ibDirty).delete(ptr);
+
+        // Clear any binding left pointing at the now-destroyed buffer, so GetStreamSource/
+        // GetIndices don't keep handing back a dead handle with D3D_OK.
+        if (kind === "vb") {
+            for (const src of this.streamSources) {
+                if (src.vb === ptr) src.vb = 0;
+            }
+        } else if (this.indexIB === ptr) {
+            this.indexIB = 0;
+        }
     }
 
     private ensureVbGpuBuffer(vbPtr: number, size: number): GPUBuffer | null {
