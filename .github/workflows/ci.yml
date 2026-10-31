@@ -8,7 +8,7 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege: no job here writes to the repo.
+# Least privilege: only publish-wasm writes to the repo, and only its own job gets that.
 permissions:
   contents: read
 
@@ -96,6 +96,54 @@ jobs:
       # BS_REQUIRE_WGSL_VALIDATOR for the validator report and the test suite.
       - name: Quality gate
         run: bun run gate
+
+      # Only a build that passed the gate is handed to publish-wasm.
+      - name: Package wasm outputs
+        if: github.ref == 'refs/heads/main'
+        run: jq -r '.outputs | keys[]' tools/build-wasm/wasm.lock.json | tar -czf wasm.tar.gz -T -
+
+      - name: Keep wasm outputs for publishing
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wasm-outputs
+          path: wasm.tar.gz
+          retention-days: 1
+
+  # Builders without the wasm toolchains download these instead of compiling. The release is keyed
+  # to the lock, so every commit with the same lock shares one. Anyone who downloads it can verify
+  # it: `bun run build:wasm` accepts only files that match the lock.
+  publish-wasm:
+    name: Publish wasm outputs
+    needs: quality-gate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: wasm-outputs
+
+      - name: Create the release for this lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="wasm-$(sha256sum tools/build-wasm/wasm.lock.json | cut -c1-16)"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "$TAG already exists"
+            exit 0
+          fi
+          gh release create "$TAG" wasm.tar.gz \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --notes "Wasm outputs matching tools/build-wasm/wasm.lock.json at $GITHUB_SHA." \
+            --prerelease
 
   dedup-scan:
     name: Dedup / dead-export scan (advisory)
