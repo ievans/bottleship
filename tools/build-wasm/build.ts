@@ -2,7 +2,10 @@
 /**
  * Reproducible build of every .wasm the app ships. None are committed: they are built here from
  * source with pinned toolchains and checked against wasm.lock.json, so the bytes on screen are a
- * function of the repo, not of whoever last committed a binary.
+ * function of the repo, not of whoever last committed a binary. Outputs that aren't built yet are
+ * first downloaded from the release CI published for this lock, and installed only if they match
+ * it, so a machine without the toolchains can still build. Compiling remains the source of truth:
+ * CI sets BS_WASM_NO_DOWNLOAD and always builds from source.
  *
  * Usage: bun tools/build-wasm/build.ts [target...] [--force] [--update]
  *   targets: dxt-kernel unpack-streaming unpack-buffered v86 video-decoder (default: all)
@@ -15,6 +18,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { LOCK_PATH, ROOT, TARGET_OUTPUTS, compareOutputs, digestFile, readLock, type Lock } from "./lock";
+import { restoreFromRelease } from "./release";
 
 const WORK = join(ROOT, ".build-wasm");
 const WASM = "wasm32-unknown-unknown";
@@ -154,6 +158,14 @@ for (const n of names) if (!targets[n]) { console.error(`unknown target "${n}" (
 const lock: Lock = existsSync(LOCK_PATH) ? readLock() : { toolchain: {}, recipes: {}, outputs: {} };
 const problems: string[] = [];
 const built: string[] = [];
+
+if (!force && !update && !process.env.BS_WASM_NO_DOWNLOAD) {
+    const stale = names.flatMap(n => TARGET_OUTPUTS[n]).filter(o => compareOutputs(lock, [o]).length > 0);
+    if (stale.length) {
+        const restored = await restoreFromRelease(stale, lock);
+        console.log(`[build-wasm] downloaded ${restored.length} of ${stale.length} missing outputs`);
+    }
+}
 
 for (const name of names) {
     const t = targets[name];

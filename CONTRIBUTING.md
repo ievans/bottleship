@@ -43,12 +43,12 @@ If you forgot `--recurse-submodules`: `git submodule update --init --recursive`.
 
 Requirements: [Bun](https://bun.sh/), a WebGPU-capable browser (Chrome/Edge 113+). The
 app's `.wasm` files (v86 core, texture kernels, unpackers, video decoder) are not committed:
-`bun run build:wasm` builds them from source with pinned toolchains (rustup reads
-`rust-toolchain.toml`; also `clang` 18, Node, and `wasm-bindgen-cli` 0.2.123) and checks each
-against `tools/build-wasm/wasm.lock.json`. `bun run dev` and `bun run build` run it for you and
-skip anything already built; the video decoder builds in Docker. CI publishes the outputs of each
-lock as a `wasm-<sha256 of the lock, first 16 hex>` release, so a build without the toolchains can
-unpack `wasm.tar.gz` at the repository root instead. A different toolchain produces
+`bun run build:wasm` checks each against `tools/build-wasm/wasm.lock.json`, and `bun run dev` and
+`bun run build` run it for you. CI publishes the outputs of each lock as a
+`wasm-<sha256 of the lock, first 16 hex>` release, and `build:wasm` downloads any missing ones
+from there, so you only need the toolchains when you change the wasm sources or the lock. Then it
+builds from source with them (rustup reads `rust-toolchain.toml`; also `clang` 18, Node, and
+`wasm-bindgen-cli` 0.2.123); the video decoder builds in Docker. A different toolchain produces
 different bytes, so a mismatch names the tool to fix.
 
 ## The quality gate (required before every PR)

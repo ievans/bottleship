@@ -76,7 +76,10 @@ jobs:
           path: public/video-decoder.wasm
           key: video-decoder-${{ hashFiles('tools/build-ffmpeg-decoder/**', 'tools/build-wasm/**') }}
 
+      # CI builds what it publishes, so it must never download its own release.
       - name: Build wasm (verified against tools/build-wasm/wasm.lock.json)
+        env:
+          BS_WASM_NO_DOWNLOAD: "1"
         run: bun run build:wasm
 
       - name: Cache offline WGSL validator
