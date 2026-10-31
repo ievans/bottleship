@@ -83,6 +83,7 @@ import { Msvcrt } from "./modules/msvcrt";
 import { Msvcp90 } from "./modules/msvcp90";
 import { Msvcp140 } from "./modules/msvcp140";
 import { Msvcp60 } from "./modules/msvcp60";
+import { TwitchSdk } from "./modules/twitchsdk_32_release";
 import { Crtdll } from "./modules/crtdll";
 import { Winspool } from "./modules/winspool";
 import { Dwmapi } from "./modules/dwmapi";
@@ -2567,6 +2568,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const msvcp90 = new Msvcp90();
       const msvcp140 = new Msvcp140();
       const msvcp60 = new Msvcp60();
+      const twitchSdk = new TwitchSdk();
       const crtdll = new Crtdll();
       const winspool = new Winspool();
       const dwmapi = new Dwmapi();
@@ -2648,6 +2650,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcp140.initialize(process);
       msvcp60.setMsvcrt(msvcrt);
       msvcp60.initialize(process);
+      twitchSdk.initialize(process);
       crtdll.initialize(process);
       winspool.initialize(process);
       dwmapi.initialize(process);
@@ -2726,6 +2729,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(msvcp90.name, msvcp90);
       process.registerModule(msvcp140.name, msvcp140);
       process.registerModule(msvcp60.name, msvcp60);
+      process.registerModule(twitchSdk.name, twitchSdk);
       process.registerModule(crtdll.name, crtdll);
       process.registerModule(winspool.name, winspool);
       process.registerModule(dwmapi.name, dwmapi);
@@ -2806,6 +2810,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(msvcp90.name, msvcp90.exports);
       process.dispatcher.registerModule(msvcp140.name, msvcp140.exports);
       process.dispatcher.registerModule(msvcp60.name, msvcp60.exports);
+      process.dispatcher.registerModule(twitchSdk.name, twitchSdk.exports);
       process.dispatcher.registerModule(crtdll.name, crtdll.exports);
       process.dispatcher.registerModule(winspool.name, winspool.exports);
       process.dispatcher.registerModule(dwmapi.name, dwmapi.exports);
