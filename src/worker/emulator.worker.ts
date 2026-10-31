@@ -83,6 +83,7 @@ import { Msvcrt } from "./modules/msvcrt";
 import { Msvcp90 } from "./modules/msvcp90";
 import { Msvcp140 } from "./modules/msvcp140";
 import { Msvcp60 } from "./modules/msvcp60";
+import { Msvcp110 } from "./modules/msvcp110";
 import { Crtdll } from "./modules/crtdll";
 import { Winspool } from "./modules/winspool";
 import { Dwmapi } from "./modules/dwmapi";
@@ -2567,6 +2568,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const msvcp90 = new Msvcp90();
       const msvcp140 = new Msvcp140();
       const msvcp60 = new Msvcp60();
+      const msvcp110 = new Msvcp110();
       const crtdll = new Crtdll();
       const winspool = new Winspool();
       const dwmapi = new Dwmapi();
@@ -2648,6 +2650,11 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcp140.initialize(process);
       msvcp60.setMsvcrt(msvcrt);
       msvcp60.initialize(process);
+      // msvcp70/71/80/100/110/120 all alias to the "msvcp90" HLE module (MSVCP_VERSIONED
+      // in dll-aliases.ts), so a real MSVCP110.dll import never reaches a module registered
+      // under that versioned name — its handlers merge straight into msvcp90's own exports.
+      msvcp110.initialize(process);
+      Object.assign(msvcp90.exports, msvcp110.exports);
       crtdll.initialize(process);
       winspool.initialize(process);
       dwmapi.initialize(process);
