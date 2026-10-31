@@ -157,8 +157,7 @@ the virtual LAN, never between two emulated guests: Civilization III over Direct
 and join, `tools/harness/regression/civ3-lan.harness.ts`) and Close Combat II over Winsock TCP
 port 1945 (join and host handshakes, `tools/harness/regression/cc2-lan.harness.ts`). That
 proves the network path, not a full multiplayer game. SimCity 3000 and RollerCoaster Tycoon
-have no multiplayer. Known rough edges: Close Combat II has half-clipped list text and F1
-(`WinHelpA`) is unimplemented. Cold start is slow on the Pi (RollerCoaster Tycoon ~4 minutes,
+have no multiplayer. Cold start is slow on the Pi (RollerCoaster Tycoon ~4 minutes,
 SimCity 3000 ~2 minutes).
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,

@@ -28,6 +28,19 @@ function wantsAliasedText(state: { fontQuality: number }): boolean {
     return state.fontQuality === NONANTIALIASED_QUALITY;
 }
 
+const ascentByFont = new Map<string, number>();
+
+/** tmAscent of the context's current font — the distance from a GDI cell's top to its baseline. */
+function cellAscent(ctx: OffscreenCanvasRenderingContext2D, fontSize: number): number {
+    const font = ctx.font;
+    let a = ascentByFont.get(font);
+    if (a === undefined) {
+        a = measureVerticalMetrics(ctx, fontSize).ascent;
+        ascentByFont.set(font, a);
+    }
+    return a;
+}
+
 let aliasScratch: OffscreenCanvas | null = null;
 let aliasScratchCtx: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -38,7 +51,8 @@ function fillTextAliased(
     state: { fontSize: number; textColorValue: number },
     text: string,
     x: number,
-    y: number
+    y: number,
+    ascent: number
 ): void {
     const pad = 2;
     const textWidth = ctx.measureText(text).width;
@@ -49,13 +63,13 @@ function fillTextAliased(
         aliasScratchCtx = aliasScratch.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D | null;
     }
     const s = aliasScratchCtx;
-    if (!s) { ctx.fillText(text, x, y); return; }
+    if (!s) { ctx.fillText(text, x, y + ascent); return; }
     s.clearRect(0, 0, w, h);
     s.font = ctx.font;
-    s.textBaseline = 'top';
+    s.textBaseline = 'alphabetic';
     s.textAlign = 'left';
     s.fillStyle = '#fff';
-    s.fillText(text, pad, pad);
+    s.fillText(text, pad, pad + ascent);
     const img = s.getImageData(0, 0, w, h);
     const m = img.data;
     // The mask itself is always rasterized left-aligned, so translate Canvas' current
@@ -85,7 +99,11 @@ function fillTextAliased(
     ctx.imageSmoothingEnabled = smoothing;
 }
 
-/** fillText honoring the selected font's GDI quality (aliased for small/bitmap-era fonts). */
+/**
+ * fillText honoring the selected font's GDI quality (aliased for small/bitmap-era fonts).
+ * `y` is the top of the GDI text cell; glyphs go on an integer alphabetic baseline tmAscent
+ * below it: canvas' "top" baseline is the em-box top, not the cell top GDI measures from.
+ */
 function fillTextGdi(
     ctx: OffscreenCanvasRenderingContext2D,
     state: { fontQuality: number; fontSize: number; textColorValue: number },
@@ -93,8 +111,12 @@ function fillTextGdi(
     x: number,
     y: number
 ): void {
-    if (wantsAliasedText(state)) fillTextAliased(ctx, state, text, x, y);
-    else ctx.fillText(text, x, y);
+    const ascent = cellAscent(ctx, state.fontSize);
+    if (wantsAliasedText(state)) { fillTextAliased(ctx, state, text, x, y, ascent); return; }
+    const saved = ctx.textBaseline;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(text, x, y + ascent);
+    ctx.textBaseline = saved;
 }
 
 export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text: string): boolean {
@@ -143,8 +165,8 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         if (hAlign === TA_CENTER) x -= metrics.width / 2;
         else if (hAlign === TA_RIGHT) x -= metrics.width;
         const vAlign = align & TA_BASELINE;
-        if (vAlign === TA_BASELINE) y -= measureVerticalMetrics(ctx, state.fontSize).ascent;
-        else if (vAlign === TA_BOTTOM) y -= state.fontSize;
+        if (vAlign === TA_BASELINE) y -= cellAscent(ctx, state.fontSize);
+        else if (vAlign === TA_BOTTOM) y -= measureVerticalMetrics(ctx, state.fontSize).height;
         if (updateCp) gdi.setCurrentPosition(hdc, x + metrics.width, refY);
     }
 
@@ -190,8 +212,10 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
             state.appliedFillStyle = state.textColor;
         }
 
-        // Draw text at origin (0, 0) after rotation
-        ctx.fillText(text, 0, 0);
+        // Draw text at origin after rotation, baseline tmAscent below the cell top
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(text, 0, cellAscent(ctx, state.fontSize));
+        ctx.textBaseline = 'top';
 
         // Restore transform manually (doesn't reset font/fillStyle)
         ctx.setTransform(savedTransform);
@@ -260,7 +284,9 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillRect(0, 0, metrics.width, state.fontSize);
                     bitmapCtx.fillStyle = state.textColor;
                 }
-                bitmapCtx.fillText(text, 0, 0);
+                bitmapCtx.textBaseline = 'alphabetic';
+                bitmapCtx.fillText(text, 0, cellAscent(bitmapCtx, state.fontSize));
+                bitmapCtx.textBaseline = 'top';
                 bitmapCtx.restore();
             } else {
                 if (state.bkMode === 2) {
@@ -433,7 +459,10 @@ function drawLaidOutLine(
     // were already rasterized above, potentially through the aliased path.
     const esc = (s: string) => s.replace(/&/g, '&&');
     const encoded = esc(line.text.slice(0, line.underline)) + '&' + esc(line.text.slice(line.underline));
-    fillTextWithMnemonic(ctx, encoded, x, y, { ...opts, drawText: false });
+    const savedBaseline = ctx.textBaseline;
+    ctx.textBaseline = 'alphabetic';
+    fillTextWithMnemonic(ctx, encoded, x, y + cellAscent(ctx, state.fontSize), { ...opts, drawText: false });
+    ctx.textBaseline = savedBaseline;
 }
 
 /**
