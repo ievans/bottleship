@@ -244,17 +244,26 @@ export function registerWindowQueryExports(exports: Record<string, ThunkImplemen
             } else if (uCmd === 3 /* GW_HWNDPREV */) {
                 result = getChildZOrderSibling(hWnd, 'prev');
             } else if (uCmd === 0 /* GW_HWNDFIRST */ || uCmd === 1 /* GW_HWNDLAST */) {
-                // First/last in hWnd's OWN z-order list: its parent's children for a child
-                // window, or the top-level list (every window with no parent) for a top-level
-                // one — there was no case here at all, so a perfectly valid hWnd fell through
-                // to the 0 default. A real EE2 build hits this once at startup via
-                // GetWindow(ownHwnd, GW_HWNDFIRST) to check whether it's already the frontmost
-                // top-level window; the silent 0 seeded a GW_HWNDNEXT walk starting from NULL
-                // that never terminates (GetWindow(0, ...) is also always 0), which reads as a
-                // hung main thread spinning GetWindow/IsWindowVisible forever.
-                const siblings = window.parent !== undefined
-                    ? (windows.get(window.parent)?.children ?? [])
-                    : [...windows.values()].filter((w) => w.parent === undefined).map((w) => w.handle);
+                // First/last in hWnd's OWN z-order list: its parent's children for a WS_CHILD
+                // window, or the desktop z-order for everything else — there was no case here
+                // at all, so a perfectly valid hWnd fell through to the 0 default. A real EE2
+                // build hits this once at startup via GetWindow(ownHwnd, GW_HWNDFIRST) to check
+                // whether it's already the frontmost top-level window; the silent 0 seeded a
+                // GW_HWNDNEXT walk starting from NULL that never terminates (GetWindow(0, ...)
+                // is also always 0), which reads as a hung main thread spinning
+                // GetWindow/IsWindowVisible forever.
+                //
+                // WS_CHILD, not "has a parent": an owned popup (WS_POPUP with an owner) also
+                // has `parent` set to its owner, but it is NOT in the owner's `children` Z-order
+                // list — it shares the desktop z-order with every other top-level window
+                // (window-manager.ts's setActiveWindow/setWindowZOrder key off this same bit).
+                const WS_CHILD = 0x40000000;
+                let siblings: number[];
+                if ((window.style & WS_CHILD) !== 0 && window.parent !== undefined) {
+                    siblings = windows.get(window.parent)?.children ?? [];
+                } else {
+                    siblings = System.getInstance().windowManager.getZOrder();
+                }
                 result = siblings.length > 0 ? (uCmd === 0 ? siblings[0]! : siblings[siblings.length - 1]!) : 0;
             }
         }

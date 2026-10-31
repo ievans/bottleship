@@ -188,7 +188,11 @@ export function mapStringACore(
     if (!lpDestStr) return 0;
 
     const toWrite = Math.min(resultLen, cchDest);
-    const resultBytes = encodeAnsi(result);
+    // Encode with the SAME explicit code page `result` was decoded from above — encodeAnsi()
+    // uses the process's configured ANSI code page instead, which corrupts the string
+    // whenever a caller passes a code page other than the process default (LCMapStringA/W
+    // take an explicit CodePage argument precisely so callers CAN differ from it).
+    const resultBytes = encodeAnsiString(result, codePage);
     mem.set(resultBytes.subarray(0, toWrite), lpDestStr);
     return toWrite;
 }

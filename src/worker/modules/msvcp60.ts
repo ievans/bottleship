@@ -517,8 +517,10 @@ export class Msvcp60 implements IModule {
         // so every read behaves as one already at EOF. get() answers EOF (-1) per its
         // documented int-return contract — a caller testing the RETURN VALUE (the common,
         // standard-recommended idiom: `while ((c = stream.get()) != EOF)`) sees a correct
-        // failure. get(char&) stores charT() ('\0') into the output char on failure, which
-        // is also the documented contract for that overload and under our control.
+        // failure. get(char&) leaves the output char UNTOUCHED on failure: VC6's own
+        // Dinkumware get(_E&) only assigns _Ch when sbumpc() didn't return eof — it never
+        // writes charT() — so zero-filling it would hand a caller that (wrongly) ignores the
+        // failure a value real VC6 never produces.
         //
         // KNOWN GAP: get(char&)/putback(char) return `istream&` (always *this*), not a status
         // code, so a caller testing failure via the stream's own boolean conversion
@@ -531,9 +533,7 @@ export class Msvcp60 implements IModule {
         // than the status quo. Left unfixed pending a verified basic_istream<char> layout.
         const EOF_VALUE = -1;
         this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEHXZ"] = () => EOF_VALUE;
-        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@AAD@Z"] = (ctx, _mem, args) => {
-            const out = args[0] ?? 0;
-            if (out) Mem.writeUint8(out, 0);
+        this.exports["?get@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@AAD@Z"] = (ctx, _mem, _args) => {
             return ctx.ecx >>> 0;
         };
         this.exports["?putback@?$basic_istream@DU?$char_traits@D@std@@@std@@QAEAAV12@D@Z"] = (ctx, _mem, _args) => {
