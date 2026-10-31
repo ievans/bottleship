@@ -88,6 +88,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Empire Earth (2.00, single player) | playable‡ | |
 | Empire Earth: The Art of Conquest (1.00, single player) | playable‡ | |
 | Empire Earth II (Gold Edition) | boots§ | |
+| Empire Earth II: The Art of Supremacy | bootsǁ | |
 
 \* retail has an intermittent mode-switch hiccup; the demo does not.
 
@@ -126,6 +127,20 @@ bundle otherwise matches Empire Earth's recipe: 1024 × 768 × 32, `--os winxp -
 (`GetWindow` null-handle spin, a vertex/index buffer Release leak, and a `Clear()`
 rect-handling bug that left the world viewport black while the HUD rendered fine — all
 generic engine fixes, not EE2-specific).
+
+ǁ Same GOG Gold Edition installer and rom tree as Empire Earth II above (`EE2X.exe` sits
+alongside `EE2.exe`; the registry already carries a second `Empire Earth II: Art of
+Supremacy` key pointing `InstallExePath` at it) — checked 2026-10-31 by copying the EE2
+bundle and `bun tools/wgb.ts patch-manifest`-ing `entrypoint` to `rom/EE2X.exe` (no re-pack
+needed: this is the same rom tree). Boots through its own production UI (main menu,
+Single Player / Quickstart / Multiplayer, a "Choose Your Skill Level" dialog) with no
+guest fault. Needed one generic engine fix: `EE2X.exe` imports `mss32!RIB_request_interface`
+undecorated (no stdcall `@N` suffix, unlike its registered siblings), which the
+ThunkGenerator refused to bind at all without a known arity — confirmed 4 args / 16-byte
+callee cleanup by disassembling the real `mss32.dll` export (`ret 0x10`) and implemented
+alongside the existing `RIB_register_interface`/`RIB_unregister_interface` provider
+registry. Not yet covered: single player gameplay, save/load, LAN, campaign — bring-up
+has only reached the main menu so far.
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,
 with targeted stack, stream, lifetime and parser regressions. The October 12 integration

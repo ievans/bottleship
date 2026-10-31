@@ -323,6 +323,13 @@ export const mss32Module: ModuleDescriptor = {
         makeFunc("_RIB_register_interface@16", 4),
         makeFunc("RIB_unregister_interface", 4),
         makeFunc("_RIB_unregister_interface@16", 4),
+        // The lookup counterpart of register_interface, searching every registered provider's
+        // interfaces by name rather than targeting one — ships UNDECORATED from mss32.dll (no
+        // @N suffix, confirmed from its own export table), unlike its stdcall siblings above,
+        // so the ThunkGenerator's name-pattern arity inference can't see it is stdcall at all.
+        // Disassembling the real mss32.dll export (`ret 0x10`) confirms 4 args / 16-byte callee
+        // cleanup — EE2X.exe (issue #9) imports this name and fails to load without it.
+        makeFunc("RIB_request_interface", 4),    // module, interface_name, entry_count, entries
         // Provider enumeration/lookup — the other half of RIB. A provider .asi/.m3d is
         // loaded through load_application_providers, then walked with enumerate_providers.
         makeFunc("_RIB_enumerate_providers@12", 3),     // (name, before, HPROENUM*)

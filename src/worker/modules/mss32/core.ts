@@ -572,6 +572,29 @@ export function createCoreExports(ctx: MSSContext): Record<string, ThunkImplemen
         return RIB_NOERR;
     };
 
+    // RIB_request_interface(module, interfaceNamePtr, entryCount, entries) — the lookup
+    // counterpart of RIB_register_interface: searches every registered provider (not a
+    // specific one) for an interface matching the name, rather than registering one. `module`
+    // identifies the requesting caller, not a provider to search — the match is on interface
+    // name alone. We have no real providers ever registered (no .m3d/.flt/.asi self-registers
+    // one through this HLE), so in practice this always reports NOT_FOUND; the title degrades
+    // gracefully on that, the same declared-failure pattern used throughout this module. What
+    // matters for EE2X.exe (issue #9) is that the import now BINDS at all.
+    const requestInterface: ThunkImplementation = (ctxThunk, mem, args) => {
+        const interfaceNamePtr = args[1] >>> 0;
+        if (!interfaceNamePtr) return RIB_NOT_FOUND;
+        const interfaceName = Marshaler.readString(mem, interfaceNamePtr);
+        for (const provider of ctx.ribProviders.values()) {
+            if (provider.interfaces.has(interfaceName)) {
+                Logger.verbose(LogCategory.SYSTEM, `MSS32: RIB_request_interface(${interfaceName}) -> found`);
+                return RIB_NOERR;
+            }
+        }
+        Logger.verbose(LogCategory.SYSTEM, `MSS32: RIB_request_interface(${interfaceName}) -> NOT_FOUND (no provider registered)`);
+        return RIB_NOT_FOUND;
+    };
+    exports["RIB_request_interface"] = requestInterface;
+
     exports["RIB_alloc_provider_handle"] = allocProviderHandle;
     exports["_RIB_alloc_provider_handle@4"] = allocProviderHandle;
     exports["RIB_free_provider_handle"] = freeProviderHandle;
