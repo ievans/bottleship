@@ -1673,7 +1673,35 @@ export class CallbackManager {
         const stub = this.stubsById.get(callbackId);
         if (!stub?.inUse || stub.address !== (returnAddr >>> 0)) return 0;
         const invocation = this.pendingCallbacks.get(callbackId);
-        return invocation?.directThunkReturn ? invocation.callbackAddress >>> 0 : 0;
+        if (!invocation) return 0;
+        const address = invocation.callbackAddress >>> 0;
+        return invocation.directThunkReturn ? address : this.resolveTailJump(address);
+    }
+
+    /**
+     * Where a callback that is only a `jmp` chain ends up (a static-ctor table entry that
+     * points at an import thunk, `jmp rel` -> `jmp [IAT]`). Such a callback enters the API
+     * with its own return stub still at [ESP], exactly like a direct call.
+     */
+    private resolveTailJump(address: number): number {
+        const mem = this.getMemory();
+        let at = address >>> 0;
+        for (let hop = 0; hop < 4; hop++) {
+            if (at + 6 > mem.length) return 0;
+            const op = mem[at];
+            if (op === 0xe9) {
+                at = (at + 5 + ((mem[at + 1] | (mem[at + 2] << 8) | (mem[at + 3] << 16) | (mem[at + 4] << 24)) | 0)) >>> 0;
+            } else if (op === 0xeb) {
+                at = (at + 2 + ((mem[at + 1] << 24) >> 24)) >>> 0;
+            } else if (op === 0xff && mem[at + 1] === 0x25) {
+                const slot = (mem[at + 2] | (mem[at + 3] << 8) | (mem[at + 4] << 16) | (mem[at + 5] << 24)) >>> 0;
+                if (slot + 4 > mem.length) return 0;
+                return (mem[slot] | (mem[slot + 1] << 8) | (mem[slot + 2] << 16) | (mem[slot + 3] << 24)) >>> 0;
+            } else {
+                return at === address ? 0 : at;
+            }
+        }
+        return 0;
     }
 
     getForensicState(): CallbackForensicState {

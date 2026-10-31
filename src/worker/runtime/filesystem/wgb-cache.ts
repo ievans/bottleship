@@ -539,6 +539,8 @@ export class WgbCache {
             const changed = (len > 0 && len !== cachedSize)
                 || (etag !== null && (version === null || version.url !== url || version.etag !== etag));
             if (!changed) return true;
+            // Our own mounted reader on this key would make removeEntry fail and the stale copy relaunch.
+            if (this.currentSourceKey === key) this.releaseMountedSource();
             try { await dir.removeEntry(key); } catch { /* another tab may hold its reader */ }
             Logger.log(LogCategory.SYSTEM,
                 `WgbCache: "${key}" changed on the server (${cachedSize} → ${len} bytes) — re-downloading`);

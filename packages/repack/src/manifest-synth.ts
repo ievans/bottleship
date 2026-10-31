@@ -9,7 +9,7 @@ import { normalizeInnoDestination } from "@bottleship/formats/inno";
 import { detectExeFromPaths } from "./gog-filter";
 import { deriveGameId } from "@bottleship/formats/wgb/container-id";
 import type { GogOverrideEntry } from "./overrides";
-import { mergeRegistrySeeds, synthesizeRegistryFromGogScripts } from "./gog-script";
+import { mergeRegistrySeeds, synthesizeRegistryFromGogScripts, synthesizeRegistryFromRegsCmd } from "./gog-script";
 
 export type OsPreset = { major: number; minor: number; build: number; platformId: number };
 
@@ -98,8 +98,8 @@ function decodeRegistryValue(entry: RegistryEntry, unicode: boolean): unknown {
             const end = v.indexOf(0);
             return new TextDecoder("windows-1252").decode(end >= 0 ? v.subarray(0, end) : v);
         }
-        case 3: { // REG_BINARY
-            return Array.from(v);
+        case 3: { // REG_BINARY — the runtime seeds binary values from a hex string
+            return Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("");
         }
         case 4: { // REG_DWORD
             if (v.byteLength >= 4) return new DataView(v.buffer, v.byteOffset, 4).getUint32(0, true);
@@ -138,6 +138,16 @@ export interface RegistrySeed {
     root: string;
     path: string;
     values: Array<{ name: string; type: string; data: unknown }>;
+}
+
+/** Inno names a [Dirs] entry with a trailing separator ({app}\\games\\save\\), which the path normalizer rejects as an empty segment. */
+export function installerDirsToCreateDirs(directories: ReadonlyArray<{ name: string }>): string[] {
+    return [...new Set(
+        directories
+            .map((d) => normalizeInnoDestination(d.name.replace(/[\\/]+$/, "")))
+            .filter((rel): rel is string => !!rel)
+            .map((rel) => rel.replace(/\//g, "\\")),
+    )].sort();
 }
 
 export function synthesizeRegistry(
@@ -284,12 +294,7 @@ export function synthesizeManifest(opts: SynthOptions): SynthResult {
     // so installer-created dirs must be recreated at boot (worker createDirs) or the
     // game's opens/writes into them fail with the WRONG error (PATH_NOT_FOUND instead
     // of FILE_NOT_FOUND) vs a real install.
-    const createDirs = [...new Set(
-        (opts.parsed.directories ?? [])
-            .map((d) => normalizeInnoDestination(d.name))
-            .filter((rel): rel is string => !!rel)
-            .map((rel) => rel.replace(/\//g, "\\")),
-    )].sort();
+    const createDirs = installerDirsToCreateDirs(opts.parsed.directories ?? []);
 
     let manifest: Record<string, unknown> = {
         formatVersion: 2,
@@ -332,6 +337,12 @@ export function synthesizeManifest(opts: SynthOptions): SynthResult {
     const scriptRegistry = synthesizeRegistryFromGogScripts(opts.gameFiles, regInstall);
     if (scriptRegistry.length > 0) {
         registry = mergeRegistrySeeds(registry, scriptRegistry);
+    }
+
+    // A shipped regs.cmd is the same idea in batch form (`REG ADD ...`).
+    const cmdRegistry = synthesizeRegistryFromRegsCmd(opts.gameFiles, regInstall);
+    if (cmdRegistry.length > 0) {
+        registry = mergeRegistrySeeds(registry, cmdRegistry);
     }
 
     if (opts.override?.manifest) {
