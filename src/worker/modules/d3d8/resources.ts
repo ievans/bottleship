@@ -6,6 +6,7 @@ import { ThunkImplementation } from '../../core/thunking/thunk-dispatcher';
 import { Logger, LogCategory } from '../../core/logger';
 import { Mem } from '../../core/memory/mem-accessor';
 import { System } from '../../core/system';
+import { freeComObject } from '../../core/com/com-memory';
 import {
     addComRef,
     clearRenderTargetOverrideForSurface,
@@ -1033,6 +1034,51 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
         if (refCount > 0) return refCount;
 
         releaseTextureStorage(pTex);
+        return 0;
+    };
+
+    // Without these two overrides, both fall through to the generic COM stub
+    // (createComTripleStubs), which only drops the refcount — the guest allocation backing
+    // the buffer, its device-side bookkeeping, and its GPUBuffer are never freed. A title
+    // that streams dynamic geometry creates and releases these every frame, so the guest's
+    // own allocator arena (not the WASM heap — see manifest RAM) exhausts over a real
+    // session: Create*Buffer starts returning D3DERR_OUTOFVIDEOMEMORY, and a guest that
+    // doesn't check the HRESULT dereferences the NULL it gets back.
+    exports['IDirect3DVertexBuffer8_Release'] = (_ctx, _mem, args) => {
+        const vbPtr = args[0];
+        const refCount = releaseComRef(vbPtr);
+        if (refCount === undefined) return 0;
+        if (refCount > 0) return refCount;
+
+        const device = resourceToDevice.get(vbPtr);
+        const vb = device?.vbData.get(vbPtr);
+        if (vb) {
+            System.getInstance().process?.memory.free(vb.guestPtr);
+            device!.vbData.delete(vbPtr);
+        }
+        device?.releaseBuffer("vb", vbPtr);
+        resourceToDevice.delete(vbPtr);
+        const process = System.getInstance().process;
+        if (process) freeComObject(process.memory, vbPtr);
+        return 0;
+    };
+
+    exports['IDirect3DIndexBuffer8_Release'] = (_ctx, _mem, args) => {
+        const ibPtr = args[0];
+        const refCount = releaseComRef(ibPtr);
+        if (refCount === undefined) return 0;
+        if (refCount > 0) return refCount;
+
+        const device = resourceToDevice.get(ibPtr);
+        const ib = device?.ibData.get(ibPtr);
+        if (ib) {
+            System.getInstance().process?.memory.free(ib.guestPtr);
+            device!.ibData.delete(ibPtr);
+        }
+        device?.releaseBuffer("ib", ibPtr);
+        resourceToDevice.delete(ibPtr);
+        const process = System.getInstance().process;
+        if (process) freeComObject(process.memory, ibPtr);
         return 0;
     };
 
