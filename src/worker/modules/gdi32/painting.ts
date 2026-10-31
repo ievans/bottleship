@@ -1810,9 +1810,11 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         const biBitCount = view.getUint16(pbmi + 14, true);
         const biCompression = view.getUint32(pbmi + 16, true);
 
-        const width = Math.abs(biWidth);
-        const height = Math.abs(biHeight);
-        if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        // A zero extent is a legal request that yields a valid handle and bits pointer; the
+        // backing keeps one row/column so the pointer addresses real memory.
+        const width = Math.max(1, Math.abs(biWidth));
+        const height = Math.max(1, Math.abs(biHeight));
+        if (width > 8192 || height > 8192) {
             Logger.warn(LogCategory.GDI32, `CreateDIBSection: invalid dimensions ${width}x${height}`);
             return 0;
         }

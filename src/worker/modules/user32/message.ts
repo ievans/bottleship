@@ -49,6 +49,7 @@ const WM_TIMER = 0x0113;
 const WM_SETCURSOR_MSG = 0x0020;
 const WM_PAINT = 0x000F;
 const WM_SETTEXT_MSG = 0x000C;
+const WM_DISPLAYCHANGE_MSG = 0x007E;
 const WM_GETTEXT_MSG = 0x000D;
 const WM_GETTEXTLENGTH_MSG = 0x000E;
 const USER_TIMER_MINIMUM = 10;
@@ -146,6 +147,41 @@ export function invokeWindowMessageSync(
         ctx, mem, win.wndProc, hwnd, message, wParam, lParam,
         stackCleanup, tag, onReturn,
     );
+}
+
+/**
+ * Deliver WM_DISPLAYCHANGE the way Windows does: SENT, from inside the mode-set call, so the
+ * WndProc has run (and recorded the new size) before the call returns. Apps clear a "display
+ * changed" flag right after their re-init; a posted message lands after that clear and re-arms
+ * it forever. One suspended frame can carry one callback, so only the first top-level window
+ * owned by the calling thread with a guest WndProc is sent; the others are posted.
+ * Returns null (everything posted) when no such window exists.
+ */
+export function sendDisplayChange(
+    ctx: X86Context,
+    mem: Uint8Array,
+    width: number,
+    height: number,
+    bpp: number,
+    stackCleanup: number,
+    onReturn: (wndRet: number) => number | null,
+): ThunkResult | null {
+    const system = System.getInstance();
+    const wm = system.windowManager;
+    const tid = system.scheduler.getCurrentThreadId();
+    const lParam = (((height & 0xFFFF) << 16) | (width & 0xFFFF)) >>> 0;
+    for (const hwnd of wm.topLevelHwnds()) {
+        if (wm.getWindowOwnerThread(hwnd) !== tid) continue;
+        const sent = invokeWindowMessageSync(
+            ctx, mem, hwnd, WM_DISPLAYCHANGE_MSG, bpp >>> 0, lParam,
+            stackCleanup, 'DisplayChange', onReturn,
+        );
+        if (!sent) continue;
+        wm.postDisplayChange(width, height, bpp, hwnd);
+        return sent;
+    }
+    wm.postDisplayChange(width, height, bpp);
+    return null;
 }
 
 /**

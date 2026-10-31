@@ -75,6 +75,15 @@ function utf16NullByteOffset(v: Uint8Array): number {
     return -1;
 }
 
+function decodeText(v: Uint8Array, unicode: boolean): string {
+    if (unicode) {
+        const nullOff = utf16NullByteOffset(v);
+        return new TextDecoder("utf-16le").decode(nullOff >= 0 ? v.subarray(0, nullOff) : v);
+    }
+    const end = v.indexOf(0);
+    return new TextDecoder("windows-1252").decode(end >= 0 ? v.subarray(0, end) : v);
+}
+
 function decodeRegistryValue(entry: RegistryEntry, unicode: boolean): unknown {
     const v = entry.value;
     switch (entry.type) {
@@ -98,14 +107,16 @@ function decodeRegistryValue(entry: RegistryEntry, unicode: boolean): unknown {
             const end = v.indexOf(0);
             return new TextDecoder("windows-1252").decode(end >= 0 ? v.subarray(0, end) : v);
         }
-        case 3: { // REG_BINARY — the runtime seeds binary values from a hex string
+        case 3:
+        case 6: { // rtDWord / rtQWord: stored as script text ("1", "$1F"), not binary
+            const text = decodeText(v, unicode).trim();
+            const n = text.startsWith("$") ? parseInt(text.slice(1), 16) : parseInt(text, 10);
+            return Number.isFinite(n) ? n : 0;
+        }
+        case 4: { // rtBinary: the runtime seeds binary values from a hex string
             return Array.from(v, (b) => b.toString(16).padStart(2, "0")).join("");
         }
-        case 4: { // REG_DWORD
-            if (v.byteLength >= 4) return new DataView(v.buffer, v.byteOffset, 4).getUint32(0, true);
-            return 0;
-        }
-        case 7: { // REG_MULTI_SZ
+        case 5: { // rtMultiString
             const parts: string[] = [];
             const dec = new TextDecoder(unicode ? "utf-16le" : "windows-1252");
             if (unicode) {
@@ -169,9 +180,9 @@ export function synthesizeRegistry(
             if ((data as string).includes("{")) continue;
         }
 
-        const regType = entry.type === 4 ? "REG_DWORD"
-            : entry.type === 3 ? "REG_BINARY"
-            : entry.type === 7 ? "REG_MULTI_SZ"
+        const regType = entry.type === 3 || entry.type === 6 ? "REG_DWORD"
+            : entry.type === 4 ? "REG_BINARY"
+            : entry.type === 5 ? "REG_MULTI_SZ"
             : "REG_SZ";
 
         const seedKey = `${hive}\\${keyPath}`;

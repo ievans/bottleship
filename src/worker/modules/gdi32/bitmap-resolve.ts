@@ -228,6 +228,26 @@ export function resolveDibSectionRectRgba(
 }
 
 /**
+ * Mirror the CURRENT guest bits of a DIBSection rect into the DC canvas before a draw that
+ * blends with, or writes back over, that rect. The app edits the bits directly, so a canvas
+ * left over from an earlier draw is stale, and the write-back that follows the draw would
+ * stamp the stale pixels over what the app put there. No-op for non-DIBSection bitmaps.
+ */
+export function pullDibSectionRect(
+    hBitmap: number,
+    ctx: OffscreenCanvasRenderingContext2D,
+    x: number, y: number, width: number, height: number,
+): boolean {
+    if (!hBitmap) return false;
+    const mem = System.getInstance().process?.getCurrentMemory?.();
+    if (!mem) return false;
+    const fresh = resolveDibSectionRectRgba(hBitmap, mem, x, y, width, height);
+    if (!fresh) return false;
+    ctx.putImageData(new (ImageData as any)(fresh.data, fresh.width, fresh.height), fresh.x, fresh.y);
+    return true;
+}
+
+/**
  * A DIBSection's pixel surface IS its guest bits — every GDI draw into a DC with one
  * selected must land there, because apps read the bits back and post-process them, and
  * because the canvas is re-materialized FROM those bits on the next SelectObject (a

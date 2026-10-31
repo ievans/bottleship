@@ -7,7 +7,7 @@
  */
 import { Logger, LogCategory } from "../../core/logger";
 import { drawTextPrefixOptions, fillTextWithMnemonic, parseMnemonicText } from "../win32-text";
-import { writeBackDibSectionRect } from "./bitmap-resolve";
+import { pullDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
 import type { GDIContext } from './context';
 
 const NONANTIALIASED_QUALITY = 3;
@@ -155,6 +155,16 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
     // The clip belongs to the DC, so it wraps the glyphs on every target. It is applied
     // after the lazy font/fillStyle sync above so the matching restore hands the context
     // back with exactly the attributes state.applied* claims are on it.
+    let back: { x: number; y: number; w: number; h: number } | null;
+    if (hasRotation) {
+        // Rotated glyphs land anywhere in the swept circle, so mirror that whole box.
+        const reach = Math.max(metrics.width, state.fontSize * 1.7) + 4;
+        back = gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2);
+    } else {
+        back = gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
+    }
+    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+
     const clipped = gdi.beginClipOn(hdc, ctx);
 
     if (hasRotation) {
@@ -185,9 +195,6 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         // Restore transform manually (doesn't reset font/fillStyle)
         ctx.setTransform(savedTransform);
         if (clipped) ctx.restore();
-        // Rotated glyphs land anywhere in the swept circle, so mirror that whole box.
-        const reach = Math.max(metrics.width, state.fontSize * 1.7) + 4;
-        const back = gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2);
         if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
     } else {
         // No rotation - draw normally
@@ -206,7 +213,6 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
 
         fillTextGdi(ctx, state, text, x, y);
         if (clipped) ctx.restore();
-        const back = gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
         if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
     }
 
@@ -590,9 +596,6 @@ export function drawText(
         target.textBaseline = 'top';
     };
 
-    paint(ctx);
-    if (state.bkMode === 2) state.appliedFillStyle = state.textColor;
-
     // Same contract as TextOut: a DIBSection selected into this DC IS the pixel surface,
     // so the glyphs have to reach the guest bits or the next SelectObject discards them.
     // Without a format rect DrawText lays out from the origin, so the laid-out extent is
@@ -601,6 +604,11 @@ export function drawText(
         ? { x: rect.left, y: rect.top, w: boxWidth, h: rect.bottom - rect.top }
         : { x: originX - layout.width, y: originY, w: layout.width * 2, h: layout.height };
     const back = gdi.clipCopyRect(hdc, painted.x - 2, painted.y - 2, painted.w + 4, painted.h + 4);
+    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+
+    paint(ctx);
+    if (state.bkMode === 2) state.appliedFillStyle = state.textColor;
+
     if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
 
     // Mark as dirty for ReleaseDC optimization
