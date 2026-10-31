@@ -73,6 +73,12 @@ real software mixer.
   backed by the Origin Private File System (OPFS). Persistent data (saves, config) is written
   through to OPFS; ephemeral data (caches, temp, unpacked assets) can be kept in memory and
   discarded. Each game is an isolated container, so state never leaks between titles.
+  A container's persistent layer is `overlay/**`, `registry.json` and the CoW shadow index
+  (`overlay-shadow.json`, which records truncated files so a restore cannot read stale ROM bytes).
+  Storage lets users export/import it as a ZIP, or keep named **save slots**
+  (`slots/<id>/` inside the container, `src/storage/save-slots.ts`): capture the layer, and load it
+  back as an exact mirror after an automatic safety copy. Slots are only created or loaded from
+  the library page, because a running guest holds the files open.
 - **Registry.** An in-memory HLE registry, seeded per game from the bundle's `registry.json`.
 - **Installer workspace.** Direct Inno imports use ranged input and chunked decoding into
   an OPFS disk arena, followed by a streamed ZIP64 WGB. The wizard finalizes from that staged

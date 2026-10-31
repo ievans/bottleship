@@ -11,9 +11,10 @@ import { useHostModal } from "../harness/use-host-modal";
 interface Props {
     isOpen: boolean;
     onClose: () => void;
+    slotsLocked?: boolean;
 }
 
-const StorageManagerModal: React.FC<Props> = ({ isOpen, onClose }) => {
+const StorageManagerModal: React.FC<Props> = ({ isOpen, onClose, slotsLocked }) => {
     // Host modal, not a guest one — see harness/use-host-modal.ts.
     useHostModal("storageManager", isOpen, { caption: "Storage" });
     if (!isOpen) return null;
@@ -29,7 +30,7 @@ const StorageManagerModal: React.FC<Props> = ({ isOpen, onClose }) => {
                     <button className={ms["modal-close"]} onClick={onClose}>×</button>
                 </div>
                 <div className={ms["modal-body"]}>
-                    <StorageManagerBody active={isOpen} />
+                    <StorageManagerBody active={isOpen} slotsLocked={slotsLocked} />
                 </div>
             </div>
         </div>
