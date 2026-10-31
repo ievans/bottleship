@@ -94,6 +94,89 @@ describe('ThunkDispatcher — failed sync call ABI', () => {
     }
 });
 
+describe('ThunkDispatcher — thunk error inside native SEH dispatch', () => {
+    let originalProcess: typeof System.prototype.process;
+    beforeEach(() => {
+        originalProcess = System.getInstance().process;
+        System.getInstance().process = null;
+    });
+    afterEach(() => { System.getInstance().process = originalProcess; });
+
+    /**
+     * writeSehDispatchStub's generated x86 loop CALLs each SEH frame's handler, then does
+     * `TEST EAX, EAX; JZ .continue_exec` — EAX=0 means ContinueExecution ("resume the fault"),
+     * not "this call failed safely". _slowPathHandleThunkError's ordinary EAX=0 default is
+     * right for a normal WinAPI call (NULL/FALSE) but wrong here: it makes an internal engine
+     * error (e.g. a thunk throwing) look like a handler that fixed the fault, so the stub
+     * retries the SAME fault forever instead of moving to the next frame / UnhandledExceptionFilter
+     * (observed: RoN's DirectInput startup threw inside __CxxFrameHandler3 called this way and
+     * looped until the JS call stack overflowed — github.com/ievans/bottleship/issues/10).
+     */
+    it('answers ContinueSearch(1), not ContinueExecution(0), when called from the SEH dispatch stub', () => {
+        const d = mkDispatcher();
+        const { dv } = bindMemory(d);
+        const id = 0x1000;
+        const cpu = { reg32: d.cachedReg32Raw, instruction_pointer: d.cachedIpRaw, flags: d.cachedFlagsRaw };
+        d.cachedCpu = cpu;
+        d.namesTable[id] = 'msvcrt:__CxxFrameHandler3';
+        d.argCountsTable[id] = 4;
+        d.stackCleanupTable[id] = 0; // cdecl: the dispatch stub's own ADD ESP,16 cleans up
+        d.thunkGenerator = { getStubById: () => ({ dllName: 'msvcrt', functionName: '__CxxFrameHandler3', argCount: 4 }) };
+        d.markHleRegistrationComplete();
+        d.validateReturnAddrFast = () => true;
+        d._trySameNameLookup = d._tryDllForward = d._tryPendingRegistration = () => null;
+        d.ensureScheduler = () => ({
+            isThreadExitId: () => false,
+            getCurrentThreadId: () => 1,
+            getCurrentThread: () => null,
+            setLastError: () => {},
+            onThunkBoundary: () => {},
+        });
+        d.dispatchTable[id] = () => { throw new RangeError('Maximum call stack size exceeded'); };
+
+        const SEH_STUB = 0x21040004;
+        d.sehDispatchStubAddress = SEH_STUB;
+        // The return address the dispatch stub's `CALL [EBX+4]` left on the stack.
+        cpu.reg32[4] = 0x2000;
+        dv.setUint32(0x2000, SEH_STUB + 0x30, true);
+
+        d._handlePortWriteSlow(id, true);
+
+        expect(cpu.reg32[0]).toBe(1);
+    });
+
+    it('still answers 0 for an ordinary call that did not come from the dispatch stub', () => {
+        const d = mkDispatcher();
+        const { dv } = bindMemory(d);
+        const id = 0x1000;
+        const cpu = { reg32: d.cachedReg32Raw, instruction_pointer: d.cachedIpRaw, flags: d.cachedFlagsRaw };
+        d.cachedCpu = cpu;
+        d.namesTable[id] = 'kernel32:SomeApi';
+        d.argCountsTable[id] = 1;
+        d.stackCleanupTable[id] = 4;
+        d.thunkGenerator = { getStubById: () => ({ dllName: 'kernel32', functionName: 'SomeApi', argCount: 1 }) };
+        d.markHleRegistrationComplete();
+        d.validateReturnAddrFast = () => true;
+        d._trySameNameLookup = d._tryDllForward = d._tryPendingRegistration = () => null;
+        d.ensureScheduler = () => ({
+            isThreadExitId: () => false,
+            getCurrentThreadId: () => 1,
+            getCurrentThread: () => null,
+            setLastError: () => {},
+            onThunkBoundary: () => {},
+        });
+        d.dispatchTable[id] = () => { throw new Error('boom'); };
+
+        d.sehDispatchStubAddress = 0x21040004; // a dispatch exists elsewhere, just not on this call
+        cpu.reg32[4] = 0x2000;
+        dv.setUint32(0x2000, 0x00401234, true); // ordinary guest return address
+
+        d._handlePortWriteSlow(id, true);
+
+        expect(cpu.reg32[0]).toBe(0);
+    });
+});
+
 describe('ThunkDispatcher — retained handler inputs', () => {
     for (const mode of ['async', 'callback'] as const) {
         it(`${mode} handlers retain their entry registers and arguments across later thunks`, () => {

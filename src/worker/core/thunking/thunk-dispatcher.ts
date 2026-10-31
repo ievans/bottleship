@@ -8518,6 +8518,30 @@ export class ThunkDispatcher {
 
     private _slowPathHandleThunkError(id: number, name: string, e: any, cpu: any): void {
         Logger.error(LogCategory.THUNK, `Error executing thunk ${name} (ID ${id}): ${e}`);
+
+        // EAX=0 is the right default for an ordinary WinAPI call (NULL/FALSE), but when this
+        // thunk is itself one of the SEH chain's handlers — called directly by the generated
+        // dispatch stub's `CALL [EBX+4]` (see writeSehDispatchStub) — the SAME stub reads EAX
+        // as a disposition code: 0 means ContinueExecution, "resume the faulting instruction".
+        // An internal engine error here is not a handler that fixed the fault, but defaulting
+        // to 0 makes the dispatch stub believe it was, so _handleSehDispatchResult retries the
+        // identical fault forever (see its `result === 0` branch) — the "348 identical
+        // corruption/fault cycles" / RangeError hang this was written to stop. Detect that
+        // call shape from the return address the CALL left on the stack and answer
+        // ContinueSearch (1) instead, so the chain moves to the next frame (or falls through
+        // to UnhandledExceptionFilter) rather than looping.
+        const esp = cpu.reg32[4] >>> 0;
+        if (this.sehDispatchStubAddress !== 0 && this.isDataViewValid() && esp + 4 <= this.memLength) {
+            const retAddr = this.cachedDataView!.getUint32(esp, true) >>> 0;
+            if (retAddr >= this.sehDispatchStubAddress && retAddr < this.sehDispatchStubAddress + 0x100) {
+                Logger.error(LogCategory.SYSTEM,
+                    `SEH dispatch: ${name} threw while running as a native SEH handler — ` +
+                    `answering ContinueSearch(1) instead of ContinueExecution(0) to avoid ` +
+                    `retrying the fault forever`);
+                cpu.reg32[0] = 1;
+                return;
+            }
+        }
         cpu.reg32[0] = 0;
     }
 
