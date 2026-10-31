@@ -87,6 +87,7 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Painkiller Black Edition | playable | ✓ |
 | Empire Earth (2.00, single player) | playable‡ | |
 | Empire Earth: The Art of Conquest (1.00, single player) | playable‡ | |
+| Empire Earth II (Gold Edition) | boots§ | |
 
 \* retail has an intermittent mode-switch hiccup; the demo does not.
 
@@ -103,6 +104,19 @@ Miles) and the resolution/rasterizer values the installer writes under
 `HKCU\Software\SSSI\Empire Earth`. The Art of Conquest refuses to start without the base
 game, so its bundle carries both installed folders and also
 `HKCU\Software\Mad Doc Software\EE-AOC`.
+
+§ GOG edition, checked 2026-10-30 with the unmodified Gold Edition (v1.2) game files:
+boots through the real production UI — main menu, Single Player → Play Skirmish setup
+(player/civ/map/environment), launch, and into actual gameplay with a lit, textured
+world and a live HUD (resources, build queue, minimap). Not yet covered: unit control,
+save/load, the campaign, and multiplayer — this is a boot/render milestone, not the
+full loop `playable` requires for the original Empire Earth above. Needed a 2048MB
+(not the installer-default 1536MB) manifest RAM to avoid a `LMemorySystemPool::Alloc`
+guest OOM partway through a session; bundle otherwise matches Empire Earth's recipe:
+1024 × 768 × 32, `--os winxp --ram 2048`, `--app-dir-dlls "binkw32.dll,mss32.dll"`.
+See issue #8 for the bring-up history (`GetWindow` null-handle spin, a vertex/index
+buffer Release leak, and a `Clear()` rect-handling bug that left the world viewport
+black while the HUD rendered fine — all generic engine fixes, not EE2-specific).
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,
 with targeted stack, stream, lifetime and parser regressions. The October 12 integration
