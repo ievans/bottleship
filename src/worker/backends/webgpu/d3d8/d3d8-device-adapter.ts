@@ -604,6 +604,34 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
         (kind === "vb" ? this.vbDirty : this.ibDirty).set(ptr, { start: 0, end: totalSize });
     }
 
+    /**
+     * Drop a vertex/index buffer's GPU-side resources on final COM Release. Without this,
+     * every Create*Buffer leaves its GPUBuffer (and dirty-range bookkeeping) behind forever
+     * — titles that stream dynamic geometry create and release these every frame, so the
+     * leak is not theoretical: it is the difference between a short demo and a real session.
+     */
+    releaseBuffer(kind: "vb" | "ib", ptr: number): void {
+        // A Release can land between a recorded programmable draw and its submit — that draw
+        // still references this GPUBuffer when flush() finally submits it. Flush first so the
+        // batch hits the GPU with a live buffer instead of validation-failing and dropping it.
+        this.flushProgrammablePending();
+
+        const gpuBuffers = kind === "vb" ? this.vbGpuBuffers : this.ibGpuBuffers;
+        gpuBuffers.get(ptr)?.destroy();
+        gpuBuffers.delete(ptr);
+        (kind === "vb" ? this.vbDirty : this.ibDirty).delete(ptr);
+
+        // Clear any binding left pointing at the now-destroyed buffer, so GetStreamSource/
+        // GetIndices don't keep handing back a dead handle with D3D_OK.
+        if (kind === "vb") {
+            for (const src of this.streamSources) {
+                if (src.vb === ptr) src.vb = 0;
+            }
+        } else if (this.indexIB === ptr) {
+            this.indexIB = 0;
+        }
+    }
+
     private ensureVbGpuBuffer(vbPtr: number, size: number): GPUBuffer | null {
         const device = this.getGpuDevice();
         if (!device) return null;
@@ -2322,11 +2350,14 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
         return 0;
     }
 
-    clear(flags: number, color: number, z: number, stencil: number): void {
+    clear(
+        flags: number, color: number, z: number, stencil: number,
+        rects?: Array<{ x1: number; y1: number; x2: number; y2: number }>,
+    ): void {
         this.flushProgrammablePending();
         const rt = this.activeRenderTarget;
         const vp = sanitizeViewport(this.viewport, rt.width, rt.height);
-        this.renderer.clear(rt, flags, color, z, vp, undefined, stencil);
+        this.renderer.clear(rt, flags, color, z, vp, rects, stencil);
     }
 
     async present(): Promise<number> {
