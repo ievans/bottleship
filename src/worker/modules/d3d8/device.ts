@@ -70,10 +70,12 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         return D3D_OK;
     };
 
-    exports['IDirect3DDevice8_Clear'] = (_ctx, _mem, args) => {
+    exports['IDirect3DDevice8_Clear'] = (_ctx, mem, args) => {
         const device = devices.get(args[0]);
         if (!device) return D3DERR_INVALIDCALL;
 
+        const Count = args[1] >>> 0;
+        const pRects = args[2] >>> 0;
         const Flags = args[3];
         const Color = args[4];
         // Z is passed as float bits in u32
@@ -86,7 +88,36 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
         if (Flags & 1) parts.push('TARGET');
         if (Flags & 2) parts.push('ZBUFFER');
         if (Flags & 4) parts.push('STENCIL');
-        Logger.log(LogCategory.SYSTEM, `D3D8 Clear flags=${parts.join('|')||Flags} color=0x${(Color>>>0).toString(16)} z=${Z.toFixed(2)}`);
+        Logger.log(LogCategory.SYSTEM, `D3D8 Clear flags=${parts.join('|')||Flags} color=0x${(Color>>>0).toString(16)} z=${Z.toFixed(2)} rects=${Count}`);
+
+        // Count/pRects were read but never used — every Clear() wiped the WHOLE active
+        // render target regardless of what rects the guest actually asked for. A title
+        // that clears a small region (its HUD, a letterbox bar, a dirty rect) after the
+        // world has already been drawn into the same target wipes the world out too; the
+        // HUD/letterbox then redraws on top, and the rest reads as solid black. Mirrors
+        // d3d9's IDirect3DDevice9_Clear rect handling.
+        if (Count === 0 && pRects) return D3D_OK; // explicit "nothing to clear", not full-target
+        if (Count > 0 && pRects) {
+            const rectBytes = Count * 16;
+            if (pRects + rectBytes > mem.byteLength) return D3DERR_INVALIDCALL;
+            const rects: Array<{ x1: number; y1: number; x2: number; y2: number }> = [];
+            for (let i = 0; i < Count; i++) {
+                const p = pRects + i * 16;
+                const left = Mem.readInt32(p);
+                const top = Mem.readInt32(p + 4);
+                const right = Mem.readInt32(p + 8);
+                const bottom = Mem.readInt32(p + 12);
+                if (left === null || top === null || right === null || bottom === null) {
+                    return D3DERR_INVALIDCALL;
+                }
+                if (right <= left || bottom <= top) continue; // empty rect clears nothing
+                rects.push({ x1: left, y1: top, x2: right, y2: bottom });
+            }
+            if (rects.length === 0) return D3D_OK;
+            device.clear(Flags, Color, Z, Stencil, rects);
+            return D3D_OK;
+        }
+
         device.clear(Flags, Color, Z, Stencil);
         return D3D_OK;
     };
