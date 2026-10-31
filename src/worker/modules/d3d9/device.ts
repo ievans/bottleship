@@ -517,8 +517,14 @@ export function createDeviceExports(): Record<string, ThunkImplementation> {
     exports['IDirect3DDevice9_GetAvailableTextureMem'] = (_ctx, _mem, args) => {
         const pDevice = args[0];
         if (!devices.has(pDevice)) return 0;
-        // Report a stable non-zero budget to satisfy legacy probes.
-        return 256 * 1024 * 1024;
+        // A static sentinel, not a real budget (there's no VRAM ceiling behind the WebGPU
+        // backend) — but some titles track their own running texture total against this
+        // number and throttle or silently stop creating new textures once their tally
+        // passes it. 256MB is low enough for a texture-heavy game to cross during a single
+        // long session, which reads as UI chrome and world detail silently going blank over
+        // time. 1GB keeps that self-imposed ceiling far out of reach without pretending to
+        // track real usage.
+        return 1024 * 1024 * 1024;
     };
 
     exports['IDirect3DDevice9_EvictManagedResources'] = (_ctx, _mem, args) => {

@@ -604,6 +604,19 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
         (kind === "vb" ? this.vbDirty : this.ibDirty).set(ptr, { start: 0, end: totalSize });
     }
 
+    /**
+     * Drop a vertex/index buffer's GPU-side resources on final COM Release. Without this,
+     * every Create*Buffer leaves its GPUBuffer (and dirty-range bookkeeping) behind forever
+     * — titles that stream dynamic geometry create and release these every frame, so the
+     * leak is not theoretical: it is the difference between a short demo and a real session.
+     */
+    releaseBuffer(kind: "vb" | "ib", ptr: number): void {
+        const gpuBuffers = kind === "vb" ? this.vbGpuBuffers : this.ibGpuBuffers;
+        gpuBuffers.get(ptr)?.destroy();
+        gpuBuffers.delete(ptr);
+        (kind === "vb" ? this.vbDirty : this.ibDirty).delete(ptr);
+    }
+
     private ensureVbGpuBuffer(vbPtr: number, size: number): GPUBuffer | null {
         const device = this.getGpuDevice();
         if (!device) return null;
