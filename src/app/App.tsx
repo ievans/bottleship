@@ -20,7 +20,7 @@ import { sessionFromLocation } from "../harness/session";
 import { lanRelayUrl, newLanRoom } from "../net/lan-url";
 import { installHarnessFacade } from "../harness/facade";
 import { getCachedGamepadMeta, initGamepadCache, readLiveGamepad, rescanGamepads } from "../gamepad-cache";
-import GameSelectScreen, { type GameEntry } from "../library/GameSelectScreen";
+import GameSelectScreen, { isDemoEntry, type GameEntry } from "../library/GameSelectScreen";
 import SettingsDrawer from "../settings/SettingsDrawer";
 import DevPanel from "./DevPanel";
 import ExitOverlay from "./ExitOverlay";
@@ -3335,7 +3335,7 @@ export default function App() {
         </div>
       )}
 
-      {displayGame!.id !== "dev" && displayGame!.gogUrl && !hasImportedBundle && (
+      {displayGame!.id !== "dev" && displayGame!.gogUrl && isDemoEntry(displayGame!) && !hasImportedBundle && (
         <div className={cx(s, "gog-upgrade", isFullscreen && "gog-upgrade--hidden")}>
           <div><strong>Own the full game on GOG?</strong> Drop your offline installer here and play your copy.
             <small>Include setup.exe and every setup-*.bin part. Download your WGB or free cached files in Settings → Storage.</small>
