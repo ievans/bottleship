@@ -145,6 +145,7 @@ callee cleanup by disassembling the real `mss32.dll` export (`ret 0x10`) and imp
 alongside the existing `RIB_register_interface`/`RIB_unregister_interface` provider
 registry. Not yet covered: single player gameplay, save/load, LAN, campaign — bring-up
 has only reached the main menu so far.
+
 ¶ GOG offline installers converted with `tools/gog-to-wgb.ts`, checked 2026-10-31 on a
 Raspberry Pi 5 (SwiftShader WebGPU) with short sessions only; none of these has had a long
 playthrough. Observed: Civilization III Complete — Quick Start, the map, founding a city, the
