@@ -4,7 +4,7 @@
  * SetDisplayMode returns; a posted message lands after the clear and re-arms the re-init
  * forever.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { System } from "../../src/worker/core/system";
 import { windows } from "../../src/worker/modules/user32/shared-state";
 import { sendDisplayChange } from "../../src/worker/modules/user32/message";
@@ -59,6 +59,16 @@ const mem = new Uint8Array(0x2000);
 new DataView(mem.buffer).setUint32(STACK, 0x4010ff, true);
 
 const created: number[] = [];
+// System is a process-wide singleton shared with every other test file; a top-level window
+// another file left behind would otherwise receive (or be skipped by) the send.
+beforeEach(() => {
+    const wm = system().windowManager;
+    for (const h of [...wm.topLevelHwnds()]) {
+        wm.destroyWindow(h);
+        windows.delete(h);
+    }
+    drain([]);
+});
 afterEach(() => {
     for (const h of created.splice(0)) {
         system().windowManager.destroyWindow(h);
