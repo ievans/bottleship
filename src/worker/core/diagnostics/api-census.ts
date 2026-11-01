@@ -88,7 +88,7 @@ export function isSuspectSilentStub(name: string, arity: number, argCount: numbe
  */
 const HRESULT_MODULES = new Set<string>([
     "d3d9", "d3dx9", "d3d8", "d3dx8", "ddraw", "dsound", "dinput", "dinput8",
-    "quartz", "dplayx", "dmusic", "amstream", "d3drm", "wined3d",
+    "quartz", "dplayx", "dmusic", "amstream", "dpnet", "d3drm", "wined3d",
 ]);
 
 export interface ApiFailureRecord {
@@ -102,10 +102,17 @@ export interface ApiFailureRecord {
     lastSeq: number;
 }
 
+const hresultThunkByName = new Map<string, boolean>();
+
 /** Does a failing return from this thunk mean an HRESULT failure? */
 export function isHresultThunk(name: string): boolean {
-    const colon = name.indexOf(":");
-    return colon > 0 && HRESULT_MODULES.has(name.slice(0, colon));
+    let known = hresultThunkByName.get(name);
+    if (known === undefined) {
+        const colon = name.indexOf(":");
+        known = colon > 0 && HRESULT_MODULES.has(name.slice(0, colon));
+        hresultThunkByName.set(name, known);
+    }
+    return known;
 }
 
 class ApiCensus {

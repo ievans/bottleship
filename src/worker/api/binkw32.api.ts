@@ -46,6 +46,7 @@ export const binkw32Module: ModuleDescriptor = {
         makeFunc("_BinkCopyToBufferRect@44", 11), // handle, buf, pitch, height, x, y, left, top, width, height2, flags
         makeFunc("_BinkBufferOpen@16", 4),        // hwnd, ...
         makeFunc("_BinkBufferClose@4", 1),        // handle
+        makeFunc("_BinkBufferSetOffset@12", 3),   // buffer, destx, desty
         makeFunc("_BinkBufferBlit@16", 4),        // buffer, bink, x, y
         makeFunc("_BinkBufferLock@4", 1),         // buffer
         makeFunc("_BinkBufferUnlock@4", 1),       // buffer

@@ -10,6 +10,7 @@ import { Logger, LogCategory } from "../core/logger";
 import { System } from "../core/system";
 import { Mem } from "../core/memory/mem-accessor";
 import { Marshaler } from "../core/memory/marshaler";
+import { isValidAddress } from "../core/memory/address-guard";
 import { TimerKind } from "../core/scheduler/types";
 import { findResourceInPE } from "./kernel32/resource";
 import { probeAudioAt } from "@bottleship/formats/audio";
@@ -84,6 +85,7 @@ const MMIO_CREATE = 0x00001000;
 const MMIOERR_FILENOTFOUND = 257;
 const MMIOERR_CANNOTOPEN = 259;
 const MMIOERR_CANNOTREAD = 260;
+const MMIOERR_CANNOTWRITE = 261;
 const MMIOERR_CHUNKNOTFOUND = 266;
 const SEEK_SET = 0;
 const SEEK_CUR = 1;
@@ -355,8 +357,8 @@ export interface PendingTimerCallback {
     sourceTimer?: WinMMTimer;
     /** If set, use these args directly instead of [timerId, 0, dwUser, 0, 0] */
     args?: number[];
-    /** Runs once the guest callback has returned (a thread-pool callback instance ending). */
-    onReturn?: () => void;
+    /** Runs once the guest callback has returned, with its EAX (a thread-pool callback instance ending). */
+    onReturn?: (eax: number) => void;
 }
 
 interface WaveFormat {
@@ -963,7 +965,7 @@ export class WinMM implements IModule {
      * The callback is self-cleaning stdcall (dispatch passes callerCleanup=0). No-op if the
      * pump could not be created.
      */
-    postGuestCallback(callbackAddr: number, args: number[], onReturn?: () => void): boolean {
+    postGuestCallback(callbackAddr: number, args: number[], onReturn?: (eax: number) => void): boolean {
         if (!callbackAddr) return false;
         this.ensureTimerThread();
         if (this.timerThreadId === 0) return false;
@@ -991,11 +993,11 @@ export class WinMM implements IModule {
     }
 
     /** The timer-pump callback that just returned: finish a posted callback's instance. */
-    notePostedCallbackReturned(callbackAddr: number): void {
+    notePostedCallbackReturned(callbackAddr: number, eax: number): void {
         const cb = this.dispatchingPosted;
         if (!cb || cb.callbackAddr !== (callbackAddr >>> 0)) return;
         this.dispatchingPosted = null;
-        cb.onReturn?.();
+        cb.onReturn?.(eax >>> 0);
     }
 
     /**
@@ -2111,6 +2113,25 @@ export class WinMM implements IModule {
             mmioWriteInfoStruct(lpmmioinfo, hmmio, mmio);
             this.recordMmioInfo("mmioGetInfo", lpmmioinfo, mmio);
 
+            return MMSYSERR_NOERROR;
+        };
+
+        // Buffered I/O is optional in real MMIO: a NULL buffer selects unbuffered reads, which mmioRead
+        // already serves from the file, and a caller-supplied block becomes the window mmioGetInfo exposes.
+        this.exports["mmioSetBuffer"] = (ctx, mem, args) => {
+            const hmmio = args[0];
+            const pchBuffer = args[1] >>> 0;
+            const cchBuffer = args[2] >>> 0;
+
+            const mmio = this.mmioHandles.get(hmmio);
+            if (!mmio) return MMSYSERR_INVALPARAM;
+            if (mmio.memoryBase) return MMIOERR_CANNOTWRITE;
+            if (pchBuffer && cchBuffer) {
+                if (!isValidAddress(pchBuffer, cchBuffer, "rw")) return MMSYSERR_INVALPARAM;
+                mmio.guestBuffer = pchBuffer;
+                mmio.guestBufferSize = cchBuffer;
+                mmio.bufFilled = 0;
+            }
             return MMSYSERR_NOERROR;
         };
 

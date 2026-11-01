@@ -18,7 +18,7 @@
  * round-trip ImageData per segment.
  */
 import { Logger, LogCategory } from "../../core/logger";
-import { writeBackDibSectionRect } from './bitmap-resolve';
+import { pullDibSectionRect, writeBackDibSectionRect } from './bitmap-resolve';
 import type { GDIContext } from './context';
 import {
     isStockObject,
@@ -156,6 +156,19 @@ export function strokePolyline(
 
     if (ctx === gdi.overlayCtx) gdi.setOverlayDirty(true);
 
+    let minX = pts[0], maxX = pts[0], minY = pts[1], maxY = pts[1];
+    for (let i = 1; i < (pts.length >> 1); i++) {
+        const x = pts[i * 2], y = pts[i * 2 + 1];
+        if (x < minX) minX = x; else if (x > maxX) maxX = x;
+        if (y < minY) minY = y; else if (y > maxY) maxY = y;
+    }
+    const pad = pen.width;
+    // A DIBSection's guest bits are its pixel surface — the stroke has to land there too,
+    // over the bits as the app last left them rather than the canvas's older copy.
+    const back = gdi.clipCopyRect(hdc, minX - pad, minY - pad,
+        (maxX - minX) + pad * 2 + 1, (maxY - minY) + pad * 2 + 1);
+    if (back) pullDibSectionRect(gdi.hdcStates.get(hdc)?.hBitmap ?? 0, ctx, back.x, back.y, back.w, back.h);
+
     const clipped = gdi.beginClipOn(hdc, ctx);
     tracePath(ctx, pts, closed, pen);
     if (clipped) ctx.restore();
@@ -172,16 +185,6 @@ export function strokePolyline(
         }
     }
 
-    let minX = pts[0], maxX = pts[0], minY = pts[1], maxY = pts[1];
-    for (let i = 1; i < (pts.length >> 1); i++) {
-        const x = pts[i * 2], y = pts[i * 2 + 1];
-        if (x < minX) minX = x; else if (x > maxX) maxX = x;
-        if (y < minY) minY = y; else if (y > maxY) maxY = y;
-    }
-    const pad = pen.width;
-    // A DIBSection's guest bits are its pixel surface — the stroke has to land there too.
-    const back = gdi.clipCopyRect(hdc, minX - pad, minY - pad,
-        (maxX - minX) + pad * 2 + 1, (maxY - minY) + pad * 2 + 1);
     if (back) {
         writeBackDibSectionRect(gdi.hdcStates.get(hdc)?.hBitmap ?? 0, ctx, back.x, back.y, back.w, back.h);
     }

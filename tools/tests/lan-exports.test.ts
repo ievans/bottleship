@@ -102,7 +102,9 @@ describe("LAN thunk exports", () => {
         a.call("connect", cs, a.A.sockaddr(0, b.stack.ip!, 2313), 16);
         await flush();
         const conn = b.call("accept", ls, 0, 0) as number;
-        a.stack.now = () => performance.now() * 50;
+        // Frozen while the budget is measured (a scheduling pause would refill it), then fast so the parked send finishes.
+        let since = -1;
+        a.stack.now = () => (since < 0 ? 0 : (performance.now() - since) * 50);
         a.table.setNonBlocking(cs, true);
         const big = 800 << 10;                        // the fake guest is 1 MiB
         const first = a.call("send", cs, a.A.base + 0x2000, big, 0) as number;
@@ -111,6 +113,7 @@ describe("LAN thunk exports", () => {
         expect(n).toBeLessThan(big);                  // budget spent: partial or WSAEWOULDBLOCK
         if (n < 0) expect(a.err()).toBe(E.WOULDBLOCK);
         a.table.setNonBlocking(cs, false);
+        since = performance.now();
         const rest = a.call("send", cs, a.A.base + 0x2000, big, 0);
         expect(rest).toBeInstanceOf(Promise);
         expect(await rest).toBe(big);

@@ -57,7 +57,7 @@ async function main(): Promise<void> {
             externalSize: f.externalSize.toString(),
         })),
         icons: icons.map((i) => ({ name: i.name, filename: i.filename })),
-        registry: registryEntries.map((r) => ({ key: r.key, name: r.name, type: r.type })),
+        registry: registryEntries.map((r) => ({ hive: r.hive, key: r.key, name: r.name, type: r.type, value: new TextDecoder("utf-16le").decode(r.value) })),
     };
 
     console.log(`Version: ${summary.version}`);

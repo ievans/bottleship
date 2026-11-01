@@ -88,7 +88,7 @@ test('ANSI font enumeration invokes every style, keeps storage alive and returns
         const cb = callbacks[i];
         expect(cb.args).toEqual([2048, 2236, 4, 0x12345678]);
         expect(cb.frameId).toBe(7);
-        expect(readString(2048 + 28)).toBe('tahoma');
+        expect(readString(2048 + 28)).toBe('Tahoma');
         styles.push(readString(2048 + 124));
         expect(freed).toEqual([]);
         expect(finish(37)).toBe(i === 3 ? 37 : null);
@@ -110,8 +110,8 @@ test('Unicode ENUMLOGFONTEXW and NEWTEXTMETRICEXW have native offsets and no ANS
     call('Arial', true);
     const cb = callbacks[0];
     expect(cb.args[1]).toBe(2048 + 348);
-    expect(readString(2048 + 28, true)).toBe('arial');
-    expect(readString(2048 + 92, true)).toBe('arial');
+    expect(readString(2048 + 28, true)).toBe('Arial');
+    expect(readString(2048 + 92, true)).toBe('Arial');
     expect(readString(2048 + 220, true)).toBe('Regular');
     const metrics = cb.args[1];
     const view = new DataView(memory.buffer);

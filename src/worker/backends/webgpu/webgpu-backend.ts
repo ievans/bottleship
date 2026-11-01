@@ -70,6 +70,13 @@ export class WebGPUBackend implements RenderBackend {
     private postFx: PostFxChain | null = null;
 
 
+    private hostBackedGpu = false;
+
+    /** True when GPU buffers are ordinary host RAM (software/fallback adapter, e.g. SwiftShader). */
+    isHostBackedGpu(): boolean {
+        return this.hostBackedGpu;
+    }
+
     /** Set while a replacement device is being requested — the retry is single-flight. */
     private recreating: Promise<boolean> | null = null;
     /** Set while a harness-forced destroy is in flight, so the loss can be labelled as ours. */
@@ -109,6 +116,12 @@ export class WebGPUBackend implements RenderBackend {
         if (!adapter) {
             throw new Error("WebGPU unavailable: requestAdapter() returned no adapter — no usable GPU (hardware acceleration disabled, GPU blocklisted, or VM/Remote Desktop with no GPU).");
         }
+
+        const info = adapter.info;
+        this.hostBackedGpu = !!info && (
+            (info as { isFallbackAdapter?: boolean }).isFallbackAdapter === true ||
+            /swiftshader|llvmpipe|softpipe|software|basic render/i.test(
+                `${info.vendor} ${info.architecture} ${info.device} ${info.description}`));
 
         // Request BC (DXT/S3TC) texture compression when the adapter supports it so
         // the D3D9 backend can upload DXT1/3/5 textures as native bc1/2/3-rgba-unorm

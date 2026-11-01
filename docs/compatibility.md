@@ -5,7 +5,7 @@ BottleShip targets native Win32 games of roughly **1997–2004** — the DirectD
 not exhaustive, and "runs" means different things at different stages (boots to menu vs. fully
 playable). Your mileage will vary with the exact build/version you own.
 
-Updated **2026-10-26** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
+Updated **2026-10-31** for **BottleShip 0.7**. Working statuses include maintainer reports; every title has not
 been retested for this release. Observed demo stages are listed separately below. Successful
 GOG extraction does not establish gameplay coverage for that installer edition.
 
@@ -89,6 +89,10 @@ GOG extraction does not establish gameplay coverage for that installer edition.
 | Empire Earth: The Art of Conquest (1.00, single player) | playable‡ | |
 | Empire Earth II (Gold Edition) | boots§ | |
 | Empire Earth II: The Art of Supremacy | bootsǁ | |
+| Sid Meier's Civilization III Complete (GOG) | boots¶ | ✓ |
+| Close Combat II: A Bridge Too Far (GOG) | boots¶ | ✓ |
+| SimCity 3000 Unlimited (GOG) | boots¶ | ✓ |
+| RollerCoaster Tycoon Deluxe (GOG) | boots¶ | ✓ |
 
 \* retail has an intermittent mode-switch hiccup; the demo does not.
 
@@ -141,6 +145,21 @@ callee cleanup by disassembling the real `mss32.dll` export (`ret 0x10`) and imp
 alongside the existing `RIB_register_interface`/`RIB_unregister_interface` provider
 registry. Not yet covered: single player gameplay, save/load, LAN, campaign — bring-up
 has only reached the main menu so far.
+
+¶ GOG offline installers converted with `tools/gog-to-wgb.ts`, checked 2026-10-31 on a
+Raspberry Pi 5 (SwiftShader WebGPU) with short sessions only; none of these has had a long
+playthrough. Observed: Civilization III Complete — Quick Start, the map, founding a city, the
+city screen and several turns (turn counter, gold and production advance); Close Combat II —
+menus, the deployment screen and an interactive battle; SimCity 3000 Unlimited — menu, new
+city, terrain editor and the city view with the simulation running (date advances);
+RollerCoaster Tycoon Deluxe (640 × 480 × 8) — title menu, scenario list and a live park with
+money ticking. Multiplayer, where the game has it, was exercised against a synthetic peer on
+the virtual LAN, never between two emulated guests: Civilization III over DirectPlay 8 (host
+and join, `tools/harness/regression/civ3-lan.harness.ts`) and Close Combat II over Winsock TCP
+port 1945 (join and host handshakes, `tools/harness/regression/cc2-lan.harness.ts`). That
+proves the network path, not a full multiplayer game. SimCity 3000 and RollerCoaster Tycoon
+have no multiplayer. Cold start is slow on the Pi (RollerCoaster Tycoon ~4 minutes,
+SimCity 3000 ~2 minutes).
 
 † The MCIWnd and DirectMusic runtime was imported from LinusU's full-game branch,
 with targeted stack, stream, lifetime and parser regressions. The October 12 integration

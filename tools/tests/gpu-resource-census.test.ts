@@ -17,7 +17,7 @@ const g = globalThis as unknown as Record<string, unknown>;
 g.GPUDevice ??= FakeDevice;
 g.GPUBuffer ??= FakeBuffer;
 g.GPUTexture ??= FakeTexture;
-g.GPUBufferUsage ??= { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128 };
+const USAGE = { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128 };
 
 const { armGpuResourceCensus, gpuResourceCensus } = await import("../../src/worker/core/gpu/gpu-resource-census");
 
@@ -29,20 +29,29 @@ describe("gpu resource census", () => {
     test("live = created - destroyed, by tag and by site", () => {
         const Device = g.GPUDevice as typeof FakeDevice;
         if (Device !== FakeDevice) return; // a real WebGPU runtime: the fakes were not installed
-        armGpuResourceCensus("test", { sites: true, reset: true });
-        const device = new FakeDevice();
-        const a = allocateVertexBuffer(device);
-        allocateVertexBuffer(device);
-        allocateVertexBuffer(device);
-        a.destroy();
-        a.destroy(); // a second destroy must not retire twice
-        device.createTexture({ size: { width: 16, height: 16 }, format: "rgba8unorm" });
+        // Tags are named from the global at creation time, and other test files define their own
+        // narrower GPUBufferUsage first in a shared run, so this test pins the one it asserts on.
+        const priorUsage = g.GPUBufferUsage;
+        g.GPUBufferUsage = USAGE;
+        try {
+            armGpuResourceCensus("test", { sites: true, reset: true });
+            const device = new FakeDevice();
+            const a = allocateVertexBuffer(device);
+            allocateVertexBuffer(device);
+            allocateVertexBuffer(device);
+            a.destroy();
+            a.destroy(); // a second destroy must not retire twice
+            device.createTexture({ size: { width: 16, height: 16 }, format: "rgba8unorm" });
 
-        const c = gpuResourceCensus();
-        expect(c.kinds.buffer).toMatchObject({ created: 3, destroyed: 1, live: 2, liveBytes: 2048 });
-        expect(c.kinds.texture).toMatchObject({ created: 1, live: 1, liveBytes: 16 * 16 * 4 });
-        expect(c.liveByTag.find((t) => t.tag === "buffer:COPY_DST|VERTEX")).toMatchObject({ live: 2, bytes: 2048 });
-        expect(c.liveBySite.some((s) => s.kind === "buffer" && s.site.includes("gpu-resource-census.test"))).toBe(true);
+            const c = gpuResourceCensus();
+            expect(c.kinds.buffer).toMatchObject({ created: 3, destroyed: 1, live: 2, liveBytes: 2048 });
+            expect(c.kinds.texture).toMatchObject({ created: 1, live: 1, liveBytes: 16 * 16 * 4 });
+            expect(c.liveByTag.find((t) => t.tag === "buffer:COPY_DST|VERTEX")).toMatchObject({ live: 2, bytes: 2048 });
+            expect(c.liveBySite.some((s) => s.kind === "buffer" && s.site.includes("gpu-resource-census.test"))).toBe(true);
+        } finally {
+            if (priorUsage === undefined) delete g.GPUBufferUsage;
+            else g.GPUBufferUsage = priorUsage;
+        }
     });
 
     test("objects created before arming are never counted, even when destroyed after", () => {

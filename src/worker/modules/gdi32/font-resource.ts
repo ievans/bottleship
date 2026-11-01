@@ -116,10 +116,17 @@ interface InstalledFont { faces: FontFace[]; family: string; fullName: string | 
 const installedFonts = new Map<string, InstalledFont>();
 const pendingFonts = new Map<string, Promise<InstalledFont | null>>();
 let fontGeneration = 0;
+let fontSetEpoch = 0;
+
+/** Bumps whenever the set of installed faces changes, so cached text measurements can expire. */
+export function getFontSetEpoch(): number {
+    return fontSetEpoch;
+}
 
 /** A new guest container must not inherit installed faces or pending loads from the old one. */
 export function resetFontResources(): void {
     fontGeneration++;
+    fontSetEpoch++;
     for (const entry of installedFonts.values()) {
         for (const face of entry.faces) (self as unknown as { fonts: FontFaceSet }).fonts.delete(face);
     }
@@ -149,6 +156,7 @@ export async function addFontResource(resolvedPath: string, data: Uint8Array, fl
         if (!entry) {
             entry = loaded;
             for (const face of entry.faces) (self as unknown as { fonts: FontFaceSet }).fonts.add(face);
+            fontSetEpoch++;
             installedFonts.set(key, entry);
         }
     }
@@ -236,6 +244,7 @@ export function removeFontResource(resolvedPath: string, flags = 0): boolean {
     else entry.references.delete(flags);
     if (entry.references.size > 0) return true;
     for (const face of entry.faces) (self as unknown as { fonts: FontFaceSet }).fonts.delete(face);
+    fontSetEpoch++;
     installedFonts.delete(key);
     return true;
 }
