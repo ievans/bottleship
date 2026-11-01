@@ -8530,7 +8530,7 @@ export class ThunkDispatcher {
         // call shape from the return address the CALL left on the stack and answer
         // ContinueSearch (1) instead, so the chain moves to the next frame (or falls through
         // to UnhandledExceptionFilter) rather than looping.
-        const esp = cpu.reg32[4] >>> 0;
+        const esp = this.regsRaw[4] >>> 0;
         if (this.sehDispatchStubAddress !== 0 && this.isDataViewValid() && esp + 4 <= this.memLength) {
             const retAddr = this.cachedDataView!.getUint32(esp, true) >>> 0;
             if (retAddr >= this.sehDispatchStubAddress && retAddr < this.sehDispatchStubAddress + 0x100) {
@@ -8538,7 +8538,7 @@ export class ThunkDispatcher {
                     `SEH dispatch: ${name} threw while running as a native SEH handler — ` +
                     `answering ContinueSearch(1) instead of ContinueExecution(0) to avoid ` +
                     `retrying the fault forever`);
-                cpu.reg32[0] = 1;
+                this.regsRaw[0] = 1;
                 return;
             }
         }
