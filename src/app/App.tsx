@@ -3000,6 +3000,7 @@ export default function App() {
     <SettingsDrawer
       isOpen={mainSettingsOpen}
       onClose={() => setMainSettingsOpen(false)}
+      storageSlotsLocked={!!gameIdFromUrl}
       quality={quality}
       onChange={handleQualityChange}
       unsupportedQualityKeys={unsupportedQualityKeys}
@@ -3051,7 +3052,7 @@ export default function App() {
         />
         {settingsDrawer}
         <VirtualKeyboardSheet open={oskOpen} onClose={() => setOskOpen(false)} />
-        <StorageManagerModal isOpen={storageOpen} onClose={() => setStorageOpen(false)} />
+        <StorageManagerModal isOpen={storageOpen} onClose={() => setStorageOpen(false)} slotsLocked={!!gameIdFromUrl} />
         <WgbWizardModal
           isOpen={addGameOpen}
           onClose={() => setAddGameOpen(false)}
@@ -3498,7 +3499,7 @@ export default function App() {
           onLaunch={handleLaunchBundle}
         />
       )}
-      <StorageManagerModal isOpen={storageOpen} onClose={() => setStorageOpen(false)} />
+      <StorageManagerModal isOpen={storageOpen} onClose={() => setStorageOpen(false)} slotsLocked={!!gameIdFromUrl} />
       <RegistryTool isOpen={registryToolOpen} onClose={() => setRegistryToolOpen(false)} worker={globalWorker} />
       <DebugLogViewer isOpen={logViewerOpen} onClose={() => setLogViewerOpen(false)} worker={globalWorker} />
       <MemoryPanel isOpen={memoryPanelOpen} onClose={() => setMemoryPanelOpen(false)} worker={globalWorker} />
