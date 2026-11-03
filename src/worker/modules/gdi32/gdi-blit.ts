@@ -42,15 +42,16 @@ function syncDibSourceDc(
     ySrc: number,
     width: number,
     height: number,
-): void {
+): boolean {
     const hBmp = srcState?.hBitmap;
-    if (!hBmp || hBmp === DEFAULT_BITMAP_HANDLE || !srcCtx) return;
+    if (!hBmp || hBmp === DEFAULT_BITMAP_HANDLE || !srcCtx) return false;
     const mem = System.getInstance().process?.getCurrentMemory?.();
-    if (!mem) return;
+    if (!mem) return false;
     const fresh = resolveDibSectionRectRgba(hBmp, mem, xSrc, ySrc, width, height);
-    if (!fresh) return;
+    if (!fresh) return false;
     srcCtx.putImageData(new (ImageData as any)(fresh.data, fresh.width, fresh.height), fresh.x, fresh.y);
     gdi.invalidateImageDataCache(hdcSrc);
+    return true;
 }
 
 /** DC color CSS → [r,g,b] via the shared parser (COLORREF is 0x00BBGGRR). */
@@ -228,12 +229,18 @@ export function bitBlt(gdi: GDIContext, hdcDest: number, x: number, y: number, w
 
     const destState = gdi.hdcStates.get(hdcDest);
     const srcState = gdi.hdcStates.get(hdcSrc);
-    if (needsSource) syncDibSourceDc(gdi, hdcSrc, srcCtx, srcState, xSrc, ySrc, width, height);
+    const srcWasDibResynced = needsSource && syncDibSourceDc(gdi, hdcSrc, srcCtx, srcState, xSrc, ySrc, width, height);
     // Skip only a never-drawn compatible source → window DC (WM_PAINT that BitBlts a
     // fresh CreateCompatibleBitmap and would whitewash guest art). A pristine flag left
     // on a DC that already holds real pixels must NOT no-op — menu slide transitions
     // restore the backdrop with SRCCOPY from an offscreen snapshot into a window DC.
-    if (rop === SRCCOPY && srcState?.pristine && destState?.windowBlit) {
+    // A DIBSection source is exempt: its bits are guest-writable memory with no API call
+    // to observe (see syncDibSourceDc), so `compatibleEmpty` can never be cleared by a
+    // direct-write renderer (e.g. jgl.dll-style software rendering) — the flag would stay
+    // stuck true forever and every subsequent present from that backbuffer would be
+    // silently dropped. We just resynced real guest pixel data into the canvas above, so
+    // trust that over the stale flag.
+    if (rop === SRCCOPY && srcState?.pristine && destState?.windowBlit && !srcWasDibResynced) {
         const srcBmp = srcState.hBitmap ?? 0;
         const noRealBitmap = !srcBmp || srcBmp === DEFAULT_BITMAP_HANDLE;
         let emptyCompatible = false;

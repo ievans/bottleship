@@ -29,6 +29,10 @@ import {
     COM_METHOD_UNIMPLEMENTED_RETURN, DEFAULT_UNIMPLEMENTED_RETURN,
     ERROR_CALL_NOT_IMPLEMENTED, unimplementedReturnValue,
 } from './unimplemented-return';
+/** ERROR_IO_DEVICE — generic "this call failed internally" signal (file-io.ts sets it for a
+ *  caught file-I/O exception); reused for any thunk whose implementation throws, since the
+ *  catch-all here has no more specific code to report. */
+const THUNK_INTERNAL_ERROR_CODE = 1117;
 import { thunkChecksumManager } from '../memory/thunk-checksum';
 import { invalidateGuestCode } from '../memory/guest-code';
 import { hypercallDataManager } from '../cpu/hypercall-data';
@@ -8528,6 +8532,17 @@ export class ThunkDispatcher {
 
     private _slowPathHandleThunkError(id: number, name: string, e: any, cpu: any): void {
         Logger.error(LogCategory.THUNK, `Error executing thunk ${name} (ID ${id}): ${e}`);
+
+        // The other half of an honest refusal (see the UNIMPLEMENTED case above): a Win32
+        // caller that sees FALSE/0 asks GetLastError next. Left untouched here, it reads
+        // whatever an earlier, unrelated call set — e.g. an expected "optional file absent"
+        // probe a few calls back — so the guest can misreport a transient internal failure
+        // (a thrown DOMException/RangeError from an OPFS read under memory pressure, say) as
+        // that earlier call's stale reason instead of its own. ERROR_IO_DEVICE is the generic
+        // "this call blew up internally, no more specific code available" signal already used
+        // for a caught file-I/O failure (file-io.ts); reused here since this catch-all cannot
+        // know which thunk category threw.
+        try { this.ensureScheduler().setLastError(THUNK_INTERNAL_ERROR_CODE); } catch { /* pre-scheduler */ }
 
         // EAX=0 is the right default for an ordinary WinAPI call (NULL/FALSE), but when this
         // thunk is itself one of the SEH chain's handlers — called directly by the generated
