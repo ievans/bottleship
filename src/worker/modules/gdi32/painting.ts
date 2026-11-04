@@ -6,7 +6,8 @@ import { System } from '../../core/system';
 import { Marshaler } from '../../core/memory/marshaler';
 import { Logger, LogCategory } from '../../core/logger';
 import { profiler } from '../../core/profiler';
-import { EmulatorConfig } from '../../core/emulator-config-manager';
+import { EmulatorConfig, getCodePageDecoder } from '../../core/emulator-config-manager';
+import { MemoryGuard } from '../../core/memory/mem-guard';
 import { SystemResourceProvider } from '../../core/resources/system-resource-provider';
 import { toPlainGuestMemory } from '../../core/memory/guest-memory';
 import { LOGPEN_OFFSETS, LOGPEN_SIZE, STOCK_NULL_BRUSH } from './gdi-objects';
@@ -1988,6 +1989,67 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         }
         return 1; // success
     };
+
+    // GLYPHMETRICS layout (offsets in bytes): +0 gmBlackBoxX (UINT) +4 gmBlackBoxY (UINT)
+    // +8 gmptGlyphOrigin.x (LONG) +12 gmptGlyphOrigin.y (LONG) +16 gmCellIncX (short)
+    // +18 gmCellIncY (short). Total size 20 bytes.
+    function writeGlyphMetrics(lpgm: number, g: { blackBoxX: number; blackBoxY: number; originX: number; originY: number; cellIncX: number; cellIncY: number }, mem: Uint8Array): void {
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        view.setUint32(lpgm, g.blackBoxX, true);
+        view.setUint32(lpgm + 4, g.blackBoxY, true);
+        view.setInt32(lpgm + 8, g.originX, true);
+        view.setInt32(lpgm + 12, g.originY, true);
+        view.setInt16(lpgm + 16, g.cellIncX, true);
+        view.setInt16(lpgm + 18, g.cellIncY, true);
+    }
+
+    const GLYPHMETRICS_SIZE = 20;
+
+    // GetGlyphOutlineA/W(hdc, uChar, uFormat, lpgm, cbBuffer, lpvBuffer, lpmat2). uChar is a
+    // raw character code (A: one ANSI byte decoded via the guest's code page, W: a UTF-16
+    // code unit), not a real glyph index — GGO_GLYPH_INDEX is accepted but has no effect, since
+    // this emulator has no font glyph-index table to resolve it against. lpmat2 (rotation/
+    // shear/scale) is read by the caller and ignored: every known caller of this path
+    // (D3DX8's ID3DXFont building a font-texture atlas) passes the identity transform.
+    const getGlyphOutline = (isWide: boolean): ThunkImplementation => (ctx, mem, args) => {
+        const hdc = args[0]!;
+        const uChar = args[1]! >>> 0;
+        const uFormat = args[2]! >>> 0;
+        const lpgm = args[3]!;
+        const cbBuffer = args[4]! >>> 0;
+        const lpvBuffer = args[5]!;
+        const GDI_ERROR = 0xFFFFFFFF;
+
+        const char = isWide
+            ? String.fromCharCode(uChar & 0xFFFF)
+            : getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage).decode(new Uint8Array([uChar & 0xFF]));
+
+        const gdi = System.getInstance().gdiContext;
+        const result = gdi.getGlyphOutline(hdc, char, uFormat);
+        Logger.verbose(LogCategory.GDI32, `GetGlyphOutline${isWide ? 'W' : 'A'}(hdc=0x${hdc.toString(16)}, char='${char}', uFormat=${uFormat})`);
+        if (!result) return GDI_ERROR;
+
+        if (lpgm) {
+            if (!isValidAddress(mem, lpgm, GLYPHMETRICS_SIZE, 'rw')) return GDI_ERROR;
+            writeGlyphMetrics(lpgm, result, mem);
+        }
+        if (!result.bitmap) return 0; // GGO_METRICS: no raster, metrics-only success
+
+        const required = result.bitmap.length;
+        if (!lpvBuffer) return required; // buffer-size query: lpgm is filled, nothing else to do
+        if (cbBuffer < required) return GDI_ERROR;
+        if (!isValidAddress(mem, lpvBuffer, required, 'rw')) return GDI_ERROR;
+        MemoryGuard.writeBytes(mem, lpvBuffer, result.bitmap, `GetGlyphOutline${isWide ? 'W' : 'A'}`);
+        return required;
+    };
+    exports['GetGlyphOutlineA'] = getGlyphOutline(false);
+    exports['GetGlyphOutlineW'] = getGlyphOutline(true);
+
+    // GetKerningPairsA/W(hdc, nPairs, lpKernPair): this emulator does not parse a font's
+    // kerning table, so it reports zero pairs — a legitimate answer for any font that
+    // genuinely has none, and the one native GDI also gives before a face's kern table loads.
+    exports['GetKerningPairsA'] = (): number => 0;
+    exports['GetKerningPairsW'] = exports['GetKerningPairsA'];
 
     exports['GetTextExtentPointA'] = (ctx, mem, args): number => {
         const hdc = args[0];

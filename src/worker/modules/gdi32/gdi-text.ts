@@ -119,6 +119,139 @@ function fillTextGdi(
     ctx.textBaseline = saved;
 }
 
+// GetGlyphOutline's uFormat (wingdi.h GGO_*). The low nibble is one mode value (not a mask);
+// GGO_GLYPH_INDEX/GGO_UNHINTED are flag bits a caller ORs on top of it.
+const GGO_METRICS = 0x0000;
+const GGO_BITMAP = 0x0001;
+const GGO_NATIVE = 0x0002;
+const GGO_GRAY2_BITMAP = 0x0004;
+const GGO_GRAY4_BITMAP = 0x0005;
+const GGO_GRAY8_BITMAP = 0x0006;
+const GGO_MODE_MASK = 0x0f;
+
+export interface GlyphOutlineResult {
+    blackBoxX: number;
+    blackBoxY: number;
+    originX: number;
+    originY: number;
+    cellIncX: number;
+    cellIncY: number;
+    /** Row-padded raster in the caller's requested GGO_* format; null for GGO_METRICS. */
+    bitmap: Uint8Array | null;
+}
+
+let glyphScratch: OffscreenCanvas | null = null;
+let glyphScratchCtx: OffscreenCanvasRenderingContext2D | null = null;
+
+function ensureGlyphScratch(w: number, h: number): OffscreenCanvasRenderingContext2D | null {
+    if (!glyphScratch || glyphScratch.width < w || glyphScratch.height < h) {
+        glyphScratch = new OffscreenCanvas(Math.max(w, glyphScratch?.width ?? 0), Math.max(h, glyphScratch?.height ?? 0));
+        glyphScratchCtx = glyphScratch.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D | null;
+    }
+    return glyphScratchCtx;
+}
+
+/** One scanline's byte count for `width` pixels at `bitsPerPixel`, padded to a DWORD —
+ *  the row layout every GGO_* raster (and DIB scanlines) share. */
+function ggoRowStride(bitsPerPixel: number, width: number): number {
+    return ((width * bitsPerPixel + 31) >> 5) << 2;
+}
+
+/**
+ * GetGlyphOutline's rasterizer. D3DX8's ID3DXFont builds its font-texture atlas by calling
+ * this once per glyph (metrics first, then the bitmap at the size those metrics reported);
+ * failing it silently — the pre-fix behavior for every uImplemented import — left D3DX8
+ * either reusing whatever was already in that atlas cell or drawing nothing, which is why
+ * unrelated punctuation collapsed onto a single leftover glyph (see issue #37).
+ *
+ * TextOut/DrawText already rasterize via OffscreenCanvas against the DC's selected font
+ * (fillTextAliased above); this follows the same approach instead of a from-scratch
+ * outline/hinting engine. measureText's actualBoundingBox* fields give the glyph's true ink
+ * box (tighter than the font's overall cell), which is rendered to a scratch canvas sized to
+ * exactly that box and then thresholded (GGO_BITMAP) or quantized (GGO_GRAY*_BITMAP) from the
+ * alpha channel. GGO_NATIVE (true vector outline curves) and the MAT2 transform are not
+ * supported — this emulator does not parse font outline tables, and D3DX8's own font-texture
+ * path only ever asks for a bitmap format.
+ */
+export function getGlyphOutline(
+    gdi: GDIContext,
+    hdc: number,
+    char: string,
+    uFormat: number,
+): GlyphOutlineResult | null {
+    const baseFormat = uFormat & GGO_MODE_MASK;
+    if (baseFormat === GGO_NATIVE) return null;
+
+    const fontSize = gdi.hdcStates.get(hdc)?.fontSize ?? 16;
+    const fontString = gdi.getMeasureContext(hdc)?.font || '16px sans-serif';
+
+    const pad = 2;
+    const measureScratch = ensureGlyphScratch(Math.ceil(fontSize * 2) + pad * 2, Math.ceil(fontSize * 2) + pad * 2);
+    if (!measureScratch) return null;
+    measureScratch.font = fontString;
+    measureScratch.textBaseline = 'alphabetic';
+    measureScratch.textAlign = 'left';
+
+    const metrics = measureScratch.measureText(char);
+    const abLeft = metrics.actualBoundingBoxLeft ?? 0;
+    const abRight = metrics.actualBoundingBoxRight ?? 0;
+    const abAscent = metrics.actualBoundingBoxAscent ?? fontSize * 0.8;
+    const abDescent = metrics.actualBoundingBoxDescent ?? 0;
+
+    const result: GlyphOutlineResult = {
+        blackBoxX: Math.max(1, Math.ceil(abLeft + abRight)),
+        blackBoxY: Math.max(1, Math.ceil(abAscent + abDescent)),
+        originX: Math.round(-abLeft),
+        originY: Math.round(abAscent),
+        cellIncX: Math.round(metrics.width),
+        cellIncY: 0,
+        bitmap: null,
+    };
+    if (baseFormat === GGO_METRICS) return result;
+
+    // The font-size estimate above just seeds the scratch canvas; re-request it at the
+    // box this glyph actually measured (a wide 'W' or a deep descender can exceed it).
+    const w = result.blackBoxX + pad * 2;
+    const h = result.blackBoxY + pad * 2;
+    const s = ensureGlyphScratch(w, h);
+    if (!s) return result;
+    s.clearRect(0, 0, s.canvas.width, s.canvas.height);
+    s.font = measureScratch.font;
+    s.textBaseline = 'alphabetic';
+    s.textAlign = 'left';
+    s.fillStyle = '#fff';
+    // Placing the pen so the ink's left/top edge lands exactly at (pad, pad) makes the crop
+    // below a fixed rect — no re-measuring the rendered pixels to find where the glyph landed.
+    s.fillText(char, pad + abLeft, pad + abAscent);
+
+    let coverage: Uint8ClampedArray;
+    try {
+        coverage = s.getImageData(pad, pad, result.blackBoxX, result.blackBoxY).data;
+    } catch {
+        return result;
+    }
+
+    const bpp = baseFormat === GGO_BITMAP ? 1 : 8;
+    const levels = baseFormat === GGO_GRAY2_BITMAP ? 4 : baseFormat === GGO_GRAY4_BITMAP ? 16 : 64; // GGO_GRAY8_BITMAP and any other bitmap mode
+    const stride = ggoRowStride(bpp, result.blackBoxX);
+    const bitmap = new Uint8Array(stride * result.blackBoxY);
+
+    for (let y = 0; y < result.blackBoxY; y++) {
+        const rowBase = y * stride;
+        for (let x = 0; x < result.blackBoxX; x++) {
+            const alpha = coverage[(y * result.blackBoxX + x) * 4 + 3]!;
+            if (baseFormat === GGO_BITMAP) {
+                if (alpha >= 128) bitmap[rowBase + (x >> 3)] |= 0x80 >> (x & 7);
+            } else {
+                bitmap[rowBase + x] = Math.round((alpha / 255) * levels);
+            }
+        }
+    }
+
+    result.bitmap = bitmap;
+    return result;
+}
+
 export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text: string): boolean {
     if (!text) return false;
     const ctx = gdi.contexts.get(hdc);

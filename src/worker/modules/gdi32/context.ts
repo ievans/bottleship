@@ -30,7 +30,7 @@ import {
     getFontCss as getFontCssImpl,
 } from './gdi-objects';
 import { strokePolyline as strokePolylineImpl, lineTo as lineToImpl } from './gdi-lines';
-import { textOut as textOutImpl, drawText as drawTextImpl, type DrawTextLayout } from './gdi-text';
+import { textOut as textOutImpl, drawText as drawTextImpl, getGlyphOutline as getGlyphOutlineImpl, type DrawTextLayout, type GlyphOutlineResult } from './gdi-text';
 import { bitBlt as bitBltImpl, stretchBlt as stretchBltImpl } from './gdi-blit';
 import {
     type DcClipRegion,
@@ -2158,6 +2158,10 @@ export class GDIContext {
 
     drawText(hdc: number, text: string, rect?: { left: number; top: number; right: number; bottom: number }, format?: number): DrawTextLayout | null {
         return drawTextImpl(this, hdc, text, rect, format);
+    }
+
+    getGlyphOutline(hdc: number, char: string, uFormat: number): GlyphOutlineResult | null {
+        return getGlyphOutlineImpl(this, hdc, char, uFormat);
     }
 
     private ensureState(hdc: number): {
