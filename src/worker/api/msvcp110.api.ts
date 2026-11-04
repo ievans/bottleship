@@ -1,4 +1,4 @@
-import { FunctionDescriptor } from "./types";
+import { FunctionDescriptor, ModuleDescriptor } from "./types";
 
 const buildParams = (count: number) => {
     const params = [];
@@ -60,12 +60,20 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         method("??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", 2),
         method("?unshift@?$codecvt@DDH@std@@QBEHAAHPAD1AAPAD@Z", 4),
         method("??0?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAE@XZ", 0),
-        method("?getloc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QBE?AVlocale@2@XZ", 0),
+        // Returns `locale` BY VALUE — the x86 ABI passes the hidden return-buffer pointer as
+        // ONE stack argument (ECX stays `this`); declaring 0 here left the thunk popping the
+        // wrong number of bytes and the handler never seeing that pointer.
+        method("?getloc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@QBE?AVlocale@2@XZ", 1),
         method("?setg@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAEXPAD00@Z", 3, { returnType: "void" }),
         method("?_Init@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAEXXZ", 0, { returnType: "void" }),
-        method("?_Getcat@?$codecvt@DDH@std@@SAIPAPBVfacet@locale@2@PBV42@@Z", 2),
+        // "SA" in the decorated name is static + __cdecl, not thiscall — `method()` would
+        // emit a callee-cleaning thunk (RET 8) for a caller that cleans up its own 8 bytes.
+        free("?_Getcat@?$codecvt@DDH@std@@SAIPAPBVfacet@locale@2@PBV42@@Z", 2),
         method("?tolower@?$ctype@D@std@@QBEDD@Z", 1),
-        method("?tolower@?$ctype@D@std@@QBEPBDPADPBD@Z", 3),
+        // PBDPADPBD@Z is `const char* tolower(char* first, const char* last) const` — the
+        // IN-PLACE range overload, two stack params, not a three-param (dest, first, last)
+        // copy form.
+        method("?tolower@?$ctype@D@std@@QBEPBDPADPBD@Z", 2),
         method("?setstate@?$basic_ios@DU?$char_traits@D@std@@@std@@QAEXH_N@Z", 2, { returnType: "void" }),
         method("?_Getcoll@_Locinfo@std@@QBE?AU_Collvec@@XZ", 0),
         free("_Strcoll", 5),
@@ -77,7 +85,8 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         method("??0_Locinfo@std@@QAE@PBD@Z", 1),
         method("??1_Lockit@std@@QAE@XZ", 0, { returnType: "void" }),
         method("??1_Locinfo@std@@QAE@XZ", 0, { returnType: "void" }),
-        method("?_Getcat@?$ctype@D@std@@SAIPAPBVfacet@locale@2@PBV42@@Z", 2),
+        // Same static __cdecl shape as the codecvt::_Getcat above.
+        free("?_Getcat@?$ctype@D@std@@SAIPAPBVfacet@locale@2@PBV42@@Z", 2),
         method("?_Incref@facet@locale@std@@UAEXXZ", 0, { returnType: "void" }),
         free("_Strxfrm", 5),
         free("?_Init@locale@std@@CAPAV_Locimp@12@_N@Z", 1),
@@ -94,3 +103,15 @@ export const vc110CppExtras: FunctionDescriptor[] = [
     // thunkGenerator.registerDataExport in msvcp110.ts, not declared here — see
     // crt-isDataExport handling in pe-loader.ts (checked ahead of these functions).
 ];
+
+/**
+ * validate-signatures (signature-validator.ts) only discovers a `functions:` array when
+ * it's the literal initializer of a `ModuleDescriptor`-typed object — a bare exported array
+ * like vc110CppExtras above is invisible to it. This wrapper is for the scanner only: the
+ * merge that actually wires these into a reachable module still runs off vc110CppExtras
+ * directly (api-registry.ts's mergeModuleFunctions, emulator.worker.ts).
+ */
+export const vc110CppModule: ModuleDescriptor = {
+    name: "msvcp110",
+    functions: [...vc110CppExtras],
+};

@@ -2655,6 +2655,10 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       // under that versioned name — its handlers merge straight into msvcp90's own exports.
       msvcp110.initialize(process);
       Object.assign(msvcp90.exports, msvcp110.exports);
+      // Not for dispatch (that's the Object.assign above) — this is so system.ts's reset
+      // loop finds msvcp110's reregisterExports and refreshes its data exports (facet ids,
+      // vtables, _BADOFF — all registered under "msvcp90") after a thunk-generator reset.
+      process.registerModule(msvcp110.name, msvcp110);
       crtdll.initialize(process);
       winspool.initialize(process);
       dwmapi.initialize(process);
