@@ -37,6 +37,17 @@ export class SteamApi implements IModule {
     initialize(_process: Process): void {
         const exports = this.exports;
 
+        // Returning true here while every interface getter below returns NULL is not a
+        // state a real Steamworks client ever produces — ordinarily the two succeed or fail
+        // together, and a title that trusts that pairing (checks SteamAPI_Init(), skips the
+        // null-check on SteamUser() etc.) can still crash. The alternative, returning false,
+        // is not uniformly safer: several titles treat Steam as hard-mandatory and abort
+        // their own boot the moment SteamAPI_Init() fails, which forecloses this module ever
+        // getting far enough to reach the specific interface a game actually dereferences —
+        // the evidence this stub exists to surface in the first place (see the file header).
+        // Reporting success and letting each real NULL dereference surface as its own,
+        // separately diagnosable fault is the position this bring-up has verified in
+        // practice gets further.
         exports["SteamAPI_Init"] = () => {
             Logger.log(LogCategory.SYSTEM, "[steam_api] SteamAPI_Init -> true (no real Steam client backing this)");
             return 1;
