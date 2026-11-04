@@ -118,7 +118,7 @@ Navigating menus by screenshot is the slowest loop in a bring-up, so do it once 
 - **Script it.** Turn the working path into a `*.harness.ts` script as soon as it works, so each
   later attempt is a single `bun tools/harness.ts run`.
 - **Record and replay.** `record()` starts capturing harness-driven input, `recordStop()` returns
-  the recording, and `replay(recording, {speed})` re-injects each input at the same present-frame
+  the recording, and `replay(recording)` re-injects each input at the same present-frame
   offset rather than the same wall-clock time. It captures the harness's own input, not a person
   playing in the tab.
 - **Start from a save.** A **save slot** captures the game's whole persistent layer (saves, config,
@@ -144,16 +144,18 @@ before and after numbers for the PR. Run a single guest tab while measuring.
 - **How bad.** `frameReport({reset: true})`, play or `tickFrames`, then `frameReport()`: frame-time
   percentiles, frames over budget, and the over-budget frames grouped by cause and ranked by time
   lost. `measureWindow({ms})` takes the same window with a `sceneProbe` on each side.
-- **What pattern.** `framePacing()` returns the raw inter-present series and its period, which
-  separates a steady slowdown from periodic hitches.
+- **What pattern.** Turn on **FPS / stats overlay** (Settings → Advanced, or the dev panel's FPS
+  button) and let it collect presents, then `framePacing()` returns the raw inter-present series
+  and its period, which separates a steady slowdown from periodic hitches.
 - **Where the time goes.** `bun tools/harness.ts trace <seconds>` records a Chrome trace, and
   `bun tools/analyze-trace.ts <file> --thread worker` breaks it into JIT code, thunks, hypercalls,
   GC and idle, with the worst frames and guest attribution (`module:rva`). `--range A-Bs` zooms
   into one stall.
 - **A stall on save or load.** Arm `call('fsTrace', 'start', {writes: true})` and record a
   `trace` across one stall; together they show whether the time is file I/O, one slow API or
-  guest code. If harness RPC stops answering, `bun tools/cdp-pausestack.ts` pauses the worker and
-  prints what it is running.
+  guest code. If harness RPC stops answering, `bun tools/cdp-pausestack.ts --port <cdp-port>` pauses
+  the worker and prints what it is running. Pass the port your session uses (`BS_CDP_PORT`, 9333
+  by default); the tool does not read the environment.
 - **Which guest code.** Take the `module:rva` that guest attribution names to the RE service
   (`tools/re/`) and decompile it.
 

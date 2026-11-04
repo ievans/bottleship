@@ -144,9 +144,9 @@ Pick the instrument by symptom, and measure before changing anything:
 | Symptom | Start with | Then |
 |---|---|---|
 | Crashes, exits, wild EIP | `report()`, `stubs()` | API breakpoints (below) |
-| Slow, sluggish, stutters | `frameReport({reset:true})` → play → `frameReport()`; `framePacing()` for the pattern | `bun tools/harness.ts trace <sec>` → `bun tools/analyze-trace.ts <file> --thread worker` |
-| Freezes for seconds, then recovers (saves, loads) | `call('fsTrace','start',{writes:true})` plus a `trace` across one freeze; `analyze-trace --range A-Bs` | `bun tools/cdp-pausestack.ts` if harness RPC stops answering |
-| Renders wrong (missing, garbled, wrong color) | `captureFrame({backend:'d3d9'})` | `drawScrub` to isolate the draw, then `dumpTexture` / `dumpSurface` |
+| Slow, sluggish, stutters | `frameReport({reset:true})` → play → `frameReport()`; `framePacing()` for the pattern (needs the FPS / stats overlay on) | `bun tools/harness.ts trace <sec>` → `bun tools/analyze-trace.ts <file> --thread worker` |
+| Freezes for seconds, then recovers (saves, loads) | `call('fsTrace','start',{writes:true})` plus a `trace` across one freeze; `analyze-trace --range A-Bs` | `bun tools/cdp-pausestack.ts --port <BS_CDP_PORT>` if harness RPC stops answering |
+| Renders wrong (missing, garbled, wrong color) | `captureFrame({backend})` with the game's API: `'ddraw'` (DirectDraw/D3D7), `'d3d8'` or `'d3d9'` | D3D9: `drawScrub` to isolate the draw; any API: `dumpTexture` / `dumpSurface` |
 | Need to know what guest code is doing | guest attribution in `analyze-trace` (`module:rva`) | decompile it with the RE service (`tools/re/`) |
 
 Close every other guest tab before `trace` or `frameReport`; parallel guests make timing noise.

@@ -107,8 +107,8 @@ own save and load work. Add `tools/harness/regression/<game-id>-single-player.ha
 2. **Measure how it plays.** Take a `frameReport` over a stretch of normal gameplay and over the
    game's autosave, and record the numbers on the issue. Chase slowness and stalls with the steps in
    [Measuring performance](harness.md#measuring-performance).
-3. **Isolate each rendering bug** to a single draw with `captureFrame` and `drawScrub`, then fix the
-   Direct3D or DirectDraw behavior that draw depends on.
+3. **Isolate each rendering bug** to a single draw with `captureFrame` (and `drawScrub` on D3D9),
+   then fix the Direct3D or DirectDraw behavior that draw depends on.
 
 Single player is done when it plays at a steady frame rate, saves without a long stall, and draws
 correctly, with the numbers behind each.
