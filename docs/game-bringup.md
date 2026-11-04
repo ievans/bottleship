@@ -102,6 +102,17 @@ Skip step 3 for a game with no multiplayer.
 Fix what the quick check found, one focused PR at a time, until the game reaches gameplay and its
 own save and load work. Add `tools/harness/regression/<game-id>-single-player.harness.ts`.
 
+1. **Make the scene cheap to reach.** Script the path to gameplay, or keep a save to load, as in
+   [Reaching a scene](harness.md#reaching-a-scene), so each attempt is one command.
+2. **Measure how it plays.** Take a `frameReport` over a stretch of normal gameplay and over the
+   game's autosave, and record the numbers on the issue. Chase slowness and stalls with the steps in
+   [Measuring performance](harness.md#measuring-performance).
+3. **Isolate each rendering bug** to a single draw with `captureFrame` and `drawScrub`, then fix the
+   Direct3D or DirectDraw behavior that draw depends on.
+
+Single player is done when it plays at a steady frame rate, saves without a long stall, and draws
+correctly, with the numbers behind each.
+
 ## Phase 3: Multiplayer
 
 1. **Discovery and lobby.** Get hosting and joining working against a `tools/lan-peer.ts` peer, as
