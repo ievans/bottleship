@@ -72,6 +72,31 @@ then `.tap(x,y)` / `.touchDrag(x0,y0,x1,y1,ms)` / `.longPress(x,y,ms)` / `.twoFi
 gestures in ONE chain: the emulation override is owned by the CDP session and a separate
 CLI invocation reconnects without it.
 
+### Reach the scene once, then script it
+
+Navigating menus by screenshot and `clickAt` is the slowest loop there is. Pay for it once:
+
+1. **Check the resolution before reusing coordinates.** Guest-px coordinates are only valid at
+   the resolution they were tuned against. `bun tools/harness.ts gridShot` prints it on its first
+   line (`guest=1024x768`), and `state(['screen'])` reports the display mode and canvas size.
+   Compare that with the script's own comment before reusing coordinates from an earlier session
+   or a committed script; a bundle rebuild or a stale comment silently moves every target.
+2. **Write the path down** as a `*.harness.ts` script the moment it works, so each later attempt
+   is one `run`.
+3. **Record it** with `record()` … `recordStop()` and play it back with `replay(recording)`,
+   which re-injects each input at the same present-frame offset. It records harness-driven input
+   only, not a human at the keyboard.
+4. **Start from a save** when the game has one. A save slot (library page → Storage) captures
+   and restores the whole persistent layer. For a single file, copy it out with
+   `call('fsRead', path, {maxBytes, encoding:'base64'})` (the default cap is 256 KiB) into
+   `logs/<game>/saves/`, then put it back on a fresh boot with
+   `fsWrite(path, content, {encoding:'base64'})` and load it in game. Keep saves out of the repo.
+5. **Confirm the scene** with `sceneProbe()` (motion plus draw count) or `sceneCompare()` before
+   measuring anything. A measurement taken on the wrong scene looks just as plausible.
+
+When a person is available, let them play to the moment in the harness's Chrome and capture
+on their cue: `report()`, `captureFrame()`, or a short `trace`.
+
 ## 3. Observe
 
 - `state([...])` — windows/surfaces/memory/threads/rings/audio/video/modules/cpu/screen as one POJO.
@@ -113,6 +138,19 @@ CLI invocation reconnects without it.
   whichever one dropped it; the trace names the link and its reason.
 
 ## 4. Diagnose
+
+Pick the instrument by symptom, and measure before changing anything:
+
+| Symptom | Start with | Then |
+|---|---|---|
+| Crashes, exits, wild EIP | `report()`, `stubs()` | API breakpoints (below) |
+| Slow, sluggish, stutters | `frameReport({reset:true})` → play → `frameReport()`; `framePacing()` for the pattern (needs the FPS / stats overlay on) | `bun tools/harness.ts trace <sec>` → `bun tools/analyze-trace.ts <file> --thread worker` |
+| Freezes for seconds, then recovers (saves, loads) | `call('fsTrace','start',{writes:true})` plus a `trace` across one freeze; `analyze-trace --range A-Bs` | `bun tools/cdp-pausestack.ts --port <BS_CDP_PORT>` if harness RPC stops answering |
+| Renders wrong (missing, garbled, wrong color) | `captureFrame({backend})` with the game's API: `'ddraw'` (DirectDraw/D3D7), `'d3d8'` or `'d3d9'` | D3D9: `drawScrub` to isolate the draw; any API: `dumpTexture` / `dumpSurface` |
+| Need to know what guest code is doing | guest attribution in `analyze-trace` (`module:rva`) | decompile it with the RE service (`tools/re/`) |
+
+Close every other guest tab before `trace` or `frameReport`; parallel guests make timing noise.
+Put the before and after numbers (p50/p95/p99, frames over budget) in the PR.
 
 - **Prefer API breakpoints** (`breakOnApi("d3d9.*")`) — JS layer, **no JIT-off**,
   resolves on first hit with args + caller. Best for "where does it first touch X".

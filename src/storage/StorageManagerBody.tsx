@@ -1,5 +1,5 @@
 import React from "react";
-import { DownloadSimple, Trash, UploadSimple } from "@phosphor-icons/react";
+import { DownloadSimple, FloppyDisk, Trash, UploadSimple } from "@phosphor-icons/react";
 import {
   type CachedBundleInfo,
   type GameStorageInfo,
@@ -19,12 +19,20 @@ import {
 } from "../storage-manager";
 import { downloadBlob, pickFile, SettingsIconBtn } from "../settings/SettingsIconBtn";
 import { asBlobPart } from "../dom-buffer";
+import SaveSlotsPanel from "./SaveSlotsPanel";
 import s from "./StorageManagerBody.module.css";
 import sh from "../ui/SectionHeading/SectionHeading.module.css";
 import hm from "../ui/Hint/Hint.module.css";
 import bm from "../ui/Button/Button.module.css";
 
-export default function StorageManagerBody({ active }: { active: boolean }): React.ReactElement {
+interface BodyProps {
+  active: boolean;
+  /** A game page is open: its guest may hold a container's files, so slot create/load is off. */
+  slotsLocked?: boolean;
+}
+
+export default function StorageManagerBody({ active, slotsLocked = false }: BodyProps): React.ReactElement {
+  const [slotsOpen, setSlotsOpen] = React.useState<string | null>(null);
   const [estimate, setEstimate] = React.useState<StorageEstimate | null>(null);
   const [games, setGames] = React.useState<GameStorageInfo[]>([]);
   const [bundles, setBundles] = React.useState<CachedBundleInfo[]>([]);
@@ -95,13 +103,19 @@ export default function StorageManagerBody({ active }: { active: boolean }): Rea
       ) : (
         <div className={s["glist"]}>
           {games.map((g) => (
-            <div className={s["glist__row"]} key={g.containerDir}>
+            <React.Fragment key={g.containerDir}>
+            <div className={s["glist__row"]}>
               <div>
                 <div className={s["glist__name"]}>{g.containerDir}</div>
-                <div className={s["glist__sub"]}>overlay + registry</div>
+                <div className={s["glist__sub"]}>overlay + registry{g.slotBytes > 0 ? ` + ${formatBytes(g.slotBytes)} in slots` : ""}</div>
               </div>
               <span className={s["glist__sz"]}>{formatBytes(g.totalBytes)}</span>
               <div className={s["glist__actions"]}>
+                <SettingsIconBtn
+                  icon={FloppyDisk}
+                  title="Save slots"
+                  onClick={() => setSlotsOpen(slotsOpen === g.containerDir ? null : g.containerDir)}
+                />
                 <SettingsIconBtn
                   icon={DownloadSimple}
                   title="Download saves (.zip)"
@@ -146,13 +160,17 @@ export default function StorageManagerBody({ active }: { active: boolean }): Rea
                   danger
                   disabled={busy}
                   onClick={async () => {
-                    if (!confirm(`Delete saves & settings for "${g.containerDir}"? This cannot be undone.`)) return;
+                    if (!confirm(`Delete saves, settings and all save slots for "${g.containerDir}"? This cannot be undone.`)) return;
                     await evictGameContainer(g.containerDir);
                     void refresh();
                   }}
                 />
               </div>
             </div>
+            {slotsOpen === g.containerDir && (
+              <SaveSlotsPanel containerDir={g.containerDir} locked={slotsLocked} onChanged={() => void refresh()} />
+            )}
+            </React.Fragment>
           ))}
         </div>
       )}

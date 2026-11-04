@@ -1,4 +1,5 @@
-import { ThunkImplementation } from "../../core/thunking/thunk-dispatcher";
+import { ThunkImplementation, ThunkResult, X86Context } from "../../core/thunking/thunk-dispatcher";
+import { sendDisplayChange } from "../user32/message";
 import { Logger, LogCategory } from "../../core/logger";
 import { assignStubsOnce } from "../../core/thunking/stub-merge";
 import { Marshaler } from "../../core/memory/marshaler";
@@ -208,8 +209,8 @@ function applyDisplayModeChange(system: System, ddrawCtx: DDrawContext, width: n
  * Faithful SetDisplayMode core shared by all DDraw versions. Captures the prior mode on the
  * first exclusive entry (so RestoreDisplayMode can revert), mutates context.display, applies
  * the host resize + coop-window normalization, and — when the mode actually changed —
- * broadcasts WM_DISPLAYCHANGE to all top-level windows (the guest WinDrv keys its
- * windowed/fullscreen reconciliation off this).
+ * reports whether it did. The caller SENDS WM_DISPLAYCHANGE (see notifyDisplayChange) — the
+ * guest WinDrv keys its windowed/fullscreen reconciliation off it.
  */
 function applySetDisplayMode(
     system: System,
@@ -218,7 +219,7 @@ function applySetDisplayMode(
     height: number,
     bpp: number,
     refresh: number
-): void {
+): boolean {
     const prevW = ddrawCtx.display.width;
     const prevH = ddrawCtx.display.height;
     const prevBpp = ddrawCtx.display.bpp;
@@ -239,9 +240,7 @@ function applySetDisplayMode(
     const changed = ddrawCtx.display.width !== prevW
         || ddrawCtx.display.height !== prevH
         || ddrawCtx.display.bpp !== prevBpp;
-    if (changed) {
-        system.windowManager.postDisplayChange(ddrawCtx.display.width, ddrawCtx.display.height, ddrawCtx.display.bpp);
-    }
+    return changed;
 }
 
 /**
@@ -249,7 +248,7 @@ function applySetDisplayMode(
  * resize the host, and broadcast WM_DISPLAYCHANGE if the mode actually changed. Returns the
  * screen to GDI (the caller also sets gdiSurfaceVisible).
  */
-export function restoreDisplayModeToDesktop(system: System, ddrawCtx: DDrawContext): void {
+export function restoreDisplayModeToDesktop(system: System, ddrawCtx: DDrawContext): boolean {
     const prevW = ddrawCtx.display.width;
     const prevH = ddrawCtx.display.height;
     const prevBpp = ddrawCtx.display.bpp;
@@ -269,9 +268,18 @@ export function restoreDisplayModeToDesktop(system: System, ddrawCtx: DDrawConte
         || ddrawCtx.display.bpp !== prevBpp;
     Logger.log(LogCategory.DDRAW,
         `RestoreDisplayMode -> desktop ${ddrawCtx.display.width}x${ddrawCtx.display.height}x${ddrawCtx.display.bpp} (changed=${changed})`);
-    if (changed) {
-        system.windowManager.postDisplayChange(ddrawCtx.display.width, ddrawCtx.display.height, ddrawCtx.display.bpp);
-    }
+    return changed;
+}
+
+/** Deliver WM_DISPLAYCHANGE for a completed mode-set; the thunk result carries `ret` back to the guest. */
+export function notifyDisplayChange(
+    ctx: X86Context, mem: Uint8Array, ddrawCtx: DDrawContext, changed: boolean, stackCleanup: number, ret: number,
+): ThunkResult | number {
+    if (!changed) return ret;
+    return sendDisplayChange(
+        ctx, mem, ddrawCtx.display.width, ddrawCtx.display.height, ddrawCtx.display.bpp,
+        stackCleanup, () => ret,
+    ) ?? ret;
 }
 
 export const createDirectDrawExports = (context: DDrawContext): Record<string, ThunkImplementation> => {
@@ -1365,8 +1373,8 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
         Logger.log(LogCategory.DDRAW, `IDirectDraw_SetDisplayMode (v1): ${width}x${height} @ ${bpp}bpp ${refresh}Hz`);
 
         const system = System.getInstance();
-        applySetDisplayMode(system, context, width, height, bpp, refresh);
-        return DD_OK;
+        const changed = applySetDisplayMode(system, context, width, height, bpp, refresh);
+        return notifyDisplayChange(ctx, mem, context, changed, 16, DD_OK);
     };
 
     // v1/v2/v4: WaitForVerticalBlank returns DD_OK synchronously.
@@ -1722,8 +1730,8 @@ export const createDirectDrawExports = (context: DDrawContext): Record<string, T
         Logger.log(LogCategory.SYSTEM, `IDirectDraw7_SetDisplayMode: this=0x${thisPtr.toString(16)}, w=${width}, h=${height}, bpp=${bpp}, refresh=${refresh}, flags=0x${(flags ?? 0).toString(16)}, ret=0x${retAddr.toString(16)}`);
 
         const system = System.getInstance();
-        applySetDisplayMode(system, context, width, height, bpp, refresh);
-        return DD_OK;
+        const changed = applySetDisplayMode(system, context, width, height, bpp, refresh);
+        return notifyDisplayChange(ctx, mem, context, changed, 24, DD_OK);
     };
 
     // Internal helper for EnumDisplayModes shared by all DDraw versions.

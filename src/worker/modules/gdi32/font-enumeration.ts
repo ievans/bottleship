@@ -5,6 +5,7 @@ import { decodeAnsiString, encodeAnsi, getAnsiCodePage } from '../codepage-utils
 import { ANSI_CHARSET, DEFAULT_CHARSET, fontSignature, systemDefaultCharset } from './font-charset';
 import { bundledFontFamilies, resolveWindowsFontName } from './font-map';
 import { registeredFontFamilies } from './font-resource';
+import { measureVerticalMetrics } from './text-metrics';
 
 const STYLES = [
     { name: 'Regular', weight: 400, italic: false },
@@ -64,9 +65,7 @@ export function enumerateFontFamilies(ctx: X86Context, args: number[], wide: boo
         const fixed = /mono/i.test(resolveWindowsFontName(entry.family));
         const previousFont = dc.font;
         dc.font = `${entry.style.italic ? 'italic ' : ''}${entry.style.weight} 16px "${resolveWindowsFontName(entry.family)}"`;
-        const m = dc.measureText('ABCgjpqy');
-        const ascent = Math.ceil(m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent);
-        const descent = Math.ceil(m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent);
+        const { ascent, descent } = measureVerticalMetrics(dc, 16);
         const average = Math.round(dc.measureText('x').width);
         const maxWidth = Math.round(dc.measureText('W').width);
         dc.font = previousFont;

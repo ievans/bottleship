@@ -66,13 +66,24 @@ test("a concurrent OpenFile cannot replace the pending source", async () => {
     expect(await open()).toBe(0x80040408 | 0);
     module.reset(); finishRead(new Uint8Array([1])); await first;
 });
-test("asynchronous Update is refused without falsely signaling completion", () => {
+test("asynchronous Update queues the sample and completes later instead of signaling at once", () => {
     (module as any).registerSampleExports();
     const savedObject = (module as any).object;
-    (module as any).object = () => ({stream: {owner: {running: true, endOfStream: true}}, status: 0});
+    const savedArm = (module as any).armAsync;
+    const sample = {pending: false, completed: true, continuous: false, event: 0, status: 0, stream: {owner: undefined as unknown}};
+    const owner = {running: true, endOfStream: true, pendingSamples: new Set<unknown>()};
+    sample.stream.owner = owner;
+    (module as any).object = () => sample;
+    let armed = 0;
+    (module as any).armAsync = () => { armed++; };
     try {
-        expect(module.exports.IDirectDrawStreamSample_Update!({} as never, mem, [1, 1, 0x1234, 0, 0])).toBe(0x80004001 | 0);
-    } finally {(module as any).object = savedObject;}
+        expect(module.exports.IDirectDrawStreamSample_Update!({} as never, mem, [1, 1, 0, 0, 0])).toBe(0x00040001);
+        expect(sample.pending).toBe(true);
+        expect(sample.completed).toBe(false);
+        expect(owner.pendingSamples.has(sample)).toBe(true);
+        expect(armed).toBe(1);
+        expect(module.exports.IDirectDrawStreamSample_Update!({} as never, mem, [1, 1, 0, 0, 0])).not.toBe(0x00040001);
+    } finally {(module as any).object = savedObject; (module as any).armAsync = savedArm;}
 });
 
 test("GetSurface validates every output before publishing an owned reference", () => {

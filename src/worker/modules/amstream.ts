@@ -5,7 +5,9 @@
  * The application binds a sample to one of its own DirectDraw surfaces and calls
  * IStreamSample::Update, which returns once the next frame is in that surface at its
  * presentation time on the stream clock. A frame that is already late is dropped in
- * favour of the newest due one, as the decoder's quality control does. Decoding is
+ * favour of the newest due one, as the decoder's quality control does. An asynchronous
+ * (optionally continuous) Update completes from a timer at the frame's time, and
+ * CompletionStatus(WAIT) pulls that completion forward and waits out the rest. Decoding is
  * videoEngine's; one decoder session lives while the stream runs, so stopping silences
  * the audio and seeking restarts it in step with the picture.
  */
@@ -22,7 +24,7 @@ import { Mem } from "../core/memory/mem-accessor";
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { SystemResourceProvider } from "../core/resources/system-resource-provider";
-import { WAIT_BLOCKED_NO_SWITCH } from "../core/scheduler/types";
+import { TimerKind, WAIT_BLOCKED_NO_SWITCH } from "../core/scheduler/types";
 import { System } from "../core/system";
 import { ThunkImplementation, ThunkResult, X86Context } from "../core/thunking/thunk-dispatcher";
 import { TimeService } from "../runtime/time";
@@ -54,6 +56,8 @@ const E_FAIL = 0x80004005 | 0;
 const E_INVALIDARG = 0x80070057 | 0;
 const HRESULT_FILE_NOT_FOUND = 0x80070002 | 0;
 const VFW_E_UNSUPPORTED_STREAM = 0x8004022f | 0;
+const MS_S_PENDING = 0x00040001;
+const MS_S_NOUPDATE = 0x00040002;
 const MS_S_ENDOFSTREAM = 0x00040003;
 const MS_E_PURPOSEID = 0x80040402 | 0;
 const MS_E_NOSTREAM = 0x80040403 | 0;
@@ -78,6 +82,10 @@ const AMMSF_RUN = 0x8;
 /** IStreamSample::Update */
 const SSUPDATE_ASYNC = 0x1;
 const SSUPDATE_CONTINUOUS = 0x2;
+/** IStreamSample::CompletionStatus */
+const COMPSTAT_WAIT = 0x2;
+const COMPSTAT_ABORT = 0x4;
+const INFINITE = 0xffff_ffff;
 const DDSFF_PROGRESSIVERENDER = 0x1;
 const DDSURFACEDESC_SIZE = 108;
 /** STREAM_TIME is in 100 ns units. */
@@ -130,6 +138,8 @@ class MultiMediaStreamObject extends StreamingObject {
     session = 0;
     sessionAudioStarted = false;
     eosEvent = 0;
+    /** Samples with an asynchronous Update outstanding. */
+    readonly pendingSamples = new Set<DirectDrawSampleObject>();
 }
 
 class DirectDrawStreamObject extends StreamingObject {
@@ -154,6 +164,15 @@ class DirectDrawSampleObject extends StreamingObject {
     startTime = 0;
     endTime = 0;
     status = S_OK;
+    /** An asynchronous Update has not finished (a continuous one stays pending until the stream ends). */
+    pending = false;
+    continuous = false;
+    /** A frame landed since CompletionStatus last reported one. */
+    completed = false;
+    /** Guest event handle given to Update, or 0. */
+    event = 0;
+    /** timerWheel id of the next scheduled completion, or 0. */
+    timerId = 0;
 }
 
 function validPointer(ptr: number, size: number, perms: "r" | "rw"): boolean {
@@ -243,7 +262,10 @@ export class Amstream implements IModule {
     }
 
     reset(): void {
-        for (const mms of this.streams) this.closeSession(mms);
+        for (const mms of this.streams) {
+            this.abortPending(mms);
+            this.closeSession(mms);
+        }
         this.streams.clear();
     }
 
@@ -305,6 +327,7 @@ export class Amstream implements IModule {
         const mms = new MultiMediaStreamObject();
         this.streams.add(mms);
         mms.onDestroy = () => {
+            this.abortPending(mms);
             this.closeSession(mms);
             if (mms.video) {
                 mms.video.owner = null;
@@ -349,6 +372,7 @@ export class Amstream implements IModule {
 
     private setRunning(mms: MultiMediaStreamObject, run: boolean): void {
         if (run === mms.running) return;
+        if (!run) this.abortPending(mms);
         if (run) {
             mms.clockStartMs = TimeService.getInstance().nowMs();
             mms.running = true;
@@ -417,6 +441,66 @@ export class Amstream implements IModule {
             unionSurfaceDirtyRegion(state, { left: r.left, top: r.top, right: r.left + width, bottom: r.top + height });
         }
         return S_OK;
+    }
+
+    /** The frame the stream delivers next, or the end of the stream. */
+    private produceFrame(sample: DirectDrawSampleObject, mms: MultiMediaStreamObject): { hr: number; due: number } {
+        if (mms.endOfStream || !mms.session) return { hr: MS_S_ENDOFSTREAM, due: 0 };
+        return this.deliverFrame(sample, mms);
+    }
+
+    private nextDueMs(mms: MultiMediaStreamObject): number {
+        return mms.fps > 0 ? (mms.nextFrame / mms.fps - this.streamTime(mms)) * 1000 : 0;
+    }
+
+    private cancelTimer(sample: DirectDrawSampleObject): void {
+        if (!sample.timerId) return;
+        System.getInstance().scheduler.timerWheel.cancel(sample.timerId);
+        sample.timerId = 0;
+    }
+
+    private endPending(sample: DirectDrawSampleObject): void {
+        this.cancelTimer(sample);
+        sample.pending = false;
+        sample.continuous = false;
+        sample.stream.owner?.pendingSamples.delete(sample);
+    }
+
+    private abortPending(mms: MultiMediaStreamObject): void {
+        for (const sample of [...mms.pendingSamples]) {
+            this.endPending(sample);
+            sample.status = MS_S_NOUPDATE;
+            sample.completed = false;
+        }
+    }
+
+    /** Schedule the pending sample's next completion for when its frame is due. */
+    private armAsync(sample: DirectDrawSampleObject, mms: MultiMediaStreamObject): void {
+        const scheduler = System.getInstance().scheduler;
+        const delay = Math.max(1, Math.ceil(this.nextDueMs(mms)));
+        sample.timerId = scheduler.timerWheel.add(delay, false, TimerKind.QUARTZ_VIDEO, () => {
+            sample.timerId = 0;
+            const owner = sample.stream.owner;
+            if (!sample.pending || !owner) return;
+            if (!owner.running) {
+                this.endPending(sample);
+                sample.status = MS_S_NOUPDATE;
+                return;
+            }
+            this.completeAsync(sample, owner);
+        }, TimeService.getInstance().nowMs());
+    }
+
+    /** Finish one asynchronous update: write the frame, signal the application's event, and re-arm if continuous. */
+    private completeAsync(sample: DirectDrawSampleObject, mms: MultiMediaStreamObject): number {
+        this.cancelTimer(sample);
+        const { hr } = this.produceFrame(sample, mms);
+        sample.status = hr;
+        sample.completed = true;
+        if (sample.event) System.getInstance().scheduler.setEvent(sample.event);
+        if (sample.continuous && (hr === S_OK || hr === MS_E_BUSY)) this.armAsync(sample, mms);
+        else this.endPending(sample);
+        return hr;
     }
 
     /** Block the calling thread for `ms`, then resume it past an `argBytes` stdcall return with EAX = S_OK. */
@@ -733,6 +817,7 @@ export class Amstream implements IModule {
             comAddRef(surface);
             sample.rect = rect;
             sample.onDestroy = () => {
+                this.endPending(sample);
                 comRelease(sample.surface);
                 sample.stream.release();
             };
@@ -777,23 +862,56 @@ export class Amstream implements IModule {
             const sample = sampleOf(a[0]);
             if (!sample) return E_POINTER;
             const flags = a[1] >>> 0;
-            // Async/continuous completion requires a pending sample and clocked event delivery.
-            // Refuse it until implemented, rather than signaling completion before the frame is due.
-            if (a[3] || (flags & (SSUPDATE_ASYNC | SSUPDATE_CONTINUOUS))) return E_NOTIMPL;
+            // A completion APC needs queued delivery to the calling thread; not provided.
+            if (a[3]) return E_NOTIMPL;
             const mms = sample.stream.owner;
             if (!mms) return E_FAIL;
             if (!mms.running) return MS_E_NOTRUNNING;
-            if (mms.endOfStream || !mms.session) {
-                sample.status = MS_S_ENDOFSTREAM;
-            } else {
-                const { hr, due } = this.deliverFrame(sample, mms);
-                sample.status = hr;
-                const waitMs = (due - this.streamTime(mms)) * 1000;
-                if (hr === S_OK && !(flags & SSUPDATE_ASYNC) && waitMs >= 1) return this.blockFor(ctx, waitMs, 20);
+            if (flags & (SSUPDATE_ASYNC | SSUPDATE_CONTINUOUS)) {
+                if (sample.pending) return MS_E_BUSY;
+                sample.pending = true;
+                sample.continuous = (flags & SSUPDATE_CONTINUOUS) !== 0;
+                sample.completed = false;
+                sample.event = a[2] >>> 0;
+                sample.status = MS_S_PENDING;
+                if (sample.event) System.getInstance().scheduler.resetEvent(sample.event);
+                mms.pendingSamples.add(sample);
+                this.armAsync(sample, mms);
+                return MS_S_PENDING;
             }
-            return sample.status;
+            const { hr, due } = this.produceFrame(sample, mms);
+            sample.status = hr;
+            const waitMs = (due - this.streamTime(mms)) * 1000;
+            if (hr === S_OK && waitMs >= 1) return this.blockFor(ctx, waitMs, 20);
+            return hr;
         };
-        e.IDirectDrawStreamSample_CompletionStatus = (_c, _m, a) => sampleOf(a[0])?.status ?? E_POINTER;
+        e.IDirectDrawStreamSample_CompletionStatus = (ctx, _m, a) => {
+            const sample = sampleOf(a[0]);
+            if (!sample) return E_POINTER;
+            const flags = a[1] >>> 0;
+            if ((flags & COMPSTAT_ABORT) && sample.pending) {
+                this.endPending(sample);
+                sample.status = MS_S_NOUPDATE;
+                sample.completed = false;
+                return MS_S_NOUPDATE;
+            }
+            if (sample.completed) {
+                sample.completed = false;
+                return sample.status;
+            }
+            if (!sample.pending) return sample.status;
+            if (!(flags & COMPSTAT_WAIT)) return MS_S_PENDING;
+            const mms = sample.stream.owner;
+            if (!mms) return E_FAIL;
+            // The wake-up resumes the guest with S_OK, so a timeout shorter than the wait is answered now.
+            const timeout = a[2] >>> 0;
+            if (timeout !== INFINITE && this.nextDueMs(mms) > timeout) return MS_S_PENDING;
+            const hr = this.completeAsync(sample, mms);
+            sample.completed = false;
+            const waitMs = (sample.startTime - this.streamTime(mms)) * 1000;
+            if (hr === S_OK && waitMs >= 1) return this.blockFor(ctx, waitMs, 12);
+            return hr;
+        };
         e.IDirectDrawStreamSample_GetSurface = (_c, _m, a) => {
             const sample = sampleOf(a[0]);
             if (!sample) return E_POINTER;

@@ -3140,7 +3140,7 @@ export class Scheduler {
      * onto the shared timer-pump thread so it runs as real guest code, decoupled from the
      * wheel-fire JS context. Reuses the WinMM timer thread + queue + dispatch machinery.
      */
-    postTimerCallback(callbackAddr: number, args: number[], onReturn?: () => void): boolean {
+    postTimerCallback(callbackAddr: number, args: number[], onReturn?: (eax: number) => void): boolean {
         if (!callbackAddr) return false;
         const winmm = this.process?.getModule('winmm') as WinMM | undefined;
         return winmm?.postGuestCallback(callbackAddr, args, onReturn) ?? false;

@@ -12,6 +12,8 @@ import { msvcp140Module } from "../api/msvcp140.api";
 import { bcryptModule } from "../api/bcrypt.api";
 import { d3dim700Module } from "../api/d3dim700.api";
 import { twitchsdkModule } from "../api/twitchsdk_32_release.api";
+import { vc110CppExtras } from "../api/msvcp110.api";
+import { vc110Extras } from "../api/msvcr110.api";
 import { kernel32VistaSupplement } from "../api/kernel32-vista-supplement";
 import { REFERENCE_ARG_COUNTS } from "../reference-argcounts.generated";
 import { Logger, LogCategory } from "./logger";
@@ -122,6 +124,14 @@ export class APIRegistry {
 
         // After glob: merge GetProcAddress-only exports (static import survives stale Vite glob).
         this.mergeModuleFunctions(kernel32VistaSupplement);
+        // msvcp70/71/80/100/110/120 all ALIAS to the "msvcp90" HLE module
+        // (MSVCP_VERSIONED in dll-aliases.ts) — a real MSVCP110.dll import never reaches a
+        // module registered under the versioned name, so its additions fold into msvcp90.
+        this.mergeModuleFunctions({ name: "msvcp90", functions: vc110CppExtras });
+        // msvcr70…msvcr120 all ALIAS to the "msvcrt" HLE module (MSVCR_VERSIONED in
+        // dll-aliases.ts) — a real MSVCR110.dll import never reaches a module registered
+        // under the versioned name, so its VC110-only additions fold into msvcrt directly.
+        this.mergeModuleFunctions({ name: "msvcrt", functions: vc110Extras });
     }
 
     /** Add exports to an existing module descriptor (deduped by function name). */

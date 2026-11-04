@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { copyrightYear, synthesizeManifest } from "@bottleship/repack/manifest-synth";
+import { copyrightYear, synthesizeManifest, synthesizeRegistry } from "@bottleship/repack/manifest-synth";
 import type { InnoParseResult } from "@bottleship/formats/inno";
 
 describe("gog-import/copyrightYear", () => {
@@ -69,5 +69,36 @@ describe("gog-import/synthesizeManifest meta block", () => {
             override: { manifest: { meta: { developer: "Right Corp", cover: "cover.png" } } },
         });
         expect(manifest.meta).toEqual({ developer: "Right Corp", year: 2000, cover: "cover.png" });
+    });
+});
+
+describe("gog-import/synthesizeRegistry value types", () => {
+    const ascii = (text: string) => new TextEncoder().encode(text);
+    const entry = (type: number, name: string, value: Uint8Array) => ({ hive: 2, key: "Software\\Vendor\\Game", name, type, value });
+    const seed = (entries: unknown[]) =>
+        synthesizeRegistry({ ...fakeParsed({}), registryEntries: entries } as unknown as InnoParseResult)[0].values;
+
+    // Inno stores a DWORD as its script text, not as four binary bytes.
+    test("rtDWord is parsed from script text, decimal or $hex", () => {
+        const values = seed([
+            entry(3, "Flag", ascii("1")),
+            entry(3, "Mask", ascii("$1F")),
+            entry(6, "Wide", ascii("4096")),
+        ]);
+        expect(values).toEqual([
+            { name: "Flag", type: "REG_DWORD", data: 1 },
+            { name: "Mask", type: "REG_DWORD", data: 31 },
+            { name: "Wide", type: "REG_DWORD", data: 4096 },
+        ]);
+    });
+
+    test("rtBinary becomes a hex string typed REG_BINARY", () => {
+        expect(seed([entry(4, "Blob", new Uint8Array([0, 0xab, 0x10]))]))
+            .toEqual([{ name: "Blob", type: "REG_BINARY", data: "00ab10" }]);
+    });
+
+    test("strings keep REG_SZ", () => {
+        expect(seed([entry(1, "Path", ascii("C:\\Game\0"))]))
+            .toEqual([{ name: "Path", type: "REG_SZ", data: "C:\\Game" }]);
     });
 });

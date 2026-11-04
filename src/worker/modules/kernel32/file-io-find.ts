@@ -10,6 +10,7 @@ import { fileTimeOf } from '../../runtime/filesystem/file-time';
 
 const INVALID_HANDLE_VALUE = -1;
 const ERROR_FILE_NOT_FOUND = 2;
+const ERROR_PATH_NOT_FOUND = 3;
 const ERROR_INVALID_HANDLE = 6;
 const ERROR_INVALID_PARAMETER = 87;
 const ERROR_NO_MORE_FILES = 18;
@@ -126,6 +127,12 @@ export function registerFileIoFindExports(exports: Record<string, ThunkImplement
             return INVALID_HANDLE_VALUE;
         }
 
+        // An empty spec names nothing to search; it is not a listing of the root.
+        if (pattern === '') {
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
+            return INVALID_HANDLE_VALUE;
+        }
+
         const vfs = System.getInstance().fileSystem;
 
         // Fast path: an explicit path with no wildcard is an existence check, not an
@@ -181,6 +188,11 @@ export function registerFileIoFindExports(exports: Record<string, ThunkImplement
 
         if (!lpFindFileData) {
             System.getInstance().scheduler.setLastError(ERROR_INVALID_PARAMETER);
+            return INVALID_HANDLE_VALUE;
+        }
+
+        if (pattern === '') {
+            System.getInstance().scheduler.setLastError(ERROR_PATH_NOT_FOUND);
             return INVALID_HANDLE_VALUE;
         }
 

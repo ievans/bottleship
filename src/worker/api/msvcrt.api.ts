@@ -651,6 +651,7 @@ export const msvcrtModule: ModuleDescriptor = {
         makeThiscall("??0exception@std@@QAE@ABQBD@Z", 4),
         makeThiscall("??0exception@std@@QAE@ABV01@@Z", 4),
         makeThiscall("??1exception@std@@UAE@XZ", 0),
+        makeThiscall("??0exception@@QAE@XZ", 0),
         makeThiscall("??0exception@@QAE@ABQBD@Z", 4),
         makeThiscall("??0exception@@QAE@ABV0@@Z", 4),
         makeThiscall("??1exception@@UAE@XZ", 0),

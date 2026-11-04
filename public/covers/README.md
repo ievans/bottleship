@@ -45,4 +45,9 @@ Sources for the demo covers added in October 2026:
 
 | `empire-earth-gold-box.jpg` | Empire Earth: Gold Edition (2001) | [Steam library capsule](https://shared.akamai.steamstatic.com/store_item_assets/steam/apps/254760/1348531dd2192660c3e55bf3f1ed072d8fc1be47/library_capsule_2x.jpg) |
 
+| `civilization3-complete-box.jpg` | Sid Meier's Civilization III Complete (GOG edition) | [GOG store vertical cover](https://www.gog.com/en/game/sid_meiers_civilization_iii_complete) |
+| `close-combat-2-box.jpg` | Close Combat 2: A Bridge Too Far (GOG edition) | [GOG store vertical cover](https://www.gog.com/en/game/close_combat_2_a_bridge_too_far) |
+| `simcity-3000-unlimited-box.jpg` | SimCity 3000 Unlimited (GOG edition) | [GOG store vertical cover](https://www.gog.com/en/game/simcity_3000) |
+| `rollercoaster-tycoon-deluxe-box.jpg` | RollerCoaster Tycoon Deluxe (GOG edition) | [GOG store vertical cover](https://www.gog.com/en/game/rollercoaster_tycoon_deluxe) |
+
 Artwork remains copyright of its respective owners.

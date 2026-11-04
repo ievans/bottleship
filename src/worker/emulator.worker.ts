@@ -84,6 +84,8 @@ import { Msvcp90 } from "./modules/msvcp90";
 import { Msvcp140 } from "./modules/msvcp140";
 import { Msvcp60 } from "./modules/msvcp60";
 import { TwitchSdk } from "./modules/twitchsdk_32_release";
+import { Msvcp110 } from "./modules/msvcp110";
+import { Msvcr110 } from "./modules/msvcr110";
 import { Crtdll } from "./modules/crtdll";
 import { Winspool } from "./modules/winspool";
 import { Dwmapi } from "./modules/dwmapi";
@@ -120,6 +122,7 @@ import { OpenAL, ALUT } from "./modules/openal/openal";
 import { Quartz } from "./modules/quartz";
 import { DMusic } from "./modules/dmusic";
 import { Amstream } from "./modules/amstream";
+import { Dpnet } from "./modules/dpnet";
 import { A3d } from "./modules/a3d";
 import { Avifil32 } from "./modules/avifil32";
 import { Rpcrt4 } from "./modules/rpcrt4";
@@ -2549,6 +2552,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const quartz = new Quartz();
       const dmusic = new DMusic();
       const amstream = new Amstream();
+      const dpnet = new Dpnet();
       const a3d = new A3d();
       const avifil32 = new Avifil32();
       const rpcrt4 = new Rpcrt4();
@@ -2569,6 +2573,8 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const msvcp140 = new Msvcp140();
       const msvcp60 = new Msvcp60();
       const twitchSdk = new TwitchSdk();
+      const msvcp110 = new Msvcp110();
+      const msvcr110 = new Msvcr110();
       const crtdll = new Crtdll();
       const winspool = new Winspool();
       const dwmapi = new Dwmapi();
@@ -2628,6 +2634,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       quartz.initialize(process);
       dmusic.initialize(process);
       amstream.initialize(process);
+      dpnet.initialize(process);
       a3d.initialize(process);
       avifil32.initialize(process);
       rpcrt4.initialize(process);
@@ -2649,8 +2656,24 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcp140.setMsvcrt(msvcrt);
       msvcp140.initialize(process);
       msvcp60.setMsvcrt(msvcrt);
+      msvcrt.setMsvcp60(msvcp60);
       msvcp60.initialize(process);
       twitchSdk.initialize(process);
+      // msvcp70/71/80/100/110/120 all alias to the "msvcp90" HLE module (MSVCP_VERSIONED
+      // in dll-aliases.ts), so a real MSVCP110.dll import never reaches a module registered
+      // under that versioned name — its handlers merge straight into msvcp90's own exports.
+      msvcp110.initialize(process);
+      Object.assign(msvcp90.exports, msvcp110.exports);
+      // Not for dispatch (that's the Object.assign above) — this is so system.ts's reset
+      // loop finds msvcp110's reregisterExports and refreshes its data exports (facet ids,
+      // vtables, _BADOFF — all registered under "msvcp90") after a thunk-generator reset.
+      process.registerModule(msvcp110.name, msvcp110);
+      // msvcr70…msvcr120 all alias to the "msvcrt" HLE module (MSVCR_VERSIONED in
+      // dll-aliases.ts), so a real MSVCR110.dll import never reaches a module registered
+      // under that versioned name — its handlers merge straight into msvcrt's own exports.
+      msvcr110.setMsvcrt(msvcrt);
+      msvcr110.initialize(process);
+      Object.assign(msvcrt.exports, msvcr110.exports);
       crtdll.initialize(process);
       winspool.initialize(process);
       dwmapi.initialize(process);
@@ -2710,6 +2733,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(quartz.name, quartz);
       process.registerModule(dmusic.name, dmusic);
       process.registerModule(amstream.name, amstream);
+      process.registerModule(dpnet.name, dpnet);
       process.registerModule(a3d.name, a3d);
       process.registerModule(avifil32.name, avifil32);
       process.registerModule(rpcrt4.name, rpcrt4);
@@ -2790,6 +2814,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(quartz.name, quartz.exports);
       process.dispatcher.registerModule(dmusic.name, dmusic.exports);
       process.dispatcher.registerModule(amstream.name, amstream.exports);
+      process.dispatcher.registerModule(dpnet.name, dpnet.exports);
       process.dispatcher.registerModule(a3d.name, a3d.exports);
       process.dispatcher.registerModule(avifil32.name, avifil32.exports);
       process.dispatcher.registerModule(rpcrt4.name, rpcrt4.exports);

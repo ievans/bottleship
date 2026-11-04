@@ -814,7 +814,7 @@ const createVirtualProcess = (memory: Uint8Array, args: number[], isWide: boolea
             currentDirectory, dwCreationFlags, isWide, undefined,
             {
                 imagePath, commandLine: reExecArgs,
-                currentDirectory: currentDirectory || system.fileSystem.currentDir,
+                currentDirectory: currentDirectory ? system.fileSystem.resolvePath(currentDirectory) : system.fileSystem.currentDir,
                 rawCommandLine: commandLine || applicationName,
                 environment: system.process ? [...system.process.environment] : undefined,
             },
