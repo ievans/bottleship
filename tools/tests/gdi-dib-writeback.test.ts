@@ -8,11 +8,13 @@
  *    AlphaBlend render the drawn rect fully transparent.
  *  - 1bpp write-back quantizes to the colour table's two entries, MSB first, and touches
  *    no bit outside the rect — neighbouring pixels share its bytes.
+ *  - 8bpp write-back stores the nearest colour-table index, and keeps an existing index
+ *    whose entry already has the drawn colour (tables repeat colours).
  *  - 16bpp write-back packs through the section's masks (5-5-5 for BI_RGB), 24bpp as B,G,R.
  *    Text an app draws into a 16-bit section to build its own glyph textures lives there.
  */
 import { afterEach, expect, test } from "bun:test";
-import { writeBackDibSectionRect } from "../../src/worker/modules/gdi32/bitmap-resolve";
+import { pullDibSectionRect, writeBackDibSectionRect } from "../../src/worker/modules/gdi32/bitmap-resolve";
 import { SystemResourceProvider } from "../../src/worker/core/resources/system-resource-provider";
 import { System } from "../../src/worker/core/system";
 
@@ -42,7 +44,14 @@ function installGuestMemory(mem: Uint8Array): void {
 
 afterEach(() => {
     (System as unknown as { instance: unknown }).instance = undefined;
+    delete (globalThis as { ImageData?: unknown }).ImageData;
 });
+
+function installImageData(): void {
+    (globalThis as { ImageData?: unknown }).ImageData = class {
+        constructor(public data: Uint8ClampedArray, public width: number, public height: number) {}
+    };
+}
 
 test("32bpp write-back preserves the reserved/alpha byte the app owns", () => {
     const w = 4, h = 2, stride = w * 4;
@@ -114,4 +123,71 @@ test("16bpp BI_BITFIELDS write-back packs through the masks", () => {
 
 test("24bpp write-back stores B,G,R", () => {
     expect([...writeOne(24, [0x10, 0x20, 0x30]).subarray(0, 3)]).toEqual([0x30, 0x20, 0x10]);
+});
+
+test("8bpp write-back stores nearest indices and keeps an index that already matches", () => {
+    const w = 3, h = 1, stride = 4;
+    const mem = new Uint8Array(BITS_PTR + stride * h + 16);
+    // Entries 0 and 2 are both black; pixel 0 already uses index 2 and must keep it.
+    mem[BITS_PTR] = 2;
+    installGuestMemory(mem);
+    const palette = new Uint32Array(256);
+    palette[0] = 0xff000000; palette[1] = 0xffff0000; palette[2] = 0xff000000; palette[3] = 0xff00ff00;
+    const hBitmap = SystemResourceProvider.getInstance().registerUserObject({
+        type: "BITMAP", width: w, height: h,
+        bitsPtr: BITS_PTR, dibBpp: 8, dibStride: stride, dibTopDown: true, dibPalette: palette,
+    } as never);
+
+    const pixels = new Uint8ClampedArray([
+        0, 0, 0, 255,
+        250, 10, 5, 255,
+        10, 240, 20, 255,
+    ]);
+    writeBackDibSectionRect(hBitmap, fakeContext(pixels, w, h), 0, 0, w, h);
+    expect([...mem.subarray(BITS_PTR, BITS_PTR + 3)]).toEqual([2, 1, 3]);
+});
+
+test("8bpp write-back without a colour table leaves the bits alone", () => {
+    const mem = new Uint8Array(BITS_PTR + 20);
+    mem[BITS_PTR] = 7;
+    installGuestMemory(mem);
+    const hBitmap = SystemResourceProvider.getInstance().registerUserObject({
+        type: "BITMAP", width: 1, height: 1,
+        bitsPtr: BITS_PTR, dibBpp: 8, dibStride: 4, dibTopDown: true,
+    } as never);
+    writeBackDibSectionRect(hBitmap, fakeContext(new Uint8ClampedArray([255, 255, 255, 255]), 1, 1), 0, 0, 1, 1);
+    expect(mem[BITS_PTR]).toBe(7);
+});
+
+test("pull refreshes a stale canvas so a following write-back keeps app-written bits", () => {
+    const w = 2, h = 1, stride = 8;
+    const mem = new Uint8Array(BITS_PTR + stride * h + 16);
+    installGuestMemory(mem);
+    installImageData();
+    const hBitmap = SystemResourceProvider.getInstance().registerUserObject({
+        type: "BITMAP", width: w, height: h,
+        bitsPtr: BITS_PTR, dibBpp: 32, dibStride: stride, dibTopDown: true,
+    } as never);
+
+    // The app writes pixel 0 behind the canvas's back; the canvas still holds black.
+    mem.set([0x30, 0x20, 0x10, 0xff], BITS_PTR);
+    const canvas = new Uint8ClampedArray(w * 4);
+    const ctx = {
+        ...fakeContext(canvas, w, h),
+        putImageData(img: ImageData, x: number) {
+            canvas.set(img.data, x * 4);
+        },
+    } as unknown as OffscreenCanvasRenderingContext2D;
+
+    expect(pullDibSectionRect(hBitmap, ctx, 0, 0, w, h)).toBe(true);
+    expect([...canvas.subarray(0, 4)]).toEqual([0x10, 0x20, 0x30, 0xff]);
+
+    writeBackDibSectionRect(hBitmap, ctx, 0, 0, w, h);
+    expect([...mem.subarray(BITS_PTR, BITS_PTR + 3)]).toEqual([0x30, 0x20, 0x10]);
+});
+
+test("pull is a no-op for a bitmap without guest bits", () => {
+    installGuestMemory(new Uint8Array(64));
+    const ctx = { putImageData() { throw new Error("unexpected"); } } as unknown as OffscreenCanvasRenderingContext2D;
+    expect(pullDibSectionRect(0, ctx, 0, 0, 1, 1)).toBe(false);
 });

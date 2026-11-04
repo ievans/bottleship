@@ -3,7 +3,7 @@ import { System } from "../../src/worker/core/system";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { InputManager } from "../../src/worker/runtime/input/input-manager";
 import { WindowManager } from "../../src/worker/runtime/windowing/window-manager";
-import { createMessageExports } from "../../src/worker/modules/user32/message";
+import { createMessageExports, translateKeyMessage } from "../../src/worker/modules/user32/message";
 
 function rig() {
     let tid = 1;
@@ -102,5 +102,26 @@ describe("queued keyboard state used by TranslateMessage", () => {
             text += String.fromCharCode(r.translate(msg.wParam));
         }
         expect(text).toBe("(A_Z)\r");
+    });
+});
+
+describe("translateKeyMessage (shared by the message loop and the modal DialogBox pump)", () => {
+    test("posts WM_CHAR for WM_KEYDOWN and WM_SYSCHAR for WM_SYSKEYDOWN, nothing for other messages", () => {
+        const r = rig();
+        const system = System.getInstance();
+        const oldInput = system.inputManager, oldWm = system.windowManager;
+        system.inputManager = r.input;
+        system.windowManager = r.wm;
+        try {
+            expect(translateKeyMessage(5, 0x100, 0x41, 1)).toBe(true);
+            expect(r.wm.peekMessage(true, 0x102, 0x102, 1)!.wParam).toBe("a".charCodeAt(0));
+            expect(translateKeyMessage(5, 0x104, 0x41, 1)).toBe(true);
+            expect(r.wm.peekMessage(true, 0x106, 0x106, 1)!.wParam).toBe("a".charCodeAt(0));
+            expect(translateKeyMessage(5, 0x101, 0x41, 1)).toBe(false);
+            expect(translateKeyMessage(5, 0x100, 0x70, 1)).toBe(false);
+        } finally {
+            system.inputManager = oldInput;
+            system.windowManager = oldWm;
+        }
     });
 });

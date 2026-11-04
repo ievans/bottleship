@@ -513,23 +513,40 @@ export function createCoreExports(ctx: MSSContext): Record<string, ThunkImplemen
         return entries;
     };
 
+    /** HPROVIDER is opaque in the SDK. Back it with a guest allocation so a provider can safely
+     *  retain/pass it, and preserve its HMODULE for its eventual RIB interface registrations. */
+    const createProviderHandle = (mem: Uint8Array, module: number): number => {
+        const handle = ctx.process.memory.alloc(4) >>> 0;
+        if (!handle) return 0;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        MemoryGuard.writeUint32(mem, view, handle, module, "MSS32:RIB_alloc_provider_handle:module");
+        ctx.ribProviders.set(handle, { module, interfaces: new Map() });
+        return handle;
+    };
+
     const allocProviderHandle: ThunkImplementation = (ctxThunk, mem, args) => {
         const module = args[0] >>> 0;
         try {
-            // HPROVIDER is opaque in the SDK.  Back it with a guest allocation so
-            // a provider can safely retain/pass it, and preserve its HMODULE for
-            // its eventual RIB interface registrations.
-            const handle = ctx.process.memory.alloc(4) >>> 0;
-            if (!handle) return 0;
-            const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-            MemoryGuard.writeUint32(mem, view, handle, module, "MSS32:RIB_alloc_provider_handle:module");
-            ctx.ribProviders.set(handle, { module, interfaces: new Map() });
+            const handle = createProviderHandle(mem, module);
             Logger.verbose(LogCategory.SYSTEM, `MSS32: RIB_alloc_provider_handle(module=0x${module.toString(16)}) -> 0x${handle.toString(16)}`);
             return handle;
         } catch (error) {
             Logger.warn(LogCategory.SYSTEM, `MSS32: RIB_alloc_provider_handle failed: ${error}`);
             return 0;
         }
+    };
+
+    // A provider's DllMain/RIB_Main asks for the HPROVIDER of the library it is executing in; one
+    // library owns one handle for its lifetime, so identify it by the module of the calling code.
+    exports["_RIB_provider_library_handle@0"] = (ctxThunk, mem, _args) => {
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        const callerEip = ctxThunk.esp ? view.getUint32(ctxThunk.esp, true) : 0;
+        const module = ctx.process.moduleRegistry?.getModuleContainingAddress(callerEip)?.baseAddress;
+        if (!module) return 0;
+        for (const [handle, provider] of ctx.ribProviders) {
+            if (provider.module === module) return handle;
+        }
+        return createProviderHandle(mem, module);
     };
 
     const freeProviderHandle: ThunkImplementation = (ctxThunk, mem, args) => {

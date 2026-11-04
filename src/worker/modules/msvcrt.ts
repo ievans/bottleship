@@ -12,6 +12,7 @@ import { Logger, LogCategory } from "../core/logger";
 import { Mem } from "../core/memory/mem-accessor";
 import type { Vc6LocaleSnapshot } from "./crt-cpp-locale-vc6";
 import { System } from "../core/system";
+import type { Msvcp60 } from "./msvcp60";
 import { shutdownProcess } from "./kernel32/process/process";
 import { VfsFileHandle, type VirtualFileSystem } from "../runtime/filesystem/vfs";
 import {
@@ -81,6 +82,7 @@ export class Msvcrt implements IModule {
     exports: Record<string, ThunkImplementation> = {};
 
     private process!: Process;
+    private msvcp60: Msvcp60 | null = null;
     private randSeed = 1;
     private errnoAddr = 0;
     private pctypeVarAddr = 0;   // pointer-to-pointer: *pctypeVarAddr → pctypeTableAddr
@@ -224,6 +226,10 @@ export class Msvcrt implements IModule {
     private qsortCodeAddr = 0;
     private bsearchCodeAddr = 0;
     private readonly crtAllocations = new Map<number, number>();
+
+    setMsvcp60(msvcp60: Msvcp60): void {
+        this.msvcp60 = msvcp60;
+    }
 
     initialize(process: Process): void {
         this.process = process;
@@ -689,6 +695,14 @@ export class Msvcrt implements IModule {
         exports["@$bdla$qpv"] = (ctx, mem, args) => this.free(args[0] ?? 0);
 
         exports["_tzset"] = () => { this.timezoneState!.tzset(); return 0; };
+
+        // Some builds pull std::exception's default ctor from msvcrt.dll's own import
+        // slot rather than msvcp60.dll's — same mangled symbol, same VC6 object layout,
+        // so msvcp60 (which owns the shared exception vtable) constructs it.
+        exports["??0exception@@QAE@XZ"] = (ctx, _mem, _args) => {
+            if (!this.msvcp60) throw new Error("msvcrt: ??0exception@@QAE@XZ called before msvcp60 wiring");
+            return this.msvcp60.defaultConstructException(ctx.ecx >>> 0);
+        };
 
         // --- String formatting ---
         registerMsvcrtTimeLocaleExports(exports, {

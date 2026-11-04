@@ -4,6 +4,8 @@ import type { UiSettings } from "../ui-settings";
 export interface SettingsDrawerProps {
   isOpen: boolean;
   onClose: () => void;
+  /** A game page is open, so save slots cannot be created or loaded (the guest holds the files). */
+  storageSlotsLocked?: boolean;
   quality: QualityConfig;
   onChange: (patch: Partial<QualityConfig>) => void;
   /** Non-default quality keys the active graphics backend does not implement (see

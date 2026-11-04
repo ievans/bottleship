@@ -307,6 +307,8 @@ const GUEST_CODE_START = 0x100000;  // After LOW_MEM region
 const THUNK_REGION_START = 0x10000000;
 const THUNK_REGION_END = 0x11000000;
 
+const defaultWindowProcByName = new Map<string, boolean>();
+
 /**
  * The default window procedures a subclass chain calls through CallWindowProc. Their
  * stub IS the callback target, so their return address legitimately points into the
@@ -318,10 +320,15 @@ const THUNK_REGION_END = 0x11000000;
  * own (comctl32's property sheet) registers through that.
  */
 function isDefaultWindowProcThunk(thunkName: string): boolean {
-    return thunkName.includes('DefWindowProc')
-        || thunkName.includes('DefDlgProc')
-        || thunkName.includes('DefMDIChildProc')
-        || thunkName.includes('DefFrameProc');
+    let known = defaultWindowProcByName.get(thunkName);
+    if (known === undefined) {
+        known = thunkName.includes('DefWindowProc')
+            || thunkName.includes('DefDlgProc')
+            || thunkName.includes('DefMDIChildProc')
+            || thunkName.includes('DefFrameProc');
+        defaultWindowProcByName.set(thunkName, known);
+    }
+    return known;
 }
 
 export class ThunkDispatcher {
@@ -588,6 +595,8 @@ export class ThunkDispatcher {
      *  0/0 = unknown (don't check). */
     private curStackBase = 0;
     private curStackTop = 0;
+    /** The last out-of-stack EBP that passed the writable-memory tolerance, so a loop holding one value pays the range check once. */
+    private lastWritableEbp = -1;
     /** Most recent "thunk entered with wild ESP" note, surfaced in the crash report so
      *  the exact corrupting call (thunk name + ESP + thread) lands in the error window.
      *  Diagnostic only — NON-FATAL (a fatal gate would risk false-positives on legit
@@ -5985,8 +5994,9 @@ export class ThunkDispatcher {
         // so the real catch below is preserved.
         if (ebp >= MEM_THUNK_CODE_BASE && ebp < (MEM_THUNK_DATA_BASE + MEM_THUNK_DATA_SIZE)) return;
         // FPO/alt-stack tolerance: EBP into committed writable memory is not corruption.
+        if (ebp === this.lastWritableEbp) return;
         const as: any = System.getInstance().process?.addressSpace;
-        if (as?.validateRange?.(ebp >>> 0, 4, "rw")) return;
+        if (as?.validateRange?.(ebp >>> 0, 4, "rw")) { this.lastWritableEbp = ebp; return; }
         const note =
             `wild EBP entering ${thunkName} on T${this.currentThreadId}: ` +
             `ebp=0x${(ebp >>> 0).toString(16)} outside stack ` +
@@ -8518,6 +8528,30 @@ export class ThunkDispatcher {
 
     private _slowPathHandleThunkError(id: number, name: string, e: any, cpu: any): void {
         Logger.error(LogCategory.THUNK, `Error executing thunk ${name} (ID ${id}): ${e}`);
+
+        // EAX=0 is the right default for an ordinary WinAPI call (NULL/FALSE), but when this
+        // thunk is itself one of the SEH chain's handlers — called directly by the generated
+        // dispatch stub's `CALL [EBX+4]` (see writeSehDispatchStub) — the SAME stub reads EAX
+        // as a disposition code: 0 means ContinueExecution, "resume the faulting instruction".
+        // An internal engine error here is not a handler that fixed the fault, but defaulting
+        // to 0 makes the dispatch stub believe it was, so _handleSehDispatchResult retries the
+        // identical fault forever (see its `result === 0` branch) — the "348 identical
+        // corruption/fault cycles" / RangeError hang this was written to stop. Detect that
+        // call shape from the return address the CALL left on the stack and answer
+        // ContinueSearch (1) instead, so the chain moves to the next frame (or falls through
+        // to UnhandledExceptionFilter) rather than looping.
+        const esp = this.regsRaw[4] >>> 0;
+        if (this.sehDispatchStubAddress !== 0 && this.isDataViewValid() && esp + 4 <= this.memLength) {
+            const retAddr = this.cachedDataView!.getUint32(esp, true) >>> 0;
+            if (retAddr >= this.sehDispatchStubAddress && retAddr < this.sehDispatchStubAddress + 0x100) {
+                Logger.error(LogCategory.SYSTEM,
+                    `SEH dispatch: ${name} threw while running as a native SEH handler — ` +
+                    `answering ContinueSearch(1) instead of ContinueExecution(0) to avoid ` +
+                    `retrying the fault forever`);
+                this.regsRaw[0] = 1;
+                return;
+            }
+        }
         cpu.reg32[0] = 0;
     }
 

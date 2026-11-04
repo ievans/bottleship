@@ -6,6 +6,7 @@
  */
 
 import { ThunkImplementation, ThunkResult } from '../../core/thunking/thunk-dispatcher';
+import { translateKeyMessage } from './message';
 import { Logger, LogCategory } from '../../core/logger';
 import { Marshaler } from '../../core/memory/marshaler';
 import { Mem } from '../../core/memory/mem-accessor';
@@ -1081,6 +1082,9 @@ function runModalDialog(
             schedulePump(0);
             return;
         }
+
+        // The DialogBox loop is `if (!IsDialogMessage) { TranslateMessage; DispatchMessage }`.
+        translateKeyMessage(hwnd, message, wParam, lParam);
 
         // --- Modal dialog mouse re-routing ---
         // Real modal dialogs are active owned top-level windows. If an already queued

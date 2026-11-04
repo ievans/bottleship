@@ -7,8 +7,9 @@
  */
 import { Logger, LogCategory } from "../../core/logger";
 import { drawTextPrefixOptions, fillTextWithMnemonic, parseMnemonicText } from "../win32-text";
-import { writeBackDibSectionRect } from "./bitmap-resolve";
+import { pullDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
 import type { GDIContext } from './context';
+import { measureVerticalMetrics } from './text-metrics';
 
 const NONANTIALIASED_QUALITY = 3;
 
@@ -27,6 +28,19 @@ function wantsAliasedText(state: { fontQuality: number }): boolean {
     return state.fontQuality === NONANTIALIASED_QUALITY;
 }
 
+const ascentByFont = new Map<string, number>();
+
+/** tmAscent of the context's current font — the distance from a GDI cell's top to its baseline. */
+function cellAscent(ctx: OffscreenCanvasRenderingContext2D, fontSize: number): number {
+    const font = ctx.font;
+    let a = ascentByFont.get(font);
+    if (a === undefined) {
+        a = measureVerticalMetrics(ctx, fontSize).ascent;
+        ascentByFont.set(font, a);
+    }
+    return a;
+}
+
 let aliasScratch: OffscreenCanvas | null = null;
 let aliasScratchCtx: OffscreenCanvasRenderingContext2D | null = null;
 
@@ -37,7 +51,8 @@ function fillTextAliased(
     state: { fontSize: number; textColorValue: number },
     text: string,
     x: number,
-    y: number
+    y: number,
+    ascent: number
 ): void {
     const pad = 2;
     const textWidth = ctx.measureText(text).width;
@@ -48,13 +63,13 @@ function fillTextAliased(
         aliasScratchCtx = aliasScratch.getContext('2d', { willReadFrequently: true }) as OffscreenCanvasRenderingContext2D | null;
     }
     const s = aliasScratchCtx;
-    if (!s) { ctx.fillText(text, x, y); return; }
+    if (!s) { ctx.fillText(text, x, y + ascent); return; }
     s.clearRect(0, 0, w, h);
     s.font = ctx.font;
-    s.textBaseline = 'top';
+    s.textBaseline = 'alphabetic';
     s.textAlign = 'left';
     s.fillStyle = '#fff';
-    s.fillText(text, pad, pad);
+    s.fillText(text, pad, pad + ascent);
     const img = s.getImageData(0, 0, w, h);
     const m = img.data;
     // The mask itself is always rasterized left-aligned, so translate Canvas' current
@@ -84,7 +99,11 @@ function fillTextAliased(
     ctx.imageSmoothingEnabled = smoothing;
 }
 
-/** fillText honoring the selected font's GDI quality (aliased for small/bitmap-era fonts). */
+/**
+ * fillText honoring the selected font's GDI quality (aliased for small/bitmap-era fonts).
+ * `y` is the top of the GDI text cell; glyphs go on an integer alphabetic baseline tmAscent
+ * below it: canvas' "top" baseline is the em-box top, not the cell top GDI measures from.
+ */
 function fillTextGdi(
     ctx: OffscreenCanvasRenderingContext2D,
     state: { fontQuality: number; fontSize: number; textColorValue: number },
@@ -92,8 +111,12 @@ function fillTextGdi(
     x: number,
     y: number
 ): void {
-    if (wantsAliasedText(state)) fillTextAliased(ctx, state, text, x, y);
-    else ctx.fillText(text, x, y);
+    const ascent = cellAscent(ctx, state.fontSize);
+    if (wantsAliasedText(state)) { fillTextAliased(ctx, state, text, x, y, ascent); return; }
+    const saved = ctx.textBaseline;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(text, x, y + ascent);
+    ctx.textBaseline = saved;
 }
 
 export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text: string): boolean {
@@ -142,8 +165,8 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         if (hAlign === TA_CENTER) x -= metrics.width / 2;
         else if (hAlign === TA_RIGHT) x -= metrics.width;
         const vAlign = align & TA_BASELINE;
-        if (vAlign === TA_BASELINE) y -= metrics.fontBoundingBoxAscent ?? state.fontSize * 0.8;
-        else if (vAlign === TA_BOTTOM) y -= state.fontSize;
+        if (vAlign === TA_BASELINE) y -= cellAscent(ctx, state.fontSize);
+        else if (vAlign === TA_BOTTOM) y -= measureVerticalMetrics(ctx, state.fontSize).height;
         if (updateCp) gdi.setCurrentPosition(hdc, x + metrics.width, refY);
     }
 
@@ -155,6 +178,16 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
     // The clip belongs to the DC, so it wraps the glyphs on every target. It is applied
     // after the lazy font/fillStyle sync above so the matching restore hands the context
     // back with exactly the attributes state.applied* claims are on it.
+    let back: { x: number; y: number; w: number; h: number } | null;
+    if (hasRotation) {
+        // Rotated glyphs land anywhere in the swept circle, so mirror that whole box.
+        const reach = Math.max(metrics.width, state.fontSize * 1.7) + 4;
+        back = gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2);
+    } else {
+        back = gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
+    }
+    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+
     const clipped = gdi.beginClipOn(hdc, ctx);
 
     if (hasRotation) {
@@ -179,15 +212,14 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
             state.appliedFillStyle = state.textColor;
         }
 
-        // Draw text at origin (0, 0) after rotation
-        ctx.fillText(text, 0, 0);
+        // Draw text at origin after rotation, baseline tmAscent below the cell top
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText(text, 0, cellAscent(ctx, state.fontSize));
+        ctx.textBaseline = 'top';
 
         // Restore transform manually (doesn't reset font/fillStyle)
         ctx.setTransform(savedTransform);
         if (clipped) ctx.restore();
-        // Rotated glyphs land anywhere in the swept circle, so mirror that whole box.
-        const reach = Math.max(metrics.width, state.fontSize * 1.7) + 4;
-        const back = gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2);
         if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
     } else {
         // No rotation - draw normally
@@ -206,7 +238,6 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
 
         fillTextGdi(ctx, state, text, x, y);
         if (clipped) ctx.restore();
-        const back = gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
         if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
     }
 
@@ -253,7 +284,9 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillRect(0, 0, metrics.width, state.fontSize);
                     bitmapCtx.fillStyle = state.textColor;
                 }
-                bitmapCtx.fillText(text, 0, 0);
+                bitmapCtx.textBaseline = 'alphabetic';
+                bitmapCtx.fillText(text, 0, cellAscent(bitmapCtx, state.fontSize));
+                bitmapCtx.textBaseline = 'top';
                 bitmapCtx.restore();
             } else {
                 if (state.bkMode === 2) {
@@ -312,17 +345,7 @@ interface LaidOutLine {
  *  (writeTextMetrics), so a guest that sizes its own rects from tmHeight agrees with what we
  *  lay out: a rect one tmHeight tall must hold exactly one line. */
 function lineAdvance(ctx: TextCtx, fontSize: number, externalLeading: boolean): number {
-    let ascent = fontSize * 0.8;
-    let descent = fontSize * 0.2;
-    try {
-        const m = ctx.measureText('ABCgjpqy');
-        if (m.fontBoundingBoxAscent !== undefined) {
-            ascent = m.fontBoundingBoxAscent;
-            descent = m.fontBoundingBoxDescent;
-        }
-    } catch { /* keep the font-size estimate */ }
-    ascent = Math.ceil(ascent);
-    const height = Math.max(1, ascent + Math.ceil(descent));
+    const { ascent, height } = measureVerticalMetrics(ctx, fontSize);
     return externalLeading ? height + Math.round(ascent * 0.15) : height;
 }
 
@@ -436,7 +459,10 @@ function drawLaidOutLine(
     // were already rasterized above, potentially through the aliased path.
     const esc = (s: string) => s.replace(/&/g, '&&');
     const encoded = esc(line.text.slice(0, line.underline)) + '&' + esc(line.text.slice(line.underline));
-    fillTextWithMnemonic(ctx, encoded, x, y, { ...opts, drawText: false });
+    const savedBaseline = ctx.textBaseline;
+    ctx.textBaseline = 'alphabetic';
+    fillTextWithMnemonic(ctx, encoded, x, y + cellAscent(ctx, state.fontSize), { ...opts, drawText: false });
+    ctx.textBaseline = savedBaseline;
 }
 
 /**
@@ -590,9 +616,6 @@ export function drawText(
         target.textBaseline = 'top';
     };
 
-    paint(ctx);
-    if (state.bkMode === 2) state.appliedFillStyle = state.textColor;
-
     // Same contract as TextOut: a DIBSection selected into this DC IS the pixel surface,
     // so the glyphs have to reach the guest bits or the next SelectObject discards them.
     // Without a format rect DrawText lays out from the origin, so the laid-out extent is
@@ -601,6 +624,11 @@ export function drawText(
         ? { x: rect.left, y: rect.top, w: boxWidth, h: rect.bottom - rect.top }
         : { x: originX - layout.width, y: originY, w: layout.width * 2, h: layout.height };
     const back = gdi.clipCopyRect(hdc, painted.x - 2, painted.y - 2, painted.w + 4, painted.h + 4);
+    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+
+    paint(ctx);
+    if (state.bkMode === 2) state.appliedFillStyle = state.textColor;
+
     if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
 
     // Mark as dirty for ReleaseDC optimization

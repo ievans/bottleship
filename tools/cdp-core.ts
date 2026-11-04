@@ -16,10 +16,8 @@
  *
  * Bun script (top-level await, Bun.spawnSync, global fetch/WebSocket).
  */
-import { createGzip } from "node:zlib";
-import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, rmSync, statSync } from "node:fs";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
+import { gzipSync } from "node:zlib";
+import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pickSessionTab, sessionFromEnv, sessionOwnsUrl, sessionUrl } from "../src/harness/session";
@@ -484,19 +482,23 @@ export async function captureTrace(
     await Promise.race([complete, new Promise((r) => setTimeout(r, 120_000))]);
     session.close();
 
-    // Serialized one event at a time straight into the gzip stream. A whole-document
-    // JSON.stringify + Buffer.from + gzipSync holds the event array, a multi-hundred-MB string
-    // and the compressed buffer at once — a 30 s trace of a busy worker is enough to run the
-    // process out of heap after the recording succeeded.
-    await pipeline(
-        Readable.from((function* () {
-            yield '{"traceEvents":[';
-            for (let i = 0; i < events.length; i++) yield (i ? "," : "") + JSON.stringify(events[i]);
-            yield "]}";
-        })()),
-        createGzip(),
-        createWriteStream(outFile),
-    );
+    // Written as a sequence of gzip members, one per batch: concatenated members are one valid
+    // gzip stream, memory stays bounded to a batch, and there is no stream pipeline to stall —
+    // a Bun createGzip pipeline here has finished the recording and then never flushed the file.
+    const fd = openSync(outFile, "w");
+    try {
+        writeSync(fd, gzipSync('{"traceEvents":['));
+        const BATCH = 2000;
+        for (let i = 0; i < events.length; i += BATCH) {
+            const end = Math.min(i + BATCH, events.length);
+            let chunk = i ? "," : "";
+            for (let j = i; j < end; j++) chunk += (j > i ? "," : "") + JSON.stringify(events[j]);
+            writeSync(fd, gzipSync(chunk));
+        }
+        writeSync(fd, gzipSync("]}"));
+    } finally {
+        closeSync(fd);
+    }
     return {
         file: outFile,
         events: events.length,

@@ -745,38 +745,50 @@ export class WindowManager {
         return this.zOrder.slice();
     }
 
+    /** Top-level (non-WS_CHILD) windows: Z-order first, then tracked ones not yet in it. */
+    topLevelHwnds(): number[] {
+        const seen = new Set<number>();
+        const collect = (hwnd: number): void => {
+            const win = this.windows.get(hwnd);
+            if (!win || (win.style & WS_CHILD) !== 0) return;
+            seen.add(hwnd);
+        };
+        for (const hwnd of this.zOrder) collect(hwnd);
+        for (const win of this.windows.values()) collect(win.hwnd);
+        return [...seen];
+    }
+
+    /** MAKELPARAM(width, height) as WM_DISPLAYCHANGE carries it. */
+    static displayChangeLParam(width: number, height: number): number {
+        return (((height & 0xFFFF) << 16) | (width & 0xFFFF)) >>> 0;
+    }
+
     /**
-     * Post WM_DISPLAYCHANGE to every top-level window (faithful Win32: on a display-mode
-     * change the system broadcasts WM_DISPLAYCHANGE to all top-level windows with
-     * wParam = new bpp, lParam = MAKELPARAM(width, height)). The guest WinDrv / windowed
-     * vs fullscreen reconciliation keys off this. Children are not notified (Windows only
-     * broadcasts to top-level windows). Enumerates the Z-order list plus any tracked
-     * top-level windows not yet in the Z-order, so newly-created hidden windows still hear it.
+     * Post WM_DISPLAYCHANGE to every top-level window (wParam = new bpp, lParam =
+     * MAKELPARAM(width, height)). Windows SENDS this during the mode-set, so callers that
+     * can return a suspended thunk should use sendDisplayChange (user32/message.ts) for the
+     * first window and post only the rest.
      */
-    postDisplayChange(width: number, height: number, bpp: number): void {
-        const lParam = (((height & 0xFFFF) << 16) | (width & 0xFFFF)) >>> 0;
-        const count = this.broadcastToTopLevel(WM_DISPLAYCHANGE, bpp >>> 0, lParam);
+    postDisplayChange(width: number, height: number, bpp: number, except = 0): void {
+        const lParam = WindowManager.displayChangeLParam(width, height);
+        let count = 0;
+        for (const hwnd of this.topLevelHwnds()) {
+            if (hwnd === except) continue;
+            this.postMessage(hwnd, WM_DISPLAYCHANGE, bpp >>> 0, lParam);
+            count++;
+        }
         Logger.log(LogCategory.SYSTEM,
-            `WindowManager: WM_DISPLAYCHANGE broadcast ${width}x${height}x${bpp} to ${count} top-level window(s)`);
+            `WindowManager: WM_DISPLAYCHANGE posted ${width}x${height}x${bpp} to ${count} top-level window(s)`);
     }
 
     /**
      * Post a message to every top-level window (the HWND_BROADCAST target set) and
-     * return how many got it. Enumerates the Z-order list plus any tracked top-level
-     * window not yet in it, so a newly-created hidden window still hears the broadcast.
+     * return how many got it.
      */
     broadcastToTopLevel(msg: number, wParam: number, lParam: number): number {
-        const seen = new Set<number>();
-        const broadcast = (hwnd: number): void => {
-            if (seen.has(hwnd)) return;
-            const win = this.windows.get(hwnd);
-            if (!win || (win.style & WS_CHILD) !== 0) return;
-            seen.add(hwnd);
-            this.postMessage(hwnd, msg, wParam, lParam);
-        };
-        for (const hwnd of this.zOrder) broadcast(hwnd);
-        for (const win of this.windows.values()) broadcast(win.hwnd);
-        return seen.size;
+        const hwnds = this.topLevelHwnds();
+        for (const hwnd of hwnds) this.postMessage(hwnd, msg, wParam, lParam);
+        return hwnds.length;
     }
 
     /**
