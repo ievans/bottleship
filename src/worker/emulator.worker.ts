@@ -83,6 +83,7 @@ import { Msvcrt } from "./modules/msvcrt";
 import { Msvcp90 } from "./modules/msvcp90";
 import { Msvcp140 } from "./modules/msvcp140";
 import { Msvcp60 } from "./modules/msvcp60";
+import { Msvcp110 } from "./modules/msvcp110";
 import { Msvcr110 } from "./modules/msvcr110";
 import { Crtdll } from "./modules/crtdll";
 import { Winspool } from "./modules/winspool";
@@ -2570,6 +2571,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const msvcp90 = new Msvcp90();
       const msvcp140 = new Msvcp140();
       const msvcp60 = new Msvcp60();
+      const msvcp110 = new Msvcp110();
       const msvcr110 = new Msvcr110();
       const crtdll = new Crtdll();
       const winspool = new Winspool();
@@ -2654,6 +2656,15 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcp60.setMsvcrt(msvcrt);
       msvcrt.setMsvcp60(msvcp60);
       msvcp60.initialize(process);
+      // msvcp70/71/80/100/110/120 all alias to the "msvcp90" HLE module (MSVCP_VERSIONED
+      // in dll-aliases.ts), so a real MSVCP110.dll import never reaches a module registered
+      // under that versioned name — its handlers merge straight into msvcp90's own exports.
+      msvcp110.initialize(process);
+      Object.assign(msvcp90.exports, msvcp110.exports);
+      // Not for dispatch (that's the Object.assign above) — this is so system.ts's reset
+      // loop finds msvcp110's reregisterExports and refreshes its data exports (facet ids,
+      // vtables, _BADOFF — all registered under "msvcp90") after a thunk-generator reset.
+      process.registerModule(msvcp110.name, msvcp110);
       // msvcr70…msvcr120 all alias to the "msvcrt" HLE module (MSVCR_VERSIONED in
       // dll-aliases.ts), so a real MSVCR110.dll import never reaches a module registered
       // under that versioned name — its handlers merge straight into msvcrt's own exports.
