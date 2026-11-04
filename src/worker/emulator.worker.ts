@@ -84,6 +84,7 @@ import { Msvcp90 } from "./modules/msvcp90";
 import { Msvcp140 } from "./modules/msvcp140";
 import { Msvcp60 } from "./modules/msvcp60";
 import { TwitchSdk } from "./modules/twitchsdk_32_release";
+import { SteamApi } from "./modules/steam_api";
 import { Msvcp110 } from "./modules/msvcp110";
 import { Msvcr110 } from "./modules/msvcr110";
 import { Crtdll } from "./modules/crtdll";
@@ -2573,6 +2574,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const msvcp140 = new Msvcp140();
       const msvcp60 = new Msvcp60();
       const twitchSdk = new TwitchSdk();
+      const steamApi = new SteamApi();
       const msvcp110 = new Msvcp110();
       const msvcr110 = new Msvcr110();
       const crtdll = new Crtdll();
@@ -2659,6 +2661,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       msvcrt.setMsvcp60(msvcp60);
       msvcp60.initialize(process);
       twitchSdk.initialize(process);
+      steamApi.initialize(process);
       // msvcp70/71/80/100/110/120 all alias to the "msvcp90" HLE module (MSVCP_VERSIONED
       // in dll-aliases.ts), so a real MSVCP110.dll import never reaches a module registered
       // under that versioned name — its handlers merge straight into msvcp90's own exports.
@@ -2754,6 +2757,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(msvcp140.name, msvcp140);
       process.registerModule(msvcp60.name, msvcp60);
       process.registerModule(twitchSdk.name, twitchSdk);
+      process.registerModule(steamApi.name, steamApi);
       process.registerModule(crtdll.name, crtdll);
       process.registerModule(winspool.name, winspool);
       process.registerModule(dwmapi.name, dwmapi);
@@ -2836,6 +2840,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(msvcp140.name, msvcp140.exports);
       process.dispatcher.registerModule(msvcp60.name, msvcp60.exports);
       process.dispatcher.registerModule(twitchSdk.name, twitchSdk.exports);
+      process.dispatcher.registerModule(steamApi.name, steamApi.exports);
       process.dispatcher.registerModule(crtdll.name, crtdll.exports);
       process.dispatcher.registerModule(winspool.name, winspool.exports);
       process.dispatcher.registerModule(dwmapi.name, dwmapi.exports);
