@@ -10,7 +10,7 @@
  *
  * The container layout is owned by container-store.ts (worker), imported here for one source of truth.
  */
-import { BOTTLESHIP_ROOT, GAMES_DIR } from "./worker/runtime/filesystem/container-store";
+import { BOTTLESHIP_ROOT, GAMES_DIR, PERSISTENT_ROOT_FILES } from "./worker/runtime/filesystem/container-store";
 import { buildZip } from "@bottleship/formats/wgb/zip-build";
 import { ZipArchive, BufferSource } from "@bottleship/formats/zip";
 import { asWriteChunk } from "./dom-buffer";
@@ -39,9 +39,6 @@ export async function clearTemporaryImports(): Promise<void> {
     }
 }
 
-/** Container-root files that belong to the persistent (exportable) layer, besides overlay/**. */
-const ROOT_PERSIST_FILES = ["registry.json", "meta.json"];
-
 export interface StorageEstimate {
     usageBytes: number;
     quotaBytes: number;
@@ -53,6 +50,8 @@ export interface GameStorageInfo {
     containerDir: string;
     overlayBytes: number;
     registryBytes: number;
+    /** Named save slots (copies of the above), counted in totalBytes. */
+    slotBytes: number;
     totalBytes: number;
 }
 
@@ -114,7 +113,7 @@ export function ensurePersistentStorageRequested(): void {
     })();
 }
 
-/** Per-game container sizes (saves + registry), sorted largest first. */
+/** Per-game container sizes (saves + registry + slots), sorted largest first. */
 export async function listGameStorage(): Promise<GameStorageInfo[]> {
     const bs = await opfsBottleship(false);
     if (!bs) return [];
@@ -127,11 +126,13 @@ export async function listGameStorage(): Promise<GameStorageInfo[]> {
         const container = handle as FileSystemDirectoryHandle;
         let overlayBytes = 0;
         let registryBytes = 0;
+        let slotBytes = 0;
         try { overlayBytes = await dirSize(await container.getDirectoryHandle("overlay")); } catch { /* none */ }
+        try { slotBytes = await dirSize(await container.getDirectoryHandle("slots")); } catch { /* none */ }
         for (const f of ["registry.json", "meta.json"]) {
             try { registryBytes += (await (await container.getFileHandle(f)).getFile()).size; } catch { /* none */ }
         }
-        out.push({ containerDir: name, overlayBytes, registryBytes, totalBytes: overlayBytes + registryBytes });
+        out.push({ containerDir: name, overlayBytes, registryBytes, slotBytes, totalBytes: overlayBytes + registryBytes + slotBytes });
     }
     return out.sort((a, b) => b.totalBytes - a.totalBytes);
 }
@@ -201,7 +202,7 @@ export async function exportGameContainer(containerDir: string): Promise<Uint8Ar
     } catch { return null; }
 
     const files = new Map<string, Uint8Array>();
-    for (const name of ROOT_PERSIST_FILES) {
+    for (const name of PERSISTENT_ROOT_FILES) {
         try {
             const f = await (await container.getFileHandle(name)).getFile();
             files.set(name, new Uint8Array(await f.arrayBuffer()));

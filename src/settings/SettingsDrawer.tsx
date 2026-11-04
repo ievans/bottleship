@@ -101,7 +101,7 @@ export default function SettingsDrawer(props: SettingsDrawerProps): React.ReactE
             {section === "graphics" && <SettingsGraphicsSection {...props} />}
             {section === "audio" && <SettingsAudioSection {...props} />}
             {section === "input" && <SettingsInputSection {...props} active={isOpen && section === "input"} />}
-            {section === "storage" && <SettingsStorageSection active={isOpen && section === "storage"} />}
+            {section === "storage" && <SettingsStorageSection active={isOpen && section === "storage"} slotsLocked={props.storageSlotsLocked} />}
             {section === "advanced" && <SettingsAdvancedSection {...props} />}
             {section === "about" && <SettingsAboutSection />}
           </div>

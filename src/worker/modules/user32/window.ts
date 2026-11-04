@@ -18,6 +18,7 @@ import {
     validateWindow,
     hasPendingUpdate,
     getWindowUpdateBounds,
+    getWindowUpdateRects,
     consumeNeedsErase,
     clearWindowUpdate,
     removeWindowUpdate,
@@ -31,6 +32,7 @@ import { registerWindowGeometryExports, removeWindowPlacement, clientSizeFromWin
 import { registerWindowQueryExports } from './window-query';
 import { registerWindowPropExports } from './window-props';
 import { GDIContext } from '../gdi32/context';
+import { assignRegionRects } from '../gdi32/painting-dc-state';
 import { ensureAnimateControlClasses, clearAnimateState, onAnimateShowWindow, isAnimateControlWindow } from './animate-control';
 import { clearMciWndState } from '../msvfw32-mciwnd';
 import { getBuiltinSystemClass, getDefDlgProcAddress, getDefWindowProcAddress } from './system-classes';
@@ -2815,6 +2817,16 @@ export function createWindowExports(): Record<string, ThunkImplementation> {
             }
         }
         return 1; // TRUE
+    };
+
+    // int GetUpdateRgn(HWND hWnd, HRGN hRgn, BOOL bErase): the update region in client coordinates.
+    exports['GetUpdateRgn'] = (ctx, mem, args) => {
+        const hWnd = args[0] >>> 0;
+        const hRgn = args[1] >>> 0;
+        if (!windows.has(hWnd)) return 0; // ERROR
+        const quads: number[] = [];
+        for (const r of getWindowUpdateRects(hWnd)) quads.push(r.left, r.top, r.right, r.bottom);
+        return assignRegionRects(hRgn, quads);
     };
 
     exports['ShowOwnedPopups'] = (ctx, mem, args) => {

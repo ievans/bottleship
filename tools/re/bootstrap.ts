@@ -2,14 +2,15 @@
  * Cross-platform bootstrap for the warm RE service (`re start`).
  *
  * The service (re-service.py) needs three things: a Ghidra install (GHIDRA_INSTALL_DIR),
- * a JDK 21+ (Ghidra 12 requires it — macOS ships Java 8), and a python with pyghidra.
+ * a JDK new enough for that Ghidra (its application.properties names the minimum — macOS ships
+ * Java 8), and a python with pyghidra.
  * This module resolves each from, in order: an existing env/system install, a repo-local
  * copy under `.ghidra/` / `.ghidra-home/` (both gitignored), or a fresh download/venv
  * install into those dirs. Idempotent — a second call is a few stat()s. Works on
  * darwin/linux/win.
  */
 
-import { existsSync, readdirSync, statSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { join, dirname, basename } from "node:path";
 import { ZipArchive } from "@bottleship/formats/zip";
 import { FileSource } from "../internal/file-source";
@@ -76,8 +77,18 @@ function isValidGhidra(dir: string): boolean {
     return !!dir && existsSync(join(dir, "support", `analyzeHeadless${EXE}`));
 }
 
-function isValidJavaHome(home: string): boolean {
-    return !!home && javaMajor(join(home, "bin", IS_WIN ? "java.exe" : "java")) >= 21;
+function isValidJavaHome(home: string, minMajor: number): boolean {
+    return !!home && javaMajor(join(home, "bin", IS_WIN ? "java.exe" : "java")) >= minMajor;
+}
+
+/** The JDK major a Ghidra install demands, from its own application.properties (the latest release moves it). */
+function requiredJavaMajor(ghidraDir: string): number {
+    try {
+        const props = readFileSync(join(ghidraDir, "Ghidra", "application.properties"), "utf8");
+        const m = /^application\.java\.min=(\d+)/m.exec(props);
+        if (m) return parseInt(m[1], 10);
+    } catch { /* fall through */ }
+    return 21;
 }
 
 /** First child of `parent` whose name matches `re` (returns absolute path or null). */
@@ -121,11 +132,11 @@ async function ensureGhidra(): Promise<string> {
     return extracted;
 }
 
-async function ensureJdk(): Promise<string> {
+async function ensureJdk(minMajor: number): Promise<string> {
     // 1. A system/env JDK that's new enough.
     const envHome = process.env.JAVA_HOME;
-    if (envHome && isValidJavaHome(envHome)) return envHome;
-    if (javaMajor(IS_WIN ? "java.exe" : "java") >= 21) {
+    if (envHome && isValidJavaHome(envHome, minMajor)) return envHome;
+    if (javaMajor(IS_WIN ? "java.exe" : "java") >= minMajor) {
         // On PATH — derive its home so we can pass JAVA_HOME explicitly to the service.
         try {
             const r = Bun.spawnSync([IS_WIN ? "where" : "which", "java"], { stdout: "pipe" });
@@ -136,30 +147,36 @@ async function ensureJdk(): Promise<string> {
 
     // 2. Repo-local Temurin (macOS nests the home under Contents/Home).
     const findHome = (): string | null => {
-        const top = findChild(HOME_DIR, /^jdk-?\d.*$/);
-        if (!top) return null;
-        const macHome = join(top, "Contents", "Home");
-        return existsSync(macHome) ? macHome : top;
+        if (!existsSync(HOME_DIR)) return null;
+        for (const name of readdirSync(HOME_DIR)) {
+            if (!/^jdk-?\d.*$/.test(name)) continue;
+            const top = join(HOME_DIR, name);
+            if (!statSync(top).isDirectory()) continue;
+            const macHome = join(top, "Contents", "Home");
+            const home = existsSync(macHome) ? macHome : top;
+            if (isValidJavaHome(home, minMajor)) return home;
+        }
+        return null;
     };
     let home = findHome();
-    if (home && isValidJavaHome(home)) return home;
+    if (home) return home;
 
-    // 3. Extract an already-downloaded tarball, else download Temurin 21 for this platform.
+    // 3. Extract an already-downloaded tarball, else download the required Temurin for this platform.
     await Bun.$`mkdir -p ${HOME_DIR}`;
-    let tar = existsSync(HOME_DIR) ? readdirSync(HOME_DIR).filter(f => /temurin.*\.(tar\.gz|zip)$/.test(f)).map(f => join(HOME_DIR, f))[0] : undefined;
+    let tar = existsSync(HOME_DIR) ? readdirSync(HOME_DIR).filter(f => new RegExp(`temurin${minMajor}\\.(tar\\.gz|zip)$`).test(f)).map(f => join(HOME_DIR, f))[0] : undefined;
     if (!tar || !existsSync(tar)) {
         const os = process.platform === "darwin" ? "mac" : process.platform === "win32" ? "windows" : "linux";
         const arch = process.arch === "arm64" ? "aarch64" : "x64";
         const ext = os === "windows" ? "zip" : "tar.gz";
-        tar = join(HOME_DIR, `temurin21.${ext}`);
-        log(`downloading Temurin JDK 21 (${os}/${arch})…`);
-        await Bun.$`curl -sL -o ${tar} ${`https://api.adoptium.net/v3/binary/latest/21/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`}`;
+        tar = join(HOME_DIR, `temurin${minMajor}.${ext}`);
+        log(`downloading Temurin JDK ${minMajor} (${os}/${arch})…`);
+        await Bun.$`curl -sL -o ${tar} ${`https://api.adoptium.net/v3/binary/latest/${minMajor}/ga/${os}/${arch}/jdk/hotspot/normal/eclipse`}`;
     }
     log(`unpacking ${tar}…`);
     if (tar.endsWith(".zip")) await unzipInto(tar, HOME_DIR);
     else await Bun.$`tar -xzf ${tar} -C ${HOME_DIR}`;
     home = findHome();
-    if (!home || !isValidJavaHome(home)) throw new Error(`JDK 21 unpack failed under ${HOME_DIR}`);
+    if (!home) throw new Error(`JDK ${minMajor} unpack failed under ${HOME_DIR}`);
     return home;
 }
 
@@ -187,10 +204,10 @@ async function ensurePython(): Promise<string> {
     return venvPy;
 }
 
-/** Ensure Ghidra + JDK 21 + a pyghidra-capable python are present; download/extract as needed. */
+/** Ensure Ghidra + its required JDK + a pyghidra-capable python are present; download/extract as needed. */
 export async function ensureReEnv(): Promise<ReEnv> {
     const ghidraDir = await ensureGhidra();
-    const javaHome = await ensureJdk();
+    const javaHome = await ensureJdk(requiredJavaMajor(ghidraDir));
     const python = await ensurePython();
     return { ghidraDir, javaHome, python, logFile: join(HOME_DIR, "re-service.log") };
 }

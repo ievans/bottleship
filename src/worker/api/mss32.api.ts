@@ -335,6 +335,7 @@ export const mss32Module: ModuleDescriptor = {
         makeFunc("_RIB_enumerate_providers@12", 3),     // (name, before, HPROENUM*)
         makeFunc("_RIB_provider_system_data@8", 2),     // (HPROVIDER, index)
         makeFunc("_RIB_provider_user_data@8", 2),
+        makeFunc("_RIB_provider_library_handle@0", 0),    // () -> HPROVIDER of the calling provider library
         makeFunc("_RIB_load_application_providers@4", 1), // (C8 *filespec)
         makeFunc("AIL_close_digital_driver", 1),
         makeFunc("AIL_close_stream", 1),

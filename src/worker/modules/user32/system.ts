@@ -656,6 +656,12 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
 
     exports['MessageBeep'] = () => 1;
 
+    // No WinHlp32 viewer exists; like a successful launch, the call is accepted and nothing is shown.
+    exports['WinHelpA'] = (_ctx, mem, args) => {
+        Logger.verbose(LogCategory.USER32, `WinHelpA(file="${Marshaler.readString(mem, args[1])}", cmd=0x${(args[2] >>> 0).toString(16)})`);
+        return 1;
+    };
+
     exports['GetKeyboardType'] = (ctx, mem, args) => {
         const typeFlag = args[0] | 0;
         // 0 = keyboard type, 1 = subtype, 2 = number of function keys

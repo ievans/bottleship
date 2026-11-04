@@ -7,7 +7,7 @@ import { DD_OK, DDERR_INVALIDPARAMS, DDERR_CANTDUPLICATE, SUPPORTED_FOURCC_CODES
 import { isValidAddress } from "../../core/memory/address-guard";
 import type { DDrawContext } from "./context";
 import { System } from "../../core/system";
-import { restoreDisplayModeToDesktop } from "./directdraw";
+import { restoreDisplayModeToDesktop, notifyDisplayChange } from "./directdraw";
 
 export function createDirectDrawStubsExports(context: DDrawContext): Record<string, ThunkImplementation> {
     const exports: Record<string, ThunkImplementation> = {};
@@ -28,9 +28,10 @@ export function createDirectDrawStubsExports(context: DDrawContext): Record<stri
                 // Faithful: revert the current display mode back to the saved desktop mode,
                 // resize the host, and broadcast WM_DISPLAYCHANGE. Leaving exclusive returns
                 // the screen to GDI.
-                restoreDisplayModeToDesktop(System.getInstance(), context);
+                const changed = restoreDisplayModeToDesktop(System.getInstance(), context);
                 context.cooperative.exclusive = false;
                 context.gdiSurfaceVisible = true;
+                return notifyDisplayChange(ctx, mem, context, changed, 4, DD_OK);
             }
             return DD_OK;
         };

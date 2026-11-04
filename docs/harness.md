@@ -104,6 +104,61 @@ disturbing it, and read the cursor's position back off a `shot` — it is the gu
 Every pointer verb's result (and `state(['dinput'])`) carries `relativeMouse` when the guest is
 in that mode, so you never have to guess which world you are in.
 
+Absolute coordinates are guest pixels at one resolution. Before reusing a set, whether your own
+from an earlier session or a committed script's, check the resolution it was tuned against:
+`bun tools/harness.ts gridShot` prints it on its first line (`guest=1024x768`), and
+`state(['screen'])` reports the display mode and the canvas size. A bundle rebuild or a stale
+comment can invalidate every coordinate in a script at once. Write the resolution into the script
+next to its coordinates.
+
+## Reaching a scene
+
+Navigating menus by screenshot is the slowest loop in a bring-up, so do it once and keep it:
+
+- **Script it.** Turn the working path into a `*.harness.ts` script as soon as it works, so each
+  later attempt is a single `bun tools/harness.ts run`.
+- **Record and replay.** `record()` starts capturing harness-driven input, `recordStop()` returns
+  the recording, and `replay(recording)` re-injects each input at the same present-frame
+  offset rather than the same wall-clock time. It captures the harness's own input, not a person
+  playing in the tab.
+- **Start from a save.** A **save slot** captures the game's whole persistent layer (saves, config,
+  registry) and loads it back as an exact mirror; slots are made and loaded from the library page,
+  not while the guest runs (see [Architecture](architecture.md)). For one file,
+  `call('fsRead', path, {maxBytes, encoding: 'base64'})` copies it out (the default cap is
+  256 KiB), and `fsWrite(path, content, {encoding: 'base64'})` puts it back into a fresh boot.
+  Keep copied saves under `logs/`, never in the repository.
+- **Confirm the scene.** `sceneProbe()` returns a fingerprint of the screen with how much it is
+  moving and how many draws a frame costs; `sceneCompare()` says whether two probes show the same
+  scene. Take one before any measurement, because a number taken on the wrong scene looks just as
+  plausible as the right one.
+
+A person can also play to the moment in the harness's Chrome window. The harness reads the same
+tab over CDP, so `report()`, `captureFrame()` or a `trace` taken on their cue sees exactly what
+they see.
+
+## Measuring performance
+
+For a game that is slow, stutters or freezes, measure before changing anything, and keep the
+before and after numbers for the PR. Run a single guest tab while measuring.
+
+- **How bad.** `frameReport({reset: true})`, play or `tickFrames`, then `frameReport()`: frame-time
+  percentiles, frames over budget, and the over-budget frames grouped by cause and ranked by time
+  lost. `measureWindow({ms})` takes the same window with a `sceneProbe` on each side.
+- **What pattern.** Turn on **FPS / stats overlay** (Settings → Advanced, or the dev panel's FPS
+  button) and let it collect presents, then `framePacing()` returns the raw inter-present series
+  and its period, which separates a steady slowdown from periodic hitches.
+- **Where the time goes.** `bun tools/harness.ts trace <seconds>` records a Chrome trace, and
+  `bun tools/analyze-trace.ts <file> --thread worker` breaks it into JIT code, thunks, hypercalls,
+  GC and idle, with the worst frames and guest attribution (`module:rva`). `--range A-Bs` zooms
+  into one stall.
+- **A stall on save or load.** Arm `call('fsTrace', 'start', {writes: true})` and record a
+  `trace` across one stall; together they show whether the time is file I/O, one slow API or
+  guest code. If harness RPC stops answering, `bun tools/cdp-pausestack.ts --port <cdp-port>` pauses
+  the worker and prints what it is running. Pass the port your session uses (`BS_CDP_PORT`, 9333
+  by default); the tool does not read the environment.
+- **Which guest code.** Take the `module:rva` that guest attribution names to the RE service
+  (`tools/re/`) and decompile it.
+
 ## Seeing what happened
 
 The canvas is an `OffscreenCanvas` the main thread can't read directly, and the guest generates

@@ -11,12 +11,9 @@
  */
 import { buildZip, crc32 } from "@bottleship/formats/wgb/zip-build";
 import { ZipArchive, BufferSource } from "@bottleship/formats/zip";
-import { getContainerDir } from "./container-store";
+import { getContainerDir, PERSISTENT_ROOT_FILES } from "./container-store";
 import { Logger, LogCategory } from "../../core/logger";
 import { asWriteChunk } from "../../../dom-buffer";
-
-/** Files at the container root that are part of the persistent layer (besides the overlay/ tree). */
-const ROOT_PERSIST_FILES = ["registry.json", "meta.json"];
 
 /** Recursively collect every file under a directory handle into `out` keyed by posix relpath. */
 async function collectDir(dir: FileSystemDirectoryHandle, prefix: string, out: Map<string, Uint8Array>): Promise<void> {
@@ -32,7 +29,7 @@ async function collectDir(dir: FileSystemDirectoryHandle, prefix: string, out: M
 }
 
 /**
- * Export a game's persistent layer as a store-only ZIP (overlay/** + registry.json + meta.json).
+ * Export a game's persistent layer as a store-only ZIP (overlay/** + registry.json + meta.json + the CoW shadow index).
  * Returns null if the container doesn't exist (nothing saved yet).
  */
 export async function exportContainer(gameId: string): Promise<Uint8Array | null> {
@@ -40,7 +37,7 @@ export async function exportContainer(gameId: string): Promise<Uint8Array | null
     if (!container) return null;
 
     const files = new Map<string, Uint8Array>();
-    for (const name of ROOT_PERSIST_FILES) {
+    for (const name of PERSISTENT_ROOT_FILES) {
         try {
             const fh = await container.getFileHandle(name);
             const f = await fh.getFile();

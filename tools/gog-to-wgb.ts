@@ -32,10 +32,7 @@ import { UnpackDecoder } from "@bottleship/formats/unpack";
 import { FileSource } from "./internal/file-source";
 import { resolveArchiveExtractPath } from "./internal/archive-extract-path";
 import { isGogJunk, SKIP_DIRS, detectExeFromPaths } from "@bottleship/repack/gog-filter";
-import { buildZip } from "@bottleship/formats/wgb/zip-build";
-import { OS_PRESETS } from "@bottleship/repack/manifest-synth";
 import { installerBytesToWgb } from "@bottleship/repack/installer-to-wgb";
-import { isValidGameId, deriveGameId, KNOWN_GAME_ID_SCHEMES } from "@bottleship/formats/wgb/container-id";
 
 const isTTY = process.stdout.isTTY;
 
@@ -302,7 +299,7 @@ if (!extractDir) {
     createdTmpDir = true;
 }
 
-const TOTAL_STEPS = extractOnly ? 2 : 4;
+const TOTAL_STEPS = 2;
 
 step(1, TOTAL_STEPS, "Extracting installer (native WASM)...");
 
@@ -324,81 +321,8 @@ if (gogMeta.name) console.log(`  game name: ${gogMeta.name}`);
 const paths = new Map<string, Buffer>();
 collectGameFiles(appDir, "", paths, !keepGog);
 const exeName = get("--exe") ?? detectExeFromPaths(paths.keys());
-if (!exeName && !extractOnly) {
-    console.error("Error: no .exe found; use --exe <name>");
-    if (createdTmpDir) rmSync(extractDir, { recursive: true, force: true });
-    process.exit(1);
-}
 if (exeName) console.log(`  exe:       ${exeName}`);
 
-if (extractOnly) {
-    console.log("\n--- Extracted files (after GOG filter) ---");
-    for (const name of paths.keys()) console.log(`  ${name}`);
-    console.log(`\nExtracted to: ${appDir}`);
-    process.exit(0);
-}
-
-// Pack the extracted directory.
-const name = get("--name") ?? gogMeta.name ?? basename(installer, extname(installer));
-const osKey = get("--os") ?? "win98";
-const osVer = OS_PRESETS[osKey];
-if (!osVer) {
-    console.error(`Error: unknown --os "${osKey}"`);
-    process.exit(1);
-}
-
-// Container key (WGB v2): explicit --game-id wins; else GOG product id → gog:<id>; else derive.
-const entrypoint = `rom/${exeName}`;
-let gameId = get("--game-id");
-if (gameId && !isValidGameId(gameId)) {
-    console.error(`Error: invalid --game-id "${gameId}". Use "<scheme>:<id>" with scheme in {${KNOWN_GAME_ID_SCHEMES.join(", ")}}.`);
-    process.exit(1);
-}
-if (!gameId) gameId = gogMeta.gameId ? `gog:${gogMeta.gameId}` : deriveGameId({ name, entrypoint });
-
-const manifest: Record<string, unknown> = {
-    formatVersion: 2,
-    gameId,
-    name,
-    entrypoint,
-    rom: "rom",
-    registry: "registry.json",
-    emulator: {
-        osVersion: osVer,
-        screenResolution: {
-            width: parseInt(get("--width") ?? "640", 10),
-            height: parseInt(get("--height") ?? "480", 10),
-            bpp: parseInt(get("--bpp") ?? "16", 10),
-        },
-        memory: { ram: parseInt(get("--ram") ?? "64", 10) * 1024 * 1024 },
-        ...(has("--skip-video") ? { skipVideo: true } : {}),
-    },
-};
-const gameArgs = get("--args");
-if (gameArgs) manifest.args = gameArgs;
-
-const regPath = get("--reg-path");
-const registry = regPath
-    ? {
-        root: get("--reg-hive") ?? "HKLM",
-        path: regPath,
-        values: [{ name: "InstallPath", type: "REG_SZ", data: get("--reg-install") ?? "C:\\" }],
-    }
-    : { root: "HKLM", path: "Software", values: [] };
-
-step(3, TOTAL_STEPS, "Collecting game files...");
-const files = new Map<string, Buffer>();
-files.set("manifest.json", Buffer.from(JSON.stringify(manifest, null, 2), "utf8"));
-files.set("registry.json", Buffer.from(JSON.stringify(registry, null, 2), "utf8"));
-collectGameFiles(appDir, "rom/", files, !keepGog, (count, bytes, lastName) => {
-    progress(`  ${count} files  ${(bytes / 1024 / 1024).toFixed(1)} MB  ${basename(lastName)}`);
-});
-progressDone(`  ${files.size} files collected`);
-
-step(4, TOTAL_STEPS, `Packing → ${output}`);
-const zipEntries = new Map<string, Uint8Array>();
-for (const [k, v] of files) zipEntries.set(k, new Uint8Array(v));
-const zip = buildZip(zipEntries);
-writeFileSync(output, zip);
-console.log(`\nCreated ${output}`);
-if (createdTmpDir) rmSync(extractDir, { recursive: true, force: true });
+console.log("\n--- Extracted files (after GOG filter) ---");
+for (const name of paths.keys()) console.log(`  ${name}`);
+console.log(`\nExtracted to: ${appDir}`);

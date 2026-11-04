@@ -188,6 +188,26 @@ export const DEFAULT_UNIFORM_BUFFER_CONFIG: UniformBufferConfig = {
 };
 
 /**
+ * Geometry/uniform/storage ring sizes for an adapter. A software adapter allocates these from
+ * host RAM, so the hardware-GPU sizes can exhaust a small container; the rings are flushed on
+ * overflow, so a smaller ring costs extra submits, never correctness.
+ */
+export function ringBudgetFor(hostBackedGpu: boolean): {
+    ring: RingBufferConfig;
+    uniform: UniformBufferConfig;
+    storage: StorageBufferConfig;
+} {
+    if (!hostBackedGpu) {
+        return { ring: DEFAULT_RING_BUFFER_CONFIG, uniform: DEFAULT_UNIFORM_BUFFER_CONFIG, storage: DEFAULT_STORAGE_BUFFER_CONFIG };
+    }
+    return {
+        ring: { ...DEFAULT_RING_BUFFER_CONFIG, bufferSize: 16 * 1024 * 1024 },
+        uniform: { ...DEFAULT_UNIFORM_BUFFER_CONFIG, bufferSize: 4 * 1024 * 1024 },
+        storage: { ...DEFAULT_STORAGE_BUFFER_CONFIG, bufferSize: 2 * 1024 * 1024 },
+    };
+}
+
+/**
  * Reusable prepare-draw result (DOD). Mutate in prepareDraw, return same ref.
  * Avoids per-draw heap allocations (GC pressure in 2k–5k draw-call scenes).
  */

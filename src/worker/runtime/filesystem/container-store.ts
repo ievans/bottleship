@@ -18,6 +18,16 @@ import { gameIdToContainerDir } from "@bottleship/formats/wgb/container-id";
 export const BOTTLESHIP_ROOT = "bottleship";
 export const GAMES_DIR = "games";
 
+/**
+ * CoW tombstone sidecar. Lives OUTSIDE overlay/ so the guest never sees it via C:\, but it is part of
+ * the save state: without it a restored truncated file reads its stale ROM tail past the overlay EOF.
+ */
+export const SHADOW_INDEX_FILE = "overlay-shadow.json";
+/** Container-root files that belong to the persistent (exportable) layer, besides overlay/**. */
+export const PERSISTENT_ROOT_FILES: readonly string[] = ["registry.json", "meta.json", SHADOW_INDEX_FILE];
+/** Container-root files a save slot captures (meta.json is descriptive, not game state). */
+export const SLOT_ROOT_FILES: readonly string[] = ["registry.json", SHADOW_INDEX_FILE];
+
 /** Open (optionally create) the `bottleship/` OPFS root. Returns null if OPFS is unavailable. */
 export async function getBottleshipRoot(create: boolean): Promise<FileSystemDirectoryHandle | null> {
     try {
@@ -42,6 +52,22 @@ export async function getContainerDir(
         if (!bs) return null;
         const games = await bs.getDirectoryHandle(GAMES_DIR, { create });
         return await games.getDirectoryHandle(gameIdToContainerDir(gameId), { create });
+    } catch (e: any) {
+        if (e?.name === "NotFoundError") return null;
+        throw e;
+    }
+}
+
+/** Open a container by its on-disk dir name (as listed under games/), for the main-thread storage UI. */
+export async function getContainerDirByName(
+    containerDir: string,
+    create: boolean,
+): Promise<FileSystemDirectoryHandle | null> {
+    const bs = await getBottleshipRoot(create);
+    if (!bs) return null;
+    try {
+        const games = await bs.getDirectoryHandle(GAMES_DIR, { create });
+        return await games.getDirectoryHandle(containerDir, { create });
     } catch (e: any) {
         if (e?.name === "NotFoundError") return null;
         throw e;

@@ -38,6 +38,8 @@ async function seed(gameId: string) {
     const c = await getContainerDir(gameId, true);
     const reg = await c!.getFileHandle("registry.json", { create: true });
     await (await reg.createWritable()).write(new TextEncoder().encode('{"v":2}'));
+    const shadow = await c!.getFileHandle("overlay-shadow.json", { create: true });
+    await (await shadow.createWritable()).write(new TextEncoder().encode('{"shadowed":["c:\\saves\\slot1.sav"]}'));
     const overlay = await c!.getDirectoryHandle("overlay", { create: true });
     const saves = await overlay.getDirectoryHandle("saves", { create: true });
     const slot = await saves.getFileHandle("slot1.sav", { create: true });
@@ -60,7 +62,7 @@ describe("container save export/import", () => {
         await seed("app:src");
         const zip = await exportContainer("app:src");
         const n = await importContainer("app:dst", zip!);
-        expect(n).toBe(2); // registry.json + overlay/saves/slot1.sav
+        expect(n).toBe(3); // registry.json + the CoW shadow index + overlay/saves/slot1.sav
 
         const dst = await getContainerDir("app:dst", false);
         const slot = await (await (await dst!.getDirectoryHandle("overlay")).getDirectoryHandle("saves")).getFileHandle("slot1.sav");

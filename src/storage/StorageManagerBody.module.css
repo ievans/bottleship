@@ -31,3 +31,6 @@
 .glist__sub { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-3); }
 .glist__sz { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg-2); }
 .glist__actions { display: flex; gap: 6px; margin-left: 12px; flex: 0 0 auto; }
+
+.slots { padding: 10px 14px 14px 26px; border-bottom: 1px solid var(--line-1); background: var(--ink-900); display: flex; flex-direction: column; gap: 8px; }
+.slot { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-top: 1px solid var(--line-1); }

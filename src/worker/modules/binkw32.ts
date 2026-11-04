@@ -446,6 +446,9 @@ interface BinkBufferSession {
     flags: number;
     locked: boolean;
     lastBlitAtMs: number;
+    /** Destination origin of the video inside the buffer (BinkBufferSetOffset). */
+    offsetX: number;
+    offsetY: number;
 }
 
 export class BinkW32 implements IModule {
@@ -1911,6 +1914,8 @@ export class BinkW32 implements IModule {
                 flags: args[3],
                 locked: false,
                 lastBlitAtMs: 0,
+                offsetX: 0,
+                offsetY: 0,
             };
             this.binkBuffers.set(handle, session);
             Logger.log(
@@ -1924,6 +1929,14 @@ export class BinkW32 implements IModule {
             this.binkBuffers.delete(handle);
             Logger.verbose(LogCategory.SYSTEM, `BinkBufferClose(0x${handle.toString(16)})`);
             return 1;
+        };
+        this.exports["_BinkBufferSetOffset@12"] = (_ctx, _mem, args) => {
+            const buf = this.binkBuffers.get(args[0]);
+            if (buf) {
+                buf.offsetX = args[1] | 0;
+                buf.offsetY = args[2] | 0;
+            }
+            return 0;
         };
         this.exports["_BinkBufferBlit@16"]   = (_ctx, _mem, args) => {
             const handle = args[0];

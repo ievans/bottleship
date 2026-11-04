@@ -11,6 +11,7 @@ import { registerDcTeardown } from './context';
 import {
     clipIntersectsRect,
     clipRegionFromRect,
+    makeClipRegion,
     clipRegionFromEllipse,
     clipRegionFromRoundRect,
     clipRegionFromPolygon,
@@ -41,6 +42,17 @@ function _rgnAlloc(region: DcClipRegion): number {
 }
 
 const ERROR_REGION = 0;
+
+/** Replaces the contents of an existing HRGN (user32's GetUpdateRgn fills the caller's region). */
+export function assignRegionRects(hRgn: number, quads: readonly number[]): number {
+    if (!_regionStore.has(hRgn)) return ERROR_REGION;
+    const region = makeClipRegion(quads);
+    _regionStore.set(hRgn, region);
+    return clipRegionType(region);
+}
+
+const RGNDATAHEADER_SIZE = 32;
+const RDH_RECTANGLES = 1;
 
 /** RECT is 16 bytes; a guest pointer is validated over that whole extent before use. */
 const RECT_SIZE = 16;
@@ -784,6 +796,33 @@ export function registerPaintingDcStateExports(exports: Record<string, ThunkImpl
         Logger.verbose(LogCategory.GDI32,
             `GetRgnBox(0x${hRgn.toString(16)}) -> ${result} [${r.x1},${r.y1},${r.x2},${r.y2}]`);
         return result;
+    };
+
+    // DWORD GetRegionData(HRGN hrgn, DWORD nCount, LPRGNDATA lpRgnData)
+    // RGNDATAHEADER is 32 bytes (dwSize, iType=RDH_RECTANGLES, nCount, nRgnSize, rcBound), followed by RECTs.
+    exports['GetRegionData'] = (ctx, mem, args): number => {
+        const hRgn = args[0];
+        const nCount = args[1] >>> 0;
+        const lpData = args[2];
+        const r = _regionStore.get(hRgn);
+        if (!r) return 0;
+        const rectBytes = (r.rects.length / 4) * RECT_SIZE;
+        const total = RGNDATAHEADER_SIZE + rectBytes;
+        if (!lpData) return total;
+        if (nCount < total || !isValidAddress(mem, lpData, total, "rw")) return 0;
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        view.setUint32(lpData, RGNDATAHEADER_SIZE, true);
+        view.setUint32(lpData + 4, RDH_RECTANGLES, true);
+        view.setUint32(lpData + 8, r.rects.length / 4, true);
+        view.setUint32(lpData + 12, rectBytes, true);
+        view.setInt32(lpData + 16, r.x1, true);
+        view.setInt32(lpData + 20, r.y1, true);
+        view.setInt32(lpData + 24, r.x2, true);
+        view.setInt32(lpData + 28, r.y2, true);
+        for (let i = 0; i < r.rects.length; i++) {
+            view.setInt32(lpData + RGNDATAHEADER_SIZE + i * 4, r.rects[i], true);
+        }
+        return total;
     };
 
     exports['SetColorAdjustment'] = (ctx, mem, args): number => {

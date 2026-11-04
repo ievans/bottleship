@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Patch existing WGB bundles: merge goggame-*.script setRegistry actions into registry.json.
+ * Patch existing WGB bundles: merge goggame-*.script setRegistry actions and regs.cmd
+ * `REG ADD` lines into registry.json.
  *
  * Usage:
  *   bun tools/patch-wgb-gog-script-registry.ts <archive.wgb> [...]
@@ -18,6 +19,7 @@ import {
     mergeRegistrySeeds,
     parseGogScriptRegistry,
     synthesizeRegistryFromGogScripts,
+    synthesizeRegistryFromRegsCmd,
     type RegistrySeed,
 } from "@bottleship/repack/gog-script";
 
@@ -83,17 +85,20 @@ function patchWgb(wgbPath: string, dryRun: boolean, externalScripts: Map<string,
     const scriptFiles = new Map<string, Uint8Array>(externalScripts);
     for (const e of entries) {
         const base = basename(e.name.replace(/\\/g, "/"));
-        if (!/^goggame-.*\.script$/i.test(base)) continue;
+        if (!/^goggame-.*\.script$/i.test(base) && !/^regs\.cmd$/i.test(base)) continue;
         scriptFiles.set(e.name.replace(/\\/g, "/"), readEntry(buf, e));
     }
     if (scriptFiles.size === 0) {
-        console.log("  skip: no rom/goggame-*.script entries");
+        console.log("  skip: no goggame-*.script or regs.cmd entries");
         return;
     }
     console.log(`  found ${scriptFiles.size} script file(s): ${[...scriptFiles.keys()].join(", ")}`);
 
     const existing = parseRegistrySeed(new TextDecoder().decode(readEntry(buf, regEntry)));
-    const scriptRegistry = synthesizeRegistryFromGogScripts(scriptFiles, "C:\\");
+    const scriptRegistry = mergeRegistrySeeds(
+        synthesizeRegistryFromGogScripts(scriptFiles, "C:\\"),
+        synthesizeRegistryFromRegsCmd(scriptFiles, "C:\\"),
+    );
     const merged = mergeRegistrySeeds(existing, scriptRegistry);
 
     const addedKeys = scriptRegistry.map((s) => `${s.root}\\${s.path}`);

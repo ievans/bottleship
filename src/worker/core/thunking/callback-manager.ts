@@ -469,9 +469,6 @@ export class CallbackManager {
                     callback.ownerThreadId ?? 0,
                     callback.callbackAddress >>> 0
                 );
-                (System.getInstance().process?.getModule('winmm') as
-                    { notePostedCallbackReturned?(addr: number): void } | undefined)
-                    ?.notePostedCallbackReturned?.(callback.callbackAddress >>> 0);
                 // End the cycle slice: the return resumes at the spin loop, which v86
                 // would otherwise honestly execute until the next tick boundary.
                 sch.onWinmmTimerCallbackReturned?.();
@@ -500,6 +497,14 @@ export class CallbackManager {
         }
 
         const returnValue = view.getUint32(esp, true);
+        // EAX holds the callback id at this OUT; the guest's real return value is the PUSH EAX on the stack.
+        if ((callback.source ?? '') === 'winmm_timer') {
+            try {
+                (System.getInstance().process?.getModule('winmm') as
+                    { notePostedCallbackReturned?(addr: number, eax: number): void } | undefined)
+                    ?.notePostedCallbackReturned?.(callback.callbackAddress >>> 0, returnValue);
+            } catch { }
+        }
         let callerRet = view.getUint32(esp + 4, true) >>> 0;
         let callerRetInStubPool = callerRet >= this.stubPoolBase && callerRet < this.stubPoolEnd;
         let callerRetLowAddress = callerRet < 0x100000;
@@ -1673,7 +1678,35 @@ export class CallbackManager {
         const stub = this.stubsById.get(callbackId);
         if (!stub?.inUse || stub.address !== (returnAddr >>> 0)) return 0;
         const invocation = this.pendingCallbacks.get(callbackId);
-        return invocation?.directThunkReturn ? invocation.callbackAddress >>> 0 : 0;
+        if (!invocation) return 0;
+        const address = invocation.callbackAddress >>> 0;
+        return invocation.directThunkReturn ? address : this.resolveTailJump(address);
+    }
+
+    /**
+     * Where a callback that is only a `jmp` chain ends up (a static-ctor table entry that
+     * points at an import thunk, `jmp rel` -> `jmp [IAT]`). Such a callback enters the API
+     * with its own return stub still at [ESP], exactly like a direct call.
+     */
+    private resolveTailJump(address: number): number {
+        const mem = this.getMemory();
+        let at = address >>> 0;
+        for (let hop = 0; hop < 4; hop++) {
+            if (at + 6 > mem.length) return 0;
+            const op = mem[at];
+            if (op === 0xe9) {
+                at = (at + 5 + ((mem[at + 1] | (mem[at + 2] << 8) | (mem[at + 3] << 16) | (mem[at + 4] << 24)) | 0)) >>> 0;
+            } else if (op === 0xeb) {
+                at = (at + 2 + ((mem[at + 1] << 24) >> 24)) >>> 0;
+            } else if (op === 0xff && mem[at + 1] === 0x25) {
+                const slot = (mem[at + 2] | (mem[at + 3] << 8) | (mem[at + 4] << 16) | (mem[at + 5] << 24)) >>> 0;
+                if (slot + 4 > mem.length) return 0;
+                return (mem[slot] | (mem[slot + 1] << 8) | (mem[slot + 2] << 16) | (mem[slot + 3] << 24)) >>> 0;
+            } else {
+                return at === address ? 0 : at;
+            }
+        }
+        return 0;
     }
 
     getForensicState(): CallbackForensicState {

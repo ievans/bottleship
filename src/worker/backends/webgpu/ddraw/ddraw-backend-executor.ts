@@ -147,6 +147,7 @@ import {
     DEFAULT_DEBUG_FLAGS,
     DEFAULT_UNIFORM_BUFFER_CONFIG,
     DEFAULT_STORAGE_BUFFER_CONFIG,
+    ringBudgetFor,
     PrepareDrawResult,
     DrawExecutionDiagnostics,
     Viewport,
@@ -554,7 +555,8 @@ export class DDrawWebGPUExecutor {
         });
 
         // Initialize modular components
-        this.ringBufferManager = new RingBufferManager(this.device, this.queue);
+        const budget = ringBudgetFor(this.backend.isHostBackedGpu());
+        this.ringBufferManager = new RingBufferManager(this.device, this.queue, budget.ring, budget.uniform, budget.storage);
         this.bindGroupManager = new BindGroupManager(this.device);
         this.depthManager = new DepthManager(this.device, this.queue, {
             format: "depth24plus-stencil8", // Stencil for Shadow Volume / DX7–9 games

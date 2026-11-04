@@ -60,6 +60,7 @@ export class Msvcp60 implements IModule {
     private refcntAddr = 0;
     private logicErrorVtableAddr = 0;
     private badCastVtableAddr = 0;
+    private badAllocVtableAddr = 0;
     private exceptionVtableAddr = 0;
     private unknownExceptionAddr = 0;
     // std::cout / std::cerr: our own HLE operator<< overloads treat these purely as opaque
@@ -88,6 +89,12 @@ export class Msvcp60 implements IModule {
 
     setMsvcrt(msvcrt: Msvcrt): void {
         this.msvcrt = msvcrt;
+    }
+
+    /** Default-construct a bare VC6 std::exception — shared with modules (msvcrt) whose own
+     *  import table pulls this same mangled symbol from a different DLL. */
+    defaultConstructException(object: number): number {
+        return vc6ExceptionCtor(object, 0, this.exceptionVtableAddr, this.heap);
     }
 
     private ensureRuntimeStorage(process: Process): void {
@@ -185,16 +192,18 @@ export class Msvcp60 implements IModule {
         vc6WriteBytes(this.unknownExceptionAddr, unknown);
         // VC6 vtable order: deleting destructor, what(), _Doraise. No RTTI locator is
         // published, so a dynamic_cast/typeid on these objects fails visibly.
-        for (const kind of ["exception", "bad_cast"] as const) {
+        for (const kind of ["exception", "bad_cast", "bad_alloc"] as const) {
             const allocation = process.memory.alloc(16, "THUNK_DATA", "rw");
             if (!allocation) throw new Error("msvcp60: exception vtable allocation failed");
             vc6WriteU32(allocation, 0);
             const vtable = allocation + 4;
             methods.forEach((method, i) => vc6WriteU32(vtable + i * 4, stubs.exportTable.get(method.name.toLowerCase())!));
             if (kind === "exception") this.exceptionVtableAddr = vtable;
-            else this.badCastVtableAddr = vtable;
+            else if (kind === "bad_cast") this.badCastVtableAddr = vtable;
+            else this.badAllocVtableAddr = vtable;
         }
         tg.registerDataExport(this.name, "??_7bad_cast@std@@6B@", this.badCastVtableAddr);
+        tg.registerDataExport(this.name, "??_7bad_alloc@std@@6B@", this.badAllocVtableAddr);
     }
 
     private registerDataExports(process: Process): void {
@@ -220,6 +229,7 @@ export class Msvcp60 implements IModule {
         this.refcntAddr = 0;
         this.logicErrorVtableAddr = 0;
         this.badCastVtableAddr = 0;
+        this.badAllocVtableAddr = 0;
         this.exceptionVtableAddr = 0;
         this.unknownExceptionAddr = 0;
         this.coutAddr = 0;
@@ -461,6 +471,15 @@ export class Msvcp60 implements IModule {
                 reason: "msvcp60!exception::_Doraise is not implemented",
                 eip: ctx.eip >>> 0,
             });
+            return 0;
+        };
+
+        this.exports["??0bad_alloc@std@@QAE@PBD@Z"] = (ctx, _mem, args) =>
+            vc6ExceptionCtor(ctx.ecx >>> 0, args[0] ?? 0, this.badAllocVtableAddr, this.heap);
+        this.exports["??0bad_alloc@std@@QAE@ABV01@@Z"] = (ctx, _mem, args) =>
+            vc6ExceptionCopy(ctx.ecx >>> 0, args[0]!, this.badAllocVtableAddr, this.heap);
+        this.exports["??1bad_alloc@std@@UAE@XZ"] = (ctx, _mem, _args) => {
+            vc6ExceptionDtor(ctx.ecx >>> 0, this.exceptionVtableAddr, this.heap);
             return 0;
         };
 
