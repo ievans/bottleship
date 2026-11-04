@@ -16,7 +16,16 @@ import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 
-const ORDINALS = [1, 3, 5, 10, 11, 12, 13, 14, 15, 18, 19, 20, 25, 32, 33, 34, 36, 39, 40, 43, 44, 45, 46, 47, 71, 72, 73, 75, 77, 85];
+// String literals, not numbers: SignatureValidator's for-of loop expansion
+// (extractForOfExports) only populates its stub-array map from literal STRING elements
+// (collectArrays checks ts.isStringLiteral), so a numeric array here is invisible to it —
+// ApiCoverageIndex then has no handler record for any ord_N, and reports every one of these
+// as an unimplemented/ABI-gap import despite the runtime binding working. Must list the
+// same 30 ordinals as twitchsdk_32_release.api.ts's twitchsdkModule.
+const ORDINALS = [
+    "1", "3", "5", "10", "11", "12", "13", "14", "15", "18", "19", "20", "25", "32", "33",
+    "34", "36", "39", "40", "43", "44", "45", "46", "47", "71", "72", "73", "75", "77", "85",
+];
 
 export class TwitchSdk implements IModule {
     name = "twitchsdk_32_release";
