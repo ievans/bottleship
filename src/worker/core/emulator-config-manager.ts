@@ -105,6 +105,11 @@ const CP_TO_ENCODING: Record<number, string> = {
     1256: 'windows-1256', 1257: 'windows-1257', 1258: 'windows-1258',
     28591: 'iso-8859-1', 28592: 'iso-8859-2', 28595: 'iso-8859-5',
     65001: 'utf-8',
+    // DBCS pages in MULTIBYTE_CODEPAGES below; approximated by their closest WHATWG label
+    // (e.g. 'euc-kr' for CP949 is not byte-identical, but close enough that no caller here
+    // has needed the difference). 1361 (Johab) has no WHATWG label and keeps the windows-1252
+    // fallback, same as before this map existed.
+    932: 'shift_jis', 936: 'gbk', 949: 'euc-kr', 950: 'big5',
 };
 
 // CP437 (US OEM / IBM PC) — upper 128 code points (0x80–0xFF).

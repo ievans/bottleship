@@ -6,7 +6,7 @@ import { System } from '../../core/system';
 import { Marshaler } from '../../core/memory/marshaler';
 import { Logger, LogCategory } from '../../core/logger';
 import { profiler } from '../../core/profiler';
-import { EmulatorConfig, getCodePageDecoder } from '../../core/emulator-config-manager';
+import { EmulatorConfig, getCodePageDecoder, isSingleByteCodePage } from '../../core/emulator-config-manager';
 import { MemoryGuard } from '../../core/memory/mem-guard';
 import { SystemResourceProvider } from '../../core/resources/system-resource-provider';
 import { toPlainGuestMemory } from '../../core/memory/guest-memory';
@@ -2004,13 +2004,39 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
     }
 
     const GLYPHMETRICS_SIZE = 20;
+    const GGO_GLYPH_INDEX = 0x0080;
+
+    /** A FIXED (wingdi.h) at `addr`: a 16.16 value, low word fractional, high word integer. */
+    function readFixed(view: DataView, addr: number): number {
+        const fract = view.getUint16(addr, true);
+        const value = view.getInt16(addr + 2, true);
+        return value + fract / 65536;
+    }
+
+    /** MAT2 (wingdi.h): 4 FIXED values, eM11/eM12/eM21/eM22, 16 bytes total. */
+    function isIdentityMat2(mem: Uint8Array, lpmat2: number): boolean {
+        const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
+        return readFixed(view, lpmat2) === 1 && readFixed(view, lpmat2 + 4) === 0
+            && readFixed(view, lpmat2 + 8) === 0 && readFixed(view, lpmat2 + 12) === 1;
+    }
+
+    /** GetGlyphOutlineA's uChar: one ANSI byte on a single-byte code page, or a packed
+     *  two-byte DBCS character (lead byte in the high byte, trail byte in the low byte —
+     *  e.g. CP932 uChar=0x82A0 is the bytes 0x82,0xA0, the Shift-JIS encoding of 'あ') on a
+     *  multi-byte one. Masking to the low byte alone silently decoded the lead byte only. */
+    function decodeAnsiChar(uChar: number, codePage: number): string {
+        const bytes = !isSingleByteCodePage(codePage) && uChar > 0xFF
+            ? new Uint8Array([(uChar >> 8) & 0xFF, uChar & 0xFF])
+            : new Uint8Array([uChar & 0xFF]);
+        return getCodePageDecoder(codePage).decode(bytes);
+    }
 
     // GetGlyphOutlineA/W(hdc, uChar, uFormat, lpgm, cbBuffer, lpvBuffer, lpmat2). uChar is a
-    // raw character code (A: one ANSI byte decoded via the guest's code page, W: a UTF-16
-    // code unit), not a real glyph index — GGO_GLYPH_INDEX is accepted but has no effect, since
-    // this emulator has no font glyph-index table to resolve it against. lpmat2 (rotation/
-    // shear/scale) is read by the caller and ignored: every known caller of this path
-    // (D3DX8's ID3DXFont building a font-texture atlas) passes the identity transform.
+    // raw character code (A: one ANSI byte or packed DBCS pair decoded via the guest's code
+    // page, W: a UTF-16 code unit) — GGO_GLYPH_INDEX (uChar as a real font glyph ID) and any
+    // non-identity lpmat2 (rotation/shear/scale) are rejected rather than silently answered
+    // wrong, since this emulator has no glyph-index table and applies no transform to the
+    // rasterized bitmap.
     const getGlyphOutline = (isWide: boolean): ThunkImplementation => (ctx, mem, args) => {
         const hdc = args[0]!;
         const uChar = args[1]! >>> 0;
@@ -2018,16 +2044,23 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         const lpgm = args[3]!;
         const cbBuffer = args[4]! >>> 0;
         const lpvBuffer = args[5]!;
+        const lpmat2 = args[6]!;
         const GDI_ERROR = 0xFFFFFFFF;
+
+        if ((uFormat & GGO_GLYPH_INDEX) !== 0) return GDI_ERROR;
+        if (lpmat2) {
+            if (!isValidAddress(mem, lpmat2, 16, 'r')) return GDI_ERROR;
+            if (!isIdentityMat2(mem, lpmat2)) return GDI_ERROR;
+        }
 
         const char = isWide
             ? String.fromCharCode(uChar & 0xFFFF)
-            : getCodePageDecoder(EmulatorConfig.getInstance().ansiCodePage).decode(new Uint8Array([uChar & 0xFF]));
+            : decodeAnsiChar(uChar, EmulatorConfig.getInstance().ansiCodePage);
 
         const gdi = System.getInstance().gdiContext;
         const result = gdi.getGlyphOutline(hdc, char, uFormat);
         Logger.verbose(LogCategory.GDI32, `GetGlyphOutline${isWide ? 'W' : 'A'}(hdc=0x${hdc.toString(16)}, char='${char}', uFormat=${uFormat})`);
-        if (!result) return GDI_ERROR;
+        if (!result) return GDI_ERROR; // unsupported format or rasterization failure
 
         if (lpgm) {
             if (!isValidAddress(mem, lpgm, GLYPHMETRICS_SIZE, 'rw')) return GDI_ERROR;
@@ -2036,7 +2069,7 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         if (!result.bitmap) return 0; // GGO_METRICS: no raster, metrics-only success
 
         const required = result.bitmap.length;
-        if (!lpvBuffer) return required; // buffer-size query: lpgm is filled, nothing else to do
+        if (!lpvBuffer || cbBuffer === 0) return required; // size query: lpgm is filled, nothing else to do
         if (cbBuffer < required) return GDI_ERROR;
         if (!isValidAddress(mem, lpvBuffer, required, 'rw')) return GDI_ERROR;
         MemoryGuard.writeBytes(mem, lpvBuffer, result.bitmap, `GetGlyphOutline${isWide ? 'W' : 'A'}`);
