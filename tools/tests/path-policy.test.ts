@@ -3,7 +3,7 @@
  * Default = persist-by-default (only declared/global ephemeral globs are dropped); persistOnly flips
  * to allowlist. Patterns match the overlay-relative posix path, gitignore-style.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { PathPolicy, toOverlayRel } from "../../src/worker/runtime/filesystem/path-policy";
 
 describe("toOverlayRel", () => {
@@ -42,6 +42,47 @@ describe("per-game ephemeral additions", () => {
     });
     test("non-matching still persists", () => {
         expect(p.classify("C:\\Game\\save01.sav")).toBe("persist");
+    });
+});
+
+describe("classify() memoizes per path", () => {
+    // Regression for the autosave freeze (#8): vfs.ts calls isEphemeral() on every
+    // writeFileSync/write, not just on open. A save routine doing one tiny fwrite()
+    // per struct field hits this thousands of times per save — confirmed live against
+    // Empire Earth II's autosave (3996 writeSync calls in one save) where the repeated
+    // regex matching alone accounted for 8.66s of a single 9.5s stalled frame. Classify
+    // is a pure function of the path, so repeat calls for the same path must not re-run
+    // the glob regexes.
+    test("repeat classify() calls for the same path do not re-test the regexes", () => {
+        const p = new PathPolicy();
+        const spy = spyOn(RegExp.prototype, "test");
+        try {
+            p.classify("C:\\Game\\savegame_SP\\Autosave - Conquest - (2026_11_04)_(15_04).sav");
+            const callsAfterFirst = spy.mock.calls.length;
+            expect(callsAfterFirst).toBeGreaterThan(0);
+            for (let i = 0; i < 50; i++) {
+                p.classify("C:\\Game\\savegame_SP\\Autosave - Conquest - (2026_11_04)_(15_04).sav");
+            }
+            expect(spy.mock.calls.length).toBe(callsAfterFirst);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+    test("different casing of the same path still hits the cache (paths are case-insensitive)", () => {
+        const p = new PathPolicy();
+        p.classify("C:\\Game\\Save.SAV");
+        const spy = spyOn(RegExp.prototype, "test");
+        try {
+            expect(p.classify("c:\\game\\save.sav")).toBe("persist");
+            expect(spy).not.toHaveBeenCalled();
+        } finally {
+            spy.mockRestore();
+        }
+    });
+    test("different paths are classified independently", () => {
+        const p = new PathPolicy();
+        expect(p.classify("C:\\Game\\a.sav")).toBe("persist");
+        expect(p.classify("C:\\Game\\b.log")).toBe("ephemeral");
     });
 });
 
