@@ -1,4 +1,4 @@
-import { FunctionDescriptor } from "./types";
+import { FunctionDescriptor, ModuleDescriptor } from "./types";
 
 const buildParams = (count: number) => {
     const params = [];
@@ -63,9 +63,12 @@ export const vc110Extras: FunctionDescriptor[] = [
     f("_wgetcwd", 2),
     f("_wfindfirst64i32", 2),
     f("_wfindnext64i32", 2),
+    // Overridden (not just proxied) to also close wide-find handles — same 1-arg ABI as
+    // msvcrt's own _findclose.
+    f("_findclose", 1),
 
     f("wcscspn", 2),
-    f("wcstod", 2),
+    f("wcstod", 2, { returnType: "f64" }), // returned via x87 ST(0) (fpuPush), not EAX
     f("mbtowc", 3),
     f("wctomb_s", 4),
     f("wcstombs_s", 5),
@@ -85,3 +88,16 @@ export const vc110Extras: FunctionDescriptor[] = [
     f("fputws", 2),
     f("fwprintf", 16),
 ];
+
+/**
+ * validate-signatures (signature-validator.ts) only discovers a `functions:` array when
+ * it's the literal initializer of a `ModuleDescriptor`-typed object — a bare exported array
+ * like vc110Extras above is invisible to it, which is why every one of these was reported
+ * "implemented but NOT DECLARED" despite being declared right here. This wrapper is for the
+ * scanner only: the merge that actually wires these into a reachable module still runs off
+ * vc110Extras directly (api-registry.ts's mergeModuleFunctions, emulator.worker.ts).
+ */
+export const vc110Module: ModuleDescriptor = {
+    name: "msvcr110",
+    functions: [...vc110Extras],
+};
