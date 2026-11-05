@@ -23,18 +23,79 @@
  * Whichever interface getter the game turns out to actually dereference will surface as a
  * clean null-pointer fault with a live EIP the harness can inspect — the next, evidence-
  * driven step once this boots, not something to guess upfront.
+ *
+ * SteamMatchmaking() stopped being one of those NULLs once that evidence actually arrived:
+ * rise.exe (Steam v1.10 bundle, image base 0x400000) dereferences its result unchecked.
+ * Disassembly at RVA 0x639320..0x639327 (capstone, tools/re):
+ *   0xa3930c: call edi                  ; SteamMatchmaking() — "last_thunk: steam_api:
+ *                                        ; SteamMatchmaking" in the crash log below
+ *   0xa39317: mov ecx, esp
+ *   0xa39319: mov edi, eax              ; edi = SteamMatchmaking()'s return value
+ *   0xa3931b: mov dword ptr [ecx], edx      ; edx = [ebx+0x68] -> arg0
+ *   0xa3931d: mov dword ptr [ecx+4], esi    ; esi = [ebx+0x6c] -> arg1
+ *   0xa39320: mov eax, dword ptr [edi]      ; vtable ptr — faults here when edi is NULL
+ *   0xa39322: mov ecx, edi              ; this = edi (thiscall)
+ *   0xa39324: call dword ptr [eax+0x3c] ; slot 0x3c/4 = 15, 2 pushed dwords
+ * Before this fix edi was 0 (SteamMatchmaking() answered NULL), so `mov eax,[edi]` read
+ * real memory at address 0 — which this emulator's low memory map holds leftover
+ * bootloader bytes for instead of faulting — and execution "escaped to bootloader" at
+ * whatever address happened to be sitting there (logs/ron/bottleship-2026-11-04-20-4154-
+ * rise-of-nations-steam110.log:9062 and :9183).
+ *
+ * We still don't have the real ISteamMatchmaking vtable — only this one slot, measured
+ * from what the game itself calls. So the fix is NOT "transcribe the interface": it is the
+ * same minimal-placeholder move as IGalaxyUnknown in gog-sdk.ts — a real vtable, sized to
+ * reach slot 15, where every OTHER slot is a deliberately unverified 0-arg stub that logs
+ * loudly if ever hit. A future log hit on one of those IS the next piece of evidence, not
+ * a bug to silently paper over.
  */
 
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Logger, LogCategory } from "../core/logger";
+import { FunctionDescriptor, InterfaceDescriptor, ModuleDescriptor } from "../api/types";
+import { createVTablesFromDescriptor, VTableInfo } from "../api/adapters/module-adapter";
+import { createComObject } from "./d3d9/shared-state";
+
+function method(name: string, argCount: number): FunctionDescriptor {
+    return {
+        name,
+        params: Array.from({ length: argCount }, (_, i) => ({ name: `arg${i}`, type: "u32" as const })),
+        returnType: "u32" as const,
+        callingConvention: "stdcall" as const,
+    };
+}
+
+/** Slots 0..14: no call site evidence yet, so a minimal 0-arg placeholder (see header). */
+const ISteamMatchmaking: InterfaceDescriptor = {
+    name: "ISteamMatchmaking",
+    methods: [
+        ...Array.from({ length: 15 }, (_, i) => method(`Slot${i}`, 0)),
+        method("Slot15", 2),
+    ],
+};
+
+/** Slot index -> pushed-arg count, published for the test that pins this layout. */
+export const STEAM_MATCHMAKING_LAYOUT: readonly number[] =
+    ISteamMatchmaking.methods.map((m) => m.params.length);
+
+const steamMatchmakingDescriptor: ModuleDescriptor = {
+    name: "steam_api",
+    functions: [],
+    interfaces: [ISteamMatchmaking],
+};
 
 export class SteamApi implements IModule {
     name = "steam_api";
     exports: Record<string, ThunkImplementation> = {};
 
-    initialize(_process: Process): void {
+    private process: Process | null = null;
+    private matchmakingVtable: VTableInfo | null = null;
+    private matchmakingObj = 0;
+
+    initialize(process: Process): void {
+        this.process = process;
         const exports = this.exports;
 
         // Returning true here while every interface getter below returns NULL is not a
@@ -70,7 +131,7 @@ export class SteamApi implements IModule {
 
         const interfaceGetters = [
             "SteamClient", "SteamUtils", "SteamUser", "SteamUserStats", "SteamFriends",
-            "SteamUGC", "SteamApps", "SteamMatchmaking", "SteamMatchmakingServers",
+            "SteamUGC", "SteamApps", "SteamMatchmakingServers",
             "SteamGameServer", "SteamNetworking",
         ];
         for (const name of interfaceGetters) {
@@ -79,5 +140,42 @@ export class SteamApi implements IModule {
                 return 0;
             };
         }
+
+        // The one getter this bring-up has outgrown returning NULL for — see the class doc
+        // comment above for the exact call site that dereferences it unchecked.
+        exports["SteamMatchmaking"] = () => this.getMatchmaking();
+
+        for (let i = 0; i < 15; i++) {
+            exports[`ISteamMatchmaking_Slot${i}`] = () => {
+                Logger.warn(
+                    LogCategory.SYSTEM,
+                    `[steam_api] ISteamMatchmaking slot ${i} called — unverified, 0 args assumed, returning 0`
+                );
+                return 0;
+            };
+        }
+        exports["ISteamMatchmaking_Slot15"] = (_ctx, _mem, args) => {
+            Logger.log(
+                LogCategory.SYSTEM,
+                `[steam_api] ISteamMatchmaking::Slot15(0x${(args[0] ?? 0).toString(16)}, 0x${(args[1] ?? 0).toString(16)}) -> 0`
+            );
+            return 0;
+        };
+    }
+
+    private getMatchmaking(): number {
+        if (this.matchmakingObj) return this.matchmakingObj;
+        if (!this.process) return 0;
+        if (!this.matchmakingVtable) {
+            const vtables = createVTablesFromDescriptor(this.process, steamMatchmakingDescriptor);
+            this.matchmakingVtable = vtables["ISteamMatchmaking"] ?? null;
+        }
+        if (!this.matchmakingVtable) return 0;
+        this.matchmakingObj = createComObject(this.matchmakingVtable.address);
+        Logger.log(
+            LogCategory.SYSTEM,
+            `[steam_api] SteamMatchmaking() -> 0x${this.matchmakingObj.toString(16)} (synthetic vtable, slot 15 only)`
+        );
+        return this.matchmakingObj;
     }
 }
