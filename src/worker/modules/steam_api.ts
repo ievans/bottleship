@@ -48,6 +48,18 @@
  * reach slot 15, where every OTHER slot is a deliberately unverified 0-arg stub that logs
  * loudly if ever hit. A future log hit on one of those IS the next piece of evidence, not
  * a bug to silently paper over.
+ *
+ * That next piece of evidence arrived immediately: returning a real (non-NULL)
+ * SteamMatchmaking() unlocks a SECOND call site the game could never previously reach
+ * (it was gated behind `SteamMatchmaking() != NULL`, same object, rise.exe+0x638330):
+ *   0xa38421: mov edx, dword ptr [eax]      ; eax = SteamMatchmaking(), edx = vtable
+ *   0xa38439: call dword ptr [edx + 0x50]   ; slot 0x50/4 = 20, thiscall, 4 pushed dwords
+ * Slot 20 sits 16 bytes past a 16-slot vtable (0..15 ends at offset 0x40) — reading
+ * [vtable+0x50] with only 16 slots allocated is an out-of-bounds read into whatever the
+ * allocator put next, and calling through that garbage is a second, unrelated way to
+ * "escape to bootloader" that has nothing to do with stack cleanup. Extending the vtable
+ * to reach slot 20 (still placeholders beyond what's measured) closes that specific OOB
+ * read; it does not claim there is no slot 21+ still waiting to be found the same way.
  */
 
 import { IModule } from "../core/module";
@@ -67,12 +79,18 @@ function method(name: string, argCount: number): FunctionDescriptor {
     };
 }
 
-/** Slots 0..14: no call site evidence yet, so a minimal 0-arg placeholder (see header). */
+/**
+ * Slots 0..14 and 16..19: no call site evidence yet, so a minimal 0-arg placeholder (see
+ * header). Slot 15 and slot 20 are measured call sites — their arg counts come from actual
+ * disassembly, not a guess, but their semantics/return values are still unverified.
+ */
 const ISteamMatchmaking: InterfaceDescriptor = {
     name: "ISteamMatchmaking",
     methods: [
         ...Array.from({ length: 15 }, (_, i) => method(`Slot${i}`, 0)),
         method("Slot15", 2),
+        ...Array.from({ length: 4 }, (_, i) => method(`Slot${16 + i}`, 0)),
+        method("Slot20", 4),
     ],
 };
 
@@ -145,7 +163,7 @@ export class SteamApi implements IModule {
         // comment above for the exact call site that dereferences it unchecked.
         exports["SteamMatchmaking"] = () => this.getMatchmaking();
 
-        for (let i = 0; i < 15; i++) {
+        for (const i of [...Array.from({ length: 15 }, (_, i) => i), 16, 17, 18, 19]) {
             exports[`ISteamMatchmaking_Slot${i}`] = () => {
                 Logger.warn(
                     LogCategory.SYSTEM,
@@ -158,6 +176,17 @@ export class SteamApi implements IModule {
             Logger.log(
                 LogCategory.SYSTEM,
                 `[steam_api] ISteamMatchmaking::Slot15(0x${(args[0] ?? 0).toString(16)}, 0x${(args[1] ?? 0).toString(16)}) -> 0`
+            );
+            return 0;
+        };
+        // Measured at rise.exe+0x638439 (see class doc comment): 4 pushed dwords, thiscall.
+        // Arg semantics unverified — logged in full so a real behavior can be transcribed
+        // from the next hit instead of guessed.
+        exports["ISteamMatchmaking_Slot20"] = (_ctx, _mem, args) => {
+            Logger.warn(
+                LogCategory.SYSTEM,
+                `[steam_api] ISteamMatchmaking::Slot20(0x${(args[0] ?? 0).toString(16)}, 0x${(args[1] ?? 0).toString(16)}, ` +
+                `0x${(args[2] ?? 0).toString(16)}, 0x${(args[3] ?? 0).toString(16)}) -> 0 — unverified semantics`
             );
             return 0;
         };
@@ -174,7 +203,7 @@ export class SteamApi implements IModule {
         this.matchmakingObj = createComObject(this.matchmakingVtable.address);
         Logger.log(
             LogCategory.SYSTEM,
-            `[steam_api] SteamMatchmaking() -> 0x${this.matchmakingObj.toString(16)} (synthetic vtable, slot 15 only)`
+            `[steam_api] SteamMatchmaking() -> 0x${this.matchmakingObj.toString(16)} (synthetic vtable, slots 15 and 20 measured)`
         );
         return this.matchmakingObj;
     }

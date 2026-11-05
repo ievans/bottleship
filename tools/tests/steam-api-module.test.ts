@@ -84,13 +84,15 @@ describe("steam_api", () => {
 });
 
 describe("steam_api — SteamMatchmaking", () => {
-    // ISteamMatchmaking's ONE measured slot — see modules/steam_api.ts's class doc comment
-    // for the disassembly this is transcribed from. Pinned literally so an edit has to
+    // ISteamMatchmaking's two measured slots — see modules/steam_api.ts's class doc comment
+    // for the disassembly each is transcribed from. Pinned literally so an edit has to
     // change it deliberately, same rationale as galaxy-gog-sdk-vtables.test.ts.
-    test("publishes 16 slots: 0..14 unverified (0 args), slot 15 measured (2 args)", () => {
-        expect(STEAM_MATCHMAKING_LAYOUT.length).toBe(16);
+    test("publishes 21 slots: 0..14/16..19 unverified (0 args), 15 measured (2 args), 20 measured (4 args)", () => {
+        expect(STEAM_MATCHMAKING_LAYOUT.length).toBe(21);
         expect([...STEAM_MATCHMAKING_LAYOUT.slice(0, 15)]).toEqual(Array(15).fill(0));
         expect(STEAM_MATCHMAKING_LAYOUT[15]).toBe(2);
+        expect([...STEAM_MATCHMAKING_LAYOUT.slice(16, 20)]).toEqual(Array(4).fill(0));
+        expect(STEAM_MATCHMAKING_LAYOUT[20]).toBe(4);
     });
 
     let originalProcess: unknown;
@@ -153,11 +155,20 @@ describe("steam_api — SteamMatchmaking", () => {
         expect(module.exports["ISteamMatchmaking_Slot15"]!({} as any, new Uint8Array(0), [0, 0])).toBe(0);
     });
 
-    test("every unverified slot (0..14) logs instead of silently guessing and returns 0", () => {
+    test("every unverified slot (0..14, 16..19) logs instead of silently guessing and returns 0", () => {
         const module = new SteamApi();
         module.initialize(null as any);
-        for (let i = 0; i < 15; i++) {
+        for (const i of [...Array.from({ length: 15 }, (_, i) => i), 16, 17, 18, 19]) {
             expect(module.exports[`ISteamMatchmaking_Slot${i}`]!({} as any, new Uint8Array(0), [])).toBe(0);
         }
+    });
+
+    test("slot 20's handler reads all four pushed args and never throws", () => {
+        const module = new SteamApi();
+        module.initialize(null as any);
+        expect(() =>
+            module.exports["ISteamMatchmaking_Slot20"]!({} as any, new Uint8Array(0), [1, 2, 3, 4])
+        ).not.toThrow();
+        expect(module.exports["ISteamMatchmaking_Slot20"]!({} as any, new Uint8Array(0), [0, 0, 0, 0])).toBe(0);
     });
 });
