@@ -198,6 +198,36 @@ export function dumpExceptionContext(d: any, marker: number, cpu: any, espOverri
             Logger.error(LogCategory.SYSTEM, `   Last thunk: ${d.lastThunkName || 'unknown'}`);
             Logger.error(LogCategory.SYSTEM, `   Last caller module base: 0x${(d.lastCallerModuleBase || 0).toString(16)}`);
 
+            // Same ESP-vs-expected check as the #GP path below (lines ~618+), but this branch
+            // returns before reaching it — without this, a bootloader escape never tells us
+            // whether the last-returned thunk's own stack cleanup (RET N) was the corruption's
+            // source, which is the one thing this codebase's own instrumentation can answer
+            // directly instead of by guessing from a register/stack dump.
+            if (d.lastThunkNameAfterReturn) {
+                Logger.error(LogCategory.SYSTEM,
+                    `   Last thunk to return: ${d.lastThunkNameAfterReturn} (id=0x${(d.lastThunkIdAfterReturn ?? 0).toString(16)}). ` +
+                    `Expected ESP=0x${(d.lastExpectedEspAfterReturn ?? 0).toString(16)}, this fault's ESP=0x${esp.toString(16)}` +
+                    `${esp === d.lastExpectedEspAfterReturn ? ' (MATCH — this thunk\'s own cleanup is not the cause)' : ' (MISMATCH)'}.`);
+                if (esp !== d.lastExpectedEspAfterReturn) {
+                    const stub = d.thunkGenerator?.getStubById?.(d.lastThunkIdAfterReturn);
+                    if (stub && d.cachedMem8 && stub.address >= 0 && stub.address + 16 <= d.cachedMem8.length) {
+                        const b11 = d.cachedMem8[stub.address + 11];
+                        const b12 = d.cachedMem8[stub.address + 12];
+                        const b13 = d.cachedMem8[stub.address + 13];
+                        const retBytes = b11 === 0xC2 ? `RET 0x${(b12 | (b13 << 8)).toString(16)} (${b12 + (b13 << 8)} bytes)` : b11 === 0xC3 ? 'RET (0 args / cdecl)' : `0x${b11.toString(16)} 0x${b12.toString(16)} 0x${b13.toString(16)}`;
+                        const expectedRet = stub.stackCleanupBytes ?? (stub.argCount ?? 0) * 4;
+                        const actualRet = b11 === 0xC2 ? (b12 | (b13 << 8)) : b11 === 0xC3 ? 0 : -1;
+                        Logger.error(LogCategory.SYSTEM,
+                            `   Stub ${d.lastThunkNameAfterReturn} at 0x${stub.address.toString(16)}: ${retBytes} ` +
+                            `(stackCleanupBytes=${stub.stackCleanupBytes ?? '?'}, expected RET ${expectedRet}).`);
+                        Logger.error(LogCategory.SYSTEM,
+                            actualRet !== expectedRet && actualRet >= 0
+                                ? `   > This thunk has WRONG RET N; fix stackCleanupBytes/argCount in API or reference.`
+                                : `   > Stub RET is correct; the ESP mismatch predates this thunk's own cleanup.`);
+                    }
+                }
+            }
+
             // Dump registers for debugging
             const regDump = [
                 `EAX=0x${(regs[0] >>> 0).toString(16)}`,
