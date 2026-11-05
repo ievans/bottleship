@@ -59,7 +59,8 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         method("??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ", 0),
         // basic_ostream has a virtual base (basic_ios), so MSVC passes its constructors a
         // hidden trailing int (construct-the-virtual-base flag) after the two declared
-        // params: rise.exe+0x9e629 pushes 3 dwords and does not clean up after the call.
+        // params: the caller at rise.exe 0x49e629 (RVA 0x9e629) pushes 3 dwords and does
+        // not clean up after the call.
         // Popping 8 left the caller's `pop edi`/`pop esi` one slot off.
         method("??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", 3),
         method("?unshift@?$codecvt@DDH@std@@QBEHAAHPAD1AAPAD@Z", 4),
