@@ -97,8 +97,9 @@ answers `ERROR_NO_DATA` as before.
 
 ## Not implemented
 
-- **DirectPlay** (`dplayx`) is still local-only; a title that uses it instead of Winsock will not
-  see other tabs.
+- **Legacy DirectPlay** (`dplayx`, DirectPlay 1–7) is still local-only; a title that uses it
+  instead of Winsock will not see other tabs. This does not cover DirectPlay 8 — see
+  `dpnet` and the Civilization III section below.
 - Overlapped Winsock I/O, IPv6, other `iphlpapi` adapter queries (`GetAdaptersAddresses`,
   `GetNetworkParams`, …), `SO_SNDTIMEO`, `WSAAsyncGetHostBy*` for the local name.
 - Internet matchmaking services (e.g. GameSpy) — rooms replace them.
@@ -183,6 +184,27 @@ directions against a synthetic peer:
   satisfied the client, so the harness's synthetic peer only announces and does not complete a
   full join. This needs a disassembled `EE2.exe` (`tools/re/`'s pyghidra backend needs a JVM,
   which this capture session's machine did not have installed) rather than more guessing.
+
+## Verified: DirectPlay 8 (Civilization III)
+
+Unlike the DirectPlay 1–7 path above, DirectPlay 8 is implemented: `dpnet.dll`
+(`src/worker/modules/dpnet.ts`) answers `CoCreateInstance` for `CLSID_DirectPlay8Peer`,
+`CLSID_DirectPlay8Address` and `CLSID_DirectPlay8LobbiedApplication`, enumerates the
+`CLSID_DP8SP_TCPIP` service provider, and speaks the real DirectPlay 8 wire protocol over the
+virtual LAN. (Only the peer-to-peer role is implemented — a title built around the separate
+Client/Server CLSIDs is not covered.) `tools/harness/regression/civ3-lan.harness.ts` drives a real
+Civilization III guest through both directions against a synthetic DP8 peer (`tools/dp8-peer.ts`,
+running the same `Dp8Engine` the guest's `dpnet.dll` does):
+
+- **Host**: the guest hosts a game; the peer enumerates it, connects with Civ3's "Firaxis" connect
+  handshake and receives the game's session data.
+- **Join**: the peer hosts and answers the enumeration; the guest lists the session, joins it and
+  the peer sees the connection.
+
+A title whose LAN lobby goes through the DirectPlay 8 peer role rather than raw Winsock is
+already covered by this path and should not need new networking work — only verification
+against the real game, and support for the Client/Server CLSIDs if it turns out to need those
+instead of Peer.
 
 ## Tests
 
