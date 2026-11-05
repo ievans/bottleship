@@ -57,7 +57,12 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         method("?_Pninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAEPADXZ", 0),
         method("?clear@?$basic_ios@DU?$char_traits@D@std@@@std@@QAEXH_N@Z", 2, { returnType: "void" }),
         method("??0?$basic_ios@DU?$char_traits@D@std@@@std@@IAE@XZ", 0),
-        method("??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", 2),
+        // basic_ostream has a virtual base (basic_ios), so MSVC passes its constructors a
+        // hidden trailing int (construct-the-virtual-base flag) after the two declared
+        // params: the caller at rise.exe 0x49e629 (RVA 0x9e629) pushes 3 dwords and does
+        // not clean up after the call.
+        // Popping 8 left the caller's `pop edi`/`pop esi` one slot off.
+        method("??0?$basic_ostream@DU?$char_traits@D@std@@@std@@QAE@PAV?$basic_streambuf@DU?$char_traits@D@std@@@1@_N@Z", 3),
         method("?unshift@?$codecvt@DDH@std@@QBEHAAHPAD1AAPAD@Z", 4),
         method("??0?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAE@XZ", 0),
         // Returns `locale` BY VALUE — the x86 ABI passes the hidden return-buffer pointer as
@@ -96,6 +101,9 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         free("?_Xlength_error@std@@YAXPBD@Z", 1, { returnType: "void" }),
         free("?_Xout_of_range@std@@YAXPBD@Z", 1, { returnType: "void" }),
         free("?_Xbad_alloc@std@@YAXXZ", 0, { returnType: "void" }),
+        // `_iobuf* _Fiopen(const char* name, int mode, int prot)`, static __cdecl. msvcp110.ts
+        // already answers it; without this declaration the import had no arg count at all.
+        free("?_Fiopen@std@@YAPAU_iobuf@@PBDHH@Z", 3),
         free("?_Syserror_map@std@@YAPBDH@Z", 1),
         free("?_Winerror_map@std@@YAPBDH@Z", 1),
 
