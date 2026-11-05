@@ -105,13 +105,11 @@ export class PathPolicy {
     private readonly persistOnly: boolean;
     // classify() is a pure function of the path, but vfs.ts calls isEphemeral() on EVERY
     // writeFileSync/write (not just on open) — a game whose save routine does one tiny
-    // fwrite() per struct field reaches this thousands of times per save. Measured live
-    // against Empire Earth II's autosave: 3996 writeSync calls in one save, matchesAny
-    // alone accounting for 8.66s of a single 9.5s stalled frame (analyze-trace WORST
-    // FRAMES, 96% JS). Classification only depends on the (already-lowercased) overlay-
-    // relative path, so it is cacheable for the PathPolicy's lifetime with no behavior
-    // change — the game's path set is small and bounded by its own file usage, and the
-    // cache dies with the worker on reload.
+    // fwrite() per struct field reaches this thousands of times per save. Classification
+    // only depends on the (already-lowercased) overlay-relative path, so it is cacheable
+    // for the PathPolicy's lifetime with no behavior change — the game's path set is
+    // small and bounded by its own file usage, and the cache dies with the worker on
+    // reload.
     private readonly cache = new Map<string, Classification>();
 
     constructor(cfg: PathPolicyConfig = {}) {

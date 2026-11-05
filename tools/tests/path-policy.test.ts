@@ -47,12 +47,10 @@ describe("per-game ephemeral additions", () => {
 
 describe("classify() memoizes per path", () => {
     // Regression for the autosave freeze (#8): vfs.ts calls isEphemeral() on every
-    // writeFileSync/write, not just on open. A save routine doing one tiny fwrite()
-    // per struct field hits this thousands of times per save — confirmed live against
-    // Empire Earth II's autosave (3996 writeSync calls in one save) where the repeated
-    // regex matching alone accounted for 8.66s of a single 9.5s stalled frame. Classify
-    // is a pure function of the path, so repeat calls for the same path must not re-run
-    // the glob regexes.
+    // writeFileSync/write, not just on open, so a save routine doing one tiny fwrite()
+    // per struct field hits this thousands of times per save. Classify is a pure
+    // function of the path, so repeat calls for the same path must not re-run the
+    // glob regexes.
     test("repeat classify() calls for the same path do not re-test the regexes", () => {
         const p = new PathPolicy();
         const spy = spyOn(RegExp.prototype, "test");
