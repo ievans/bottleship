@@ -65,6 +65,7 @@ export const ole32Module: ModuleDescriptor = {
         makeFunc("OleSaveToStream", 2),
         makeFunc("OleLoadFromStream", 3),
         makeFunc("CreateStreamOnHGlobal", 3, { onUnimplemented: "hresult" }),
+        makeFunc("CreateBindCtx", 2),
 
         // Auto-generated from reference signatures
         makeFunc("CoAddRefServerProcess", 0),
