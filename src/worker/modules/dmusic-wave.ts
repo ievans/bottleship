@@ -104,10 +104,19 @@ interface Voice {
 /** The waves sounding on one audio path, mixed at the path buffer's rate. */
 export class WaveMixer {
     private voices: Voice[] = [];
+    /** Linear gain the mix is heading to (the path's volume), and where the last render left it. */
+    private target = 1;
+    private gain = 1;
     private left = new Float32Array(0);
     private right = new Float32Array(0);
 
     get active(): number { return this.voices.length; }
+
+    /** The path's volume in hundredths of a decibel (0 is full, -9600 silent), as SetVolume gives it. */
+    setVolume(hundredthsDb: number): void {
+        const db = Math.max(-9600, Math.min(0, hundredthsDb | 0)) / 100;
+        this.target = db <= -96 ? 0 : Math.pow(10, db / 20);
+    }
 
     /** Start `sound` from its beginning; `owner` is what stop() names it by. */
     play(owner: unknown, sound: WaveSound): void {
@@ -146,6 +155,14 @@ export class WaveMixer {
             v.pos = pos;
         }
         this.voices = this.voices.filter((v) => v.pos < v.sound.frames);
+        // Ramp to a new volume across this render instead of stepping, which would click.
+        const from = this.gain, to = this.target;
+        for (let i = 0; i < frames; i++) {
+            const g = from === to ? to : from + ((to - from) * (i + 1)) / frames;
+            left[i]! *= g;
+            right[i]! *= g;
+        }
+        this.gain = to;
         const clamp = (x: number): number => (x > 32767 ? 32767 : x < -32768 ? -32768 : Math.round(x));
         if (channels === 1) {
             for (let i = 0; i < frames; i++) pcm[i] = clamp((left[i]! + right[i]!) / 2);
