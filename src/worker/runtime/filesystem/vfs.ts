@@ -2884,6 +2884,15 @@ class OpfsOverlay {
                     clearTimeout(staleWriter.flushTimer);
                     staleWriter.flushTimer = null;
                 }
+                // Unlike truncating to zero, the bytes below the new end survive, and the
+                // writer may still hold them only in its memory buffer (WriteFile followed
+                // by SetEndOfFile at the same size): commit them before the truncate.
+                try {
+                    await this.flushWriteBuffer(staleWriter);
+                    await staleWriter.queue;
+                } catch (e) {
+                    Logger.warn(LogCategory.SYSTEM, `VFS: truncateFileAt("${path}") could not commit pending writes: ${e}`);
+                }
                 try { await staleWriter.writer?.close(); } catch {}
             }
             this.closeSyncHandle(path);

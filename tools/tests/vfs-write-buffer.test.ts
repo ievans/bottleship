@@ -145,6 +145,23 @@ describe("F6 — writeFileSync does not drop a buffered run behind an in-flight 
         expect(Array.from(fake!.data.subarray(16))).toEqual(new Array(16).fill(0x11));
     });
 
+    test("SetEndOfFile right after WriteFile keeps the still-buffered bytes", async () => {
+        // A freshly created file, written and then cut at its own length before any flush:
+        // the bytes exist only in the writer's memory buffer when the truncate runs.
+        // (Rise of Nations saves LoadTiming.xml this way; it came back as 101 zero bytes.)
+        const { vfs, root } = await freshVfs();
+        const path = "C:\\Saved.xml";
+        const h = vfs.openSync(path, GENERIC_WRITE, CREATE_ALWAYS)!;
+        const text = new TextEncoder().encode("<?xml version=\"1.0\"?>\r\n<ROOT/>\r\n");
+        vfs.writeSync(h, text);
+        await vfs.truncateAt(path, text.length);
+        await vfs.flushAll();
+
+        const fake = findFakeByName(root, "Saved.xml");
+        expect(fake!.data.length).toBe(text.length);
+        expect(new TextDecoder().decode(fake!.data)).toBe("<?xml version=\"1.0\"?>\r\n<ROOT/>\r\n");
+    });
+
     test("a scattered write while a flush is in flight keeps the earlier run", async () => {
         const { vfs, root } = await freshVfs();
         const h = vfs.openSync("C:\\out.bin", GENERIC_WRITE, CREATE_ALWAYS)!;
