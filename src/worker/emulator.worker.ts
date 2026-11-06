@@ -124,6 +124,7 @@ import { Quartz } from "./modules/quartz";
 import { DMusic } from "./modules/dmusic";
 import { Amstream } from "./modules/amstream";
 import { Dpnet } from "./modules/dpnet";
+import { Urlmon } from "./modules/urlmon";
 import { A3d } from "./modules/a3d";
 import { Avifil32 } from "./modules/avifil32";
 import { Rpcrt4 } from "./modules/rpcrt4";
@@ -2554,6 +2555,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const dmusic = new DMusic();
       const amstream = new Amstream();
       const dpnet = new Dpnet();
+      const urlmon = new Urlmon();
       const a3d = new A3d();
       const avifil32 = new Avifil32();
       const rpcrt4 = new Rpcrt4();
@@ -2637,6 +2639,13 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       dmusic.initialize(process);
       amstream.initialize(process);
       dpnet.initialize(process);
+      urlmon.initialize(process);
+      // ole32's CreateBindCtx hands out urlmon's bind context, the one a URL bind reads back.
+      ole32.exports["CreateBindCtx"] = urlmon.exports["CreateBindCtx"]!;
+      urlmon.setTaskAllocator((cb) => {
+        const r = ole32.exports["CoTaskMemAlloc"]!({ esp: 0 } as never, process.getCurrentMemory(), [cb]);
+        return (typeof r === "number" ? r : r instanceof Promise ? 0 : r.value) >>> 0;
+      });
       a3d.initialize(process);
       avifil32.initialize(process);
       rpcrt4.initialize(process);
@@ -2737,6 +2746,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(dmusic.name, dmusic);
       process.registerModule(amstream.name, amstream);
       process.registerModule(dpnet.name, dpnet);
+      process.registerModule(urlmon.name, urlmon);
       process.registerModule(a3d.name, a3d);
       process.registerModule(avifil32.name, avifil32);
       process.registerModule(rpcrt4.name, rpcrt4);
@@ -2819,6 +2829,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(dmusic.name, dmusic.exports);
       process.dispatcher.registerModule(amstream.name, amstream.exports);
       process.dispatcher.registerModule(dpnet.name, dpnet.exports);
+      process.dispatcher.registerModule(urlmon.name, urlmon.exports);
       process.dispatcher.registerModule(a3d.name, a3d.exports);
       process.dispatcher.registerModule(avifil32.name, avifil32.exports);
       process.dispatcher.registerModule(rpcrt4.name, rpcrt4.exports);
