@@ -9,7 +9,7 @@ import { Logger, LogCategory } from '../../core/logger';
 import { System } from '../../core/system';
 import { EmulatorConfig } from '../../core/emulator-config-manager';
 import { DESKTOP_HWND } from '../../runtime/windowing/window-manager';
-import { getWindowClass, getWindowClassByName } from './class';
+import { getWindowClass, getWindowClassByName, getWindowClassId } from './class';
 import { Marshaler } from '../../core/memory/marshaler';
 import { Mem } from '../../core/memory/mem-accessor';
 import { WindowInfo, windows, getWindowByHandle, getCursorDisplayCount, updateCursorDisplayCount, isGuestCursorVisible, syncHostCursorToGuestState, installCursorAndUpdateHostVisibility, getAbsoluteWindowPosition, markGuestCustomPaint, markWindowPaintCycleRan, killWindowTimers, registerWindowDestroyFinalizer, reorderChildInParent, isWindowPosZOrderRequestValid, shouldSeedPaintFromParent, tryLockWindowUpdate, isWindowUpdateLocked, hasSystemControlChildren, getChildWindowExclusions, isEffectivelyVisible, getAncestorClipRect } from './shared-state';
@@ -1042,6 +1042,9 @@ export function createWindowExports(): Record<string, ThunkImplementation> {
             ensureAnimateControlClasses();
             classInfo = getWindowClassByName(className);
         }
+        // A window created by class NAME still belongs to that class's atom: FindWindow,
+        // GetClassName and the class brush and cursor all look the class up through it.
+        if (classId === undefined && typeof className === 'string') classId = getWindowClassId(className);
 
         if (!classInfo && typeof className === 'string') {
             Logger.warn(LogCategory.USER32, `CreateWindowEx: class "${className}" not found, using dummy`);
