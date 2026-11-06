@@ -96,6 +96,14 @@ describe("msvcp110 classic locale", () => {
         expect(call("Vc11CtypeChar_do_narrow", [0x41, 0x3f])).toBe(0x41);
     });
 
+    test("ranged widen and narrow copy to dest and return the end of dest", () => {
+        Mem.writeBytes(0xb100, new TextEncoder().encode("abc"));
+        expect(call("Vc11CtypeChar_do_widen_range", [0xb100, 0xb103, 0xb200])).toBe(0xb203);
+        expect(cString(0xb200)).toBe("abc");
+        expect(call("Vc11CtypeChar_do_narrow_range", [0xb100, 0xb103, 0x3f, 0xb300])).toBe(0xb303);
+        expect(cString(0xb300)).toBe("abc");
+    });
+
     test("_Getcoll returns the C collation vector through its hidden result pointer", () => {
         expect(vc110CppExtras.find((f) => f.name === GETCOLL)?.stackCleanupBytes).toBe(4);
         Mem.writeUint32(0xc000, 0xdead);

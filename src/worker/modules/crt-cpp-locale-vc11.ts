@@ -11,7 +11,8 @@
  *   ctype<char>  +0 vtable, +4 refs, +8 _Page, +0xc _Table (256 classic masks),
  *                +0x10 _Delfl, +0x14 _LocaleName
  * rise.exe's inlined use_facet reads _Facetvec/_Facetcount/_Xparent, and its inlined
- * ctype<char>::is reads _Table.
+ * ctype<char>::is reads _Table. It instantiates collate<char> itself (its own vtable over
+ * _Locinfo, _Getcoll, _Strcoll and _Strxfrm), so the DLL's collate _Getcat is not needed.
  *
  * The locale's facet vector is empty, so use_facet always falls through to the facet's
  * _Getcat. That hands out one shared facet per type; the importer caches it. Every object
@@ -87,10 +88,11 @@ function mapRange(first: number, last: number, f: (ch: number) => number, name: 
     return last;
 }
 
+/** Copies [first, last) to dest and returns the end of the destination range, as do_widen/do_narrow do. */
 function copyRange(first: number, last: number, dest: number, name: string): number {
     const length = rangeLength(first, last, name);
     if (length) Mem.writeBytes(dest, new Uint8Array(bytes(first, length, name)));
-    return last;
+    return (dest + length) >>> 0;
 }
 
 /** The C locale compares and transforms bytes as they are; any other locale is not implemented. */
