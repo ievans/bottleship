@@ -47,3 +47,25 @@ describe("SM4 translation: SINCOS", () => {
         expect(wgsl).not.toContain("cos(");
     });
 });
+
+describe("SM4 translation: non-finite immediates", () => {
+    // WGSL evaluates bitcast<f32>(literal) at compile time and rejects NaN or infinity, so a
+    // shader that moves 0xffffffff (a common all-ones mask) must not become one.
+    const bits = (u: number) => [(1 | (IMM32 << 12)) >>> 0, u >>> 0];
+
+    test("a raw move of an all-ones mask keeps its bits through a runtime call", () => {
+        const mov = [op(54, 5), ...masked(TEMP, 0x8, 0), ...bits(0xffffffff)];
+        const { wgsl } = translateShader(pixelShader([...mov, ...MOV_O0_FROM_R0]), 1);
+        expect(wgsl).toContain("fn bits_f32(b: u32) -> f32");
+        expect(wgsl).toContain("bits_f32(4294967295u)");
+        expect(wgsl).not.toMatch(/bitcast<f32>\(\d+u\)/);
+    });
+
+    test("NaN and infinity used as floats go through the same call", () => {
+        const add = [op(0, 7), ...masked(TEMP, 0x1, 0), ...bits(0x7fc00000), ...bits(0x7f800000)];
+        const { wgsl } = translateShader(pixelShader([...add, ...MOV_O0_FROM_R0]), 1);
+        expect(wgsl).toContain("bits_f32(2143289344u)");
+        expect(wgsl).toContain("bits_f32(2139095040u)");
+        expect(wgsl).not.toMatch(/bitcast<f32>\(\d+u\)/);
+    });
+});

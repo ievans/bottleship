@@ -79,7 +79,7 @@ const ty = (k: Kind, n: number) => (n === 1 ? scalarOf(k) : `vec${n}<${scalarOf(
 
 function floatLiteral(bits: number): string {
     const f = new Float32Array(new Uint32Array([bits >>> 0]).buffer)[0]!;
-    if (!Number.isFinite(f) || (f !== 0 && Math.abs(f) < 1.1754943508222875e-38)) return `bitcast<f32>(${bits >>> 0}u)`;
+    if (!Number.isFinite(f) || (f !== 0 && Math.abs(f) < 1.1754943508222875e-38)) return `bits_f32(${bits >>> 0}u)`;
     if (Object.is(f, -0)) return "-0.0";
     const s = String(f);
     return /[.eE]/.test(s) ? s : `${s}.0`;
@@ -169,7 +169,7 @@ class Emitter {
     private raw(o: Operand, lanes: number[]): string {
         if (o.type === OperandType.Imm32 && !o.abs && !o.neg) {
             const vals = lanes.map((l) => `${o.imm![o.components === 1 ? 0 : o.swizzle[l]!]! >>> 0}u`);
-            return lanes.length === 1 ? `bitcast<f32>(${vals[0]})` : `bitcast<vec${lanes.length}<f32>>(vec${lanes.length}<u32>(${vals.join(", ")}))`;
+            return lanes.length === 1 ? `bits_f32(${vals[0]})` : `vec${lanes.length}<f32>(${vals.map((v) => `bits_f32(${v})`).join(", ")})`;
         }
         return this.source(o, lanes, "f");
     }
@@ -489,7 +489,12 @@ class Emitter {
         }
         const body = this.lines;
 
-        const out: string[] = ["diagnostic(off, derivative_uniformity);", ""];
+        const out: string[] = [
+            "diagnostic(off, derivative_uniformity);", "",
+            // A constant's bits as f32 at run time: WGSL evaluates bitcast<f32>(literal) at
+            // compile time and rejects a NaN or infinite result, but never a function call.
+            "fn bits_f32(b: u32) -> f32 { return bitcast<f32>(b); }", "",
+        ];
         // Resources.
         for (const [slot, size] of [...this.cbuffers].sort((a, b) => a[0] - b[0])) {
             out.push(`struct CB${slot} { v: array<vec4<f32>, ${Math.max(size, 1)}> }`);
