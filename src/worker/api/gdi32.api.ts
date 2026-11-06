@@ -234,6 +234,15 @@ export const gdi32Module: ModuleDescriptor = {
         makeFunc("PtInRegion", 3),
         makeFunc("GetCharABCWidthsA", 4),
         makeFunc("GetCharABCWidthsW", 4),
+        // Declared so the synthetic gdi32 image EXPORTS them: a loader that walks the export
+        // table itself (the unicows loader linked into Rise of Nations' d3dgl.dll) cannot see a
+        // name GetProcAddress would only resolve on demand.
+        // DWORD GetGlyphOutline(HDC, UINT uChar, UINT fuFormat, LPGLYPHMETRICS, DWORD cjBuffer, LPVOID, const MAT2*)
+        makeFunc("GetGlyphOutlineA", 7),
+        makeFunc("GetGlyphOutlineW", 7),
+        // DWORD GetKerningPairs(HDC, DWORD nPairs, LPKERNINGPAIR)
+        makeFunc("GetKerningPairsA", 3),
+        makeFunc("GetKerningPairsW", 3),
 
         // Auto-generated from reference signatures
         makeFunc("CreateBrushIndirect", 1),
