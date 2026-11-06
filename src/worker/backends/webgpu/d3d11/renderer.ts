@@ -537,12 +537,16 @@ export class D3D11Renderer implements RenderActive {
                 }
             }
             this.device.pushErrorScope("validation");
-            pipeline = this.device.createRenderPipeline(desc);
+            const created = pipeline = this.device.createRenderPipeline(desc);
             const label = desc.label;
             void this.device.popErrorScope().then((err) => {
                 if (!err) return;
                 recordGpuError("scope", "d3d11.pipeline", err.message);
                 Logger.error(LogCategory.D3D9, `[D3D11] pipeline ${label}: ${err.message}`);
+                // A draw with an invalid pipeline invalidates the whole frame's command buffer,
+                // so later draws that would use it are skipped instead.
+                if (this.pipelines.get(key) === created) this.pipelines.set(key, null);
+                this.warnOnce(`pipe${key}`, `pipeline ${label} is invalid; its draws are skipped: ${err.message.split("\n")[0]}`);
             });
         } catch (e) {
             this.warnOnce(`pipe${key}`, `pipeline creation failed: ${e}`);
