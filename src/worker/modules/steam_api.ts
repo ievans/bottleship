@@ -4,207 +4,322 @@
  *
  * Steamworks isn't a flat C API underneath: SteamUtils()/SteamUser()/etc. each return a
  * pointer to a C++ object whose vtable the game calls through directly (no QueryInterface —
- * unlike COM, the interface version is baked into the factory function's NAME, not asked
- * for at runtime). We do not have Valve's real interface vtables to transcribe (steam_api.dll
- * itself is just an IPC stub to the Steam client process — its own RTTI has no ISteam*
- * classes, confirmed by inspecting the real shipped DLL), and guessing a vtable's slot count
- * or arity is the single most expensive mistake this codebase keeps a standing warning about
- * (see install-com-vtable.ts, gog-sdk.ts): a wrong arity doesn't fail the one call, it walks
- * the caller's ESP off its own frame and crashes unrelated code later.
+ * the interface version is baked into the factory function's NAME). Each getter here returns
+ * an object of exactly the interface version this SDK build (1.30) hands out, with every
+ * vtable slot laid out from that version's header (steam/interfaces.ts, generated from
+ * open-steamworks). The two ISteamMatchmaking slots measured from rise.exe's own call sites
+ * before the tables existed (slot 15, 2 dwords; slot 20, 4 dwords) agree with them.
  *
- * So every interface getter below returns NULL rather than a fabricated object. This is
- * "fail safely, never a false success" the same way an unimplemented export elsewhere in
- * this codebase returns a value that cannot be mistaken for one (see UnimplementedReturn in
- * api/types.ts) — a title that null-checks after SteamUtils() etc. degrades instead of
- * calling through bytes we invented. The 22 flat entry points that ARE safe to implement for
- * real (Init/RunCallbacks/Shutdown, the callback (de)registration bookkeeping) get real
- * behavior, since those carry no guessed ABI risk.
+ * There is no Steam client behind any of it. The objects describe a user who is logged on,
+ * owns the game and has nothing else: no friends, no Workshop items, no cloud files, no
+ * stats yet. Every method without a behavior below returns zero (FALSE, NULL, an empty
+ * handle, a zeroed CSteamID).
  *
- * Whichever interface getter the game turns out to actually dereference will surface as a
- * clean null-pointer fault with a live EIP the harness can inspect — the next, evidence-
- * driven step once this boots, not something to guess upfront.
- *
- * SteamMatchmaking() stopped being one of those NULLs once that evidence actually arrived:
- * rise.exe (Steam v1.10 bundle, image base 0x400000) dereferences its result unchecked.
- * Disassembly at RVA 0x639320..0x639327 (capstone, tools/re):
- *   0xa3930c: call edi                  ; SteamMatchmaking() — "last_thunk: steam_api:
- *                                        ; SteamMatchmaking" in the crash log below
- *   0xa39317: mov ecx, esp
- *   0xa39319: mov edi, eax              ; edi = SteamMatchmaking()'s return value
- *   0xa3931b: mov dword ptr [ecx], edx      ; edx = [ebx+0x68] -> arg0
- *   0xa3931d: mov dword ptr [ecx+4], esi    ; esi = [ebx+0x6c] -> arg1
- *   0xa39320: mov eax, dword ptr [edi]      ; vtable ptr — faults here when edi is NULL
- *   0xa39322: mov ecx, edi              ; this = edi (thiscall)
- *   0xa39324: call dword ptr [eax+0x3c] ; slot 0x3c/4 = 15, 2 pushed dwords
- * Before this fix edi was 0 (SteamMatchmaking() answered NULL), so `mov eax,[edi]` read
- * real memory at address 0 — which this emulator's low memory map holds leftover
- * bootloader bytes for instead of faulting — and execution "escaped to bootloader" at
- * whatever address happened to be sitting there (logs/ron/bottleship-2026-11-04-20-4154-
- * rise-of-nations-steam110.log:9062 and :9183).
- *
- * We still don't have the real ISteamMatchmaking vtable — only this one slot, measured
- * from what the game itself calls. So the fix is NOT "transcribe the interface": it is the
- * same minimal-placeholder move as IGalaxyUnknown in gog-sdk.ts — a real vtable, sized to
- * reach slot 15, where every OTHER slot is a deliberately unverified 0-arg stub that logs
- * loudly if ever hit. A future log hit on one of those IS the next piece of evidence, not
- * a bug to silently paper over.
- *
- * That next piece of evidence arrived immediately: returning a real (non-NULL)
- * SteamMatchmaking() unlocks a SECOND call site the game could never previously reach
- * (it was gated behind `SteamMatchmaking() != NULL`, same object, rise.exe+0x638330):
- *   0xa38421: mov edx, dword ptr [eax]      ; eax = SteamMatchmaking(), edx = vtable
- *   0xa38439: call dword ptr [edx + 0x50]   ; slot 0x50/4 = 20, thiscall, 4 pushed dwords
- * Slot 20 sits 16 bytes past a 16-slot vtable (0..15 ends at offset 0x40) — reading
- * [vtable+0x50] with only 16 slots allocated is an out-of-bounds read into whatever the
- * allocator put next, and calling through that garbage is a second, unrelated way to
- * "escape to bootloader" that has nothing to do with stack cleanup. Extending the vtable
- * to reach slot 20 (still placeholders beyond what's measured) closes that specific OOB
- * read; it does not claim there is no slot 21+ still waiting to be found the same way.
+ * Asynchronous requests the game waits on (a Workshop query) get a real SteamAPICall_t and
+ * a completed, empty result. It is delivered the way the client does it: once the game
+ * registers its CCallResult for the handle, the next SteamAPI_RunCallbacks calls the
+ * object's Run(pvParam, bIOFailure, hSteamAPICall). That is vtable slot 0 on Windows — MSVC
+ * lays overloaded virtuals out in reverse declaration order.
  */
 
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Logger, LogCategory } from "../core/logger";
+import { Mem } from "../core/memory/mem-accessor";
+import { getCPU } from "../core/thunking/thunk-utils";
+import { cpuViews } from "../core/cpu/cpu-views";
+import { fpuPush } from "../core/fpu-helper";
 import { FunctionDescriptor, InterfaceDescriptor, ModuleDescriptor } from "../api/types";
 import { createVTablesFromDescriptor, VTableInfo } from "../api/adapters/module-adapter";
 import { createComObject } from "./d3d9/shared-state";
+import { type GuestRoutine, runGuestRoutine } from "../core/thunking/guest-routine";
+import { writeGuestCode } from "../core/memory/guest-code";
+import { STEAM_INTERFACES, type SteamReturn } from "./steam/interfaces";
 
-function method(name: string, argCount: number): FunctionDescriptor {
+/** Rise of Nations: Extended Edition's Steam app id. */
+export const STEAM_APP_ID = 287450;
+/** An individual account in the public universe: universe 1, type 1, instance 1. */
+const STEAM_ID_HIGH = 0x01100001;
+const STEAM_ACCOUNT_ID = 0x00bb11e5;
+/** EResult k_EResultOK. */
+const RESULT_OK = 1;
+/** SteamUGCQueryCompleted_t under the Windows callback packing (8): handle, eResult, returned, total, cached. */
+const UGC_QUERY_COMPLETED_SIZE = 24;
+
+/** Which interface each flat getter hands out. SteamGameServer has no table yet. */
+const GETTERS: Record<string, string> = {
+    SteamClient: "ISteamClient015",
+    SteamUser: "ISteamUser017",
+    SteamUtils: "ISteamUtils007",
+    SteamFriends: "ISteamFriends014",
+    SteamMatchmaking: "ISteamMatchmaking009",
+    SteamMatchmakingServers: "ISteamMatchmakingServers002",
+    SteamUserStats: "ISteamUserStats011",
+    SteamApps: "ISteamApps006",
+    SteamUGC: "ISteamUGC002",
+    SteamNetworking: "ISteamNetworking005",
+};
+
+/** The vtable-slot handler key for a method: overloads (GetStat ×2) get their slot appended. */
+export function slotHandlerName(iface: string, slot: number): string {
+    const methods = STEAM_INTERFACES[iface]!.methods;
+    const name = methods[slot]![0];
+    const overloaded = methods.filter((m) => m[0] === name).length > 1;
+    return `${iface}_${overloaded ? `${name}${slot}` : name}`;
+}
+
+function descriptorFor(iface: string): InterfaceDescriptor {
     return {
-        name,
-        params: Array.from({ length: argCount }, (_, i) => ({ name: `arg${i}`, type: "u32" as const })),
-        returnType: "u32" as const,
-        callingConvention: "stdcall" as const,
+        name: iface,
+        methods: STEAM_INTERFACES[iface]!.methods.map((m, slot): FunctionDescriptor => ({
+            name: slotHandlerName(iface, slot).slice(iface.length + 1),
+            params: Array.from({ length: m[1] / 4 }, (_, i) => ({ name: `arg${i}`, type: "u32" as const })),
+            returnType: "u32",
+            callingConvention: "stdcall",
+        })),
     };
 }
 
-/**
- * Slots 0..14 and 16..19: no call site evidence yet, so a minimal 0-arg placeholder (see
- * header). Slot 15 and slot 20 are measured call sites — their arg counts come from actual
- * disassembly, not a guess, but their semantics/return values are still unverified.
- */
-const ISteamMatchmaking: InterfaceDescriptor = {
-    name: "ISteamMatchmaking",
-    methods: [
-        ...Array.from({ length: 15 }, (_, i) => method(`Slot${i}`, 0)),
-        method("Slot15", 2),
-        ...Array.from({ length: 4 }, (_, i) => method(`Slot${16 + i}`, 0)),
-        method("Slot20", 4),
-    ],
+const steamInterfacesDescriptor: ModuleDescriptor = {
+    name: "steam_api",
+    functions: [],
+    interfaces: Object.keys(STEAM_INTERFACES).map(descriptorFor),
 };
 
 /** Slot index -> pushed-arg count, published for the test that pins this layout. */
 export const STEAM_MATCHMAKING_LAYOUT: readonly number[] =
-    ISteamMatchmaking.methods.map((m) => m.params.length);
+    STEAM_INTERFACES.ISteamMatchmaking009!.methods.map((m) => m[1] / 4);
 
-const steamMatchmakingDescriptor: ModuleDescriptor = {
-    name: "steam_api",
-    functions: [],
-    interfaces: [ISteamMatchmaking],
-};
+type Behavior = (args: number[]) => number;
 
 export class SteamApi implements IModule {
     name = "steam_api";
     exports: Record<string, ThunkImplementation> = {};
 
     private process: Process | null = null;
-    private matchmakingVtable: VTableInfo | null = null;
-    private matchmakingObj = 0;
+    private vtables: Record<string, VTableInfo> | null = null;
+    private readonly objects = new Map<string, number>();
+    private readonly strings = new Map<string, number>();
+    private readonly logged = new Set<string>();
+    private nextHandle = 1;
+    /** Completed asynchronous calls by handle, with the result struct each delivers. */
+    private readonly callResults = new Map<number, Uint8Array>();
+    /** Registered CCallResults whose result is ready: delivered on the next RunCallbacks. */
+    private readyCallbacks: Array<{ callback: number; call: number }> = [];
+    /** pop eax; pop ecx; push eax; mov eax,[ecx]; jmp [eax] — stdcall(this, ...) → thiscall vtable slot 0. */
+    private runTrampoline = 0;
 
     initialize(process: Process): void {
         this.process = process;
         const exports = this.exports;
 
-        // Returning true here while every interface getter below returns NULL is not a
-        // state a real Steamworks client ever produces — ordinarily the two succeed or fail
-        // together, and a title that trusts that pairing (checks SteamAPI_Init(), skips the
-        // null-check on SteamUser() etc.) can still crash. The alternative, returning false,
-        // is not uniformly safer: several titles treat Steam as hard-mandatory and abort
-        // their own boot the moment SteamAPI_Init() fails, which forecloses this module ever
-        // getting far enough to reach the specific interface a game actually dereferences —
-        // the evidence this stub exists to surface in the first place (see the file header).
-        // Reporting success and letting each real NULL dereference surface as its own,
-        // separately diagnosable fault is the position this bring-up has verified in
-        // practice gets further.
         exports["SteamAPI_Init"] = () => {
-            Logger.log(LogCategory.SYSTEM, "[steam_api] SteamAPI_Init -> true (no real Steam client backing this)");
+            Logger.log(LogCategory.SYSTEM, "[steam_api] SteamAPI_Init -> true (offline: no Steam client behind the interfaces)");
             return 1;
         };
         exports["SteamAPI_Shutdown"] = () => 0;
-        exports["SteamAPI_RunCallbacks"] = () => 0;
+        exports["SteamAPI_RunCallbacks"] = (ctx, mem, _args) => this.runCallbacks(ctx, mem);
         exports["SteamGameServer_RunCallbacks"] = () => 0;
         exports["SteamGameServer_Shutdown"] = () => 0;
         exports["SteamAPI_SetMiniDumpComment"] = () => 0;
         exports["SteamAPI_WriteMiniDump"] = () => 0;
 
-        // Callback/call-result (de)registration: store nothing, fire nothing. A title that
-        // blocks waiting for one of these to fire never gets woken — same tradeoff as any
-        // other unimplemented async completion source, and the first thing to revisit if a
-        // boot hangs waiting on a specific Steam call result.
+        // Callback/call-result (de)registration: store nothing, fire nothing. Nothing here
+        // starts an asynchronous request (each returns k_uAPICallInvalid), so there is no
+        // result to deliver.
         exports["SteamAPI_RegisterCallback"] = () => 0;
         exports["SteamAPI_UnregisterCallback"] = () => 0;
-        exports["SteamAPI_RegisterCallResult"] = () => 0;
-        exports["SteamAPI_UnregisterCallResult"] = () => 0;
-
-        const interfaceGetters = [
-            "SteamClient", "SteamUtils", "SteamUser", "SteamUserStats", "SteamFriends",
-            "SteamUGC", "SteamApps", "SteamMatchmakingServers",
-            "SteamGameServer", "SteamNetworking",
-        ];
-        for (const name of interfaceGetters) {
-            exports[name] = () => {
-                Logger.log(LogCategory.SYSTEM, `[steam_api] ${name}() -> NULL (no interface vtable implemented yet)`);
-                return 0;
-            };
-        }
-
-        // The one getter this bring-up has outgrown returning NULL for — see the class doc
-        // comment above for the exact call site that dereferences it unchecked.
-        exports["SteamMatchmaking"] = () => this.getMatchmaking();
-
-        for (const i of [...Array.from({ length: 15 }, (_, i) => i), 16, 17, 18, 19]) {
-            exports[`ISteamMatchmaking_Slot${i}`] = () => {
-                Logger.warn(
-                    LogCategory.SYSTEM,
-                    `[steam_api] ISteamMatchmaking slot ${i} called — unverified, 0 args assumed, returning 0`
-                );
-                return 0;
-            };
-        }
-        exports["ISteamMatchmaking_Slot15"] = (_ctx, _mem, args) => {
-            Logger.log(
-                LogCategory.SYSTEM,
-                `[steam_api] ISteamMatchmaking::Slot15(0x${(args[0] ?? 0).toString(16)}, 0x${(args[1] ?? 0).toString(16)}) -> 0`
-            );
+        exports["SteamAPI_RegisterCallResult"] = (_ctx, _mem, args) => {
+            const callback = (args[0] ?? 0) >>> 0, call = (args[1] ?? 0) >>> 0;
+            if (callback && this.callResults.has(call)) this.readyCallbacks.push({ callback, call });
             return 0;
         };
-        // Measured at rise.exe+0x638439 (see class doc comment): 4 pushed dwords, thiscall.
-        // Arg semantics unverified — logged in full so a real behavior can be transcribed
-        // from the next hit instead of guessed.
-        exports["ISteamMatchmaking_Slot20"] = (_ctx, _mem, args) => {
-            Logger.warn(
-                LogCategory.SYSTEM,
-                `[steam_api] ISteamMatchmaking::Slot20(0x${(args[0] ?? 0).toString(16)}, 0x${(args[1] ?? 0).toString(16)}, ` +
-                `0x${(args[2] ?? 0).toString(16)}, 0x${(args[3] ?? 0).toString(16)}) -> 0 — unverified semantics`
-            );
+        exports["SteamAPI_UnregisterCallResult"] = (_ctx, _mem, args) => {
+            const callback = (args[0] ?? 0) >>> 0, call = (args[1] ?? 0) >>> 0;
+            this.readyCallbacks = this.readyCallbacks.filter((r) => r.callback !== callback || r.call !== call);
             return 0;
         };
+
+        for (const [getter, iface] of Object.entries(GETTERS)) exports[getter] = () => this.object(iface);
+        exports["SteamGameServer"] = () => {
+            Logger.log(LogCategory.SYSTEM, "[steam_api] SteamGameServer() -> NULL (no game-server interface table)");
+            return 0;
+        };
+
+        for (const [iface, { methods }] of Object.entries(STEAM_INTERFACES)) {
+            methods.forEach((m, slot) => {
+                const key = slotHandlerName(iface, slot);
+                const behavior = this.behaviors[`${iface}::${m[0]}`] as Behavior | undefined;
+                exports[key] = (_ctx, _mem, args) => {
+                    if (!this.logged.has(key)) {
+                        this.logged.add(key);
+                        Logger.log(LogCategory.SYSTEM, `[steam_api] ${iface}::${m[0]}(${m[3]}) first call${behavior ? "" : " — default zero"}`);
+                    }
+                    return behavior ? behavior(args) : this.zero(m[2], args);
+                };
+            });
+        }
     }
 
-    private getMatchmaking(): number {
-        if (this.matchmakingObj) return this.matchmakingObj;
+    /** Deliver every ready call result through its CCallResult's Run(pvParam, bIOFailure, hCall). */
+    private runCallbacks(ctx: Parameters<ThunkImplementation>[0], mem: Uint8Array): ReturnType<ThunkImplementation> {
+        if (!this.readyCallbacks.length || !this.process) return 0;
+        const process = this.process;
+        if (!this.runTrampoline) {
+            const at = process.memory.alloc(16, "THUNK_CODE", "rx") >>> 0;
+            writeGuestCode(process.getCurrentMemory(), new Uint8Array([0x58, 0x59, 0x50, 0x8b, 0x01, 0xff, 0x20]), at);
+            this.runTrampoline = at;
+        }
+        const ready = this.readyCallbacks;
+        this.readyCallbacks = [];
+        const trampoline = this.runTrampoline;
+        const results = this.callResults;
+        const routine = (function* (): GuestRoutine {
+            for (const { callback, call } of ready) {
+                const payload = results.get(call);
+                if (!payload) continue;
+                results.delete(call);
+                const p = process.memory.alloc(payload.length, "HEAP", "rw") >>> 0;
+                Mem.writeBytes(p, payload);
+                try {
+                    yield { fn: trampoline, args: [callback, p, 0, call, 0], tag: "steam_api:CCallResult::Run" };
+                } finally {
+                    process.memory.free(p);
+                }
+            }
+            return 0;
+        })();
+        return runGuestRoutine(ctx, mem, routine, 0, "SteamAPI_RunCallbacks");
+    }
+
+    /** A completed asynchronous call: its handle, with `payload` as the result it delivers. */
+    private completedCall(payload: Uint8Array): number {
+        const call = this.nextHandle++;
+        this.callResults.set(call, payload);
+        return this.ret64(call, 0);
+    }
+
+    /** The one object a getter (or ISteamClient::GetISteam*) hands out for an interface. */
+    private object(iface: string): number {
+        const existing = this.objects.get(iface);
+        if (existing) return existing;
         if (!this.process) return 0;
-        if (!this.matchmakingVtable) {
-            const vtables = createVTablesFromDescriptor(this.process, steamMatchmakingDescriptor);
-            this.matchmakingVtable = vtables["ISteamMatchmaking"] ?? null;
-        }
-        if (!this.matchmakingVtable) return 0;
-        this.matchmakingObj = createComObject(this.matchmakingVtable.address);
-        Logger.log(
-            LogCategory.SYSTEM,
-            `[steam_api] SteamMatchmaking() -> 0x${this.matchmakingObj.toString(16)} (synthetic vtable, slots 15 and 20 measured)`
-        );
-        return this.matchmakingObj;
+        this.vtables ??= createVTablesFromDescriptor(this.process, steamInterfacesDescriptor);
+        const vt = this.vtables[iface];
+        if (!vt) return 0;
+        const obj = createComObject(vt.address) >>> 0;
+        this.objects.set(iface, obj);
+        Logger.log(LogCategory.SYSTEM, `[steam_api] ${iface} -> 0x${obj.toString(16)}`);
+        return obj;
     }
+
+    private string(text: string): number {
+        let p = this.strings.get(text);
+        if (p) return p;
+        if (!this.process) return 0;
+        p = this.process.memory.alloc(text.length + 1, "HEAP", "rw") >>> 0;
+        const b = new Uint8Array(text.length + 1);
+        for (let i = 0; i < text.length; i++) b[i] = text.charCodeAt(i) & 0x7f;
+        Mem.writeBytes(p, b);
+        this.strings.set(text, p);
+        return p;
+    }
+
+    /** EDX:EAX for a 64-bit return. */
+    private ret64(lo: number, hi: number): number {
+        const cpu = this.process?.v86 ? getCPU(this.process.v86) : null;
+        if (cpu) cpuViews(cpu).reg32[2] = hi | 0;
+        return lo >>> 0;
+    }
+
+    /** A CSteamID written through the hidden return pointer (args[0]). */
+    private steamId(args: number[], lo: number, hi: number): number {
+        const p = (args[0] ?? 0) >>> 0;
+        if (p) { Mem.writeUint32(p, lo >>> 0); Mem.writeUint32(p + 4, hi >>> 0); }
+        return p;
+    }
+
+    private zero(kind: SteamReturn, args: number[]): number {
+        switch (kind) {
+            case "u64": return this.ret64(0, 0);
+            case "struct8": return this.steamId(args, 0, 0);
+            case "f32": if (this.process?.v86) fpuPush(this.process.v86, 0); return 0;
+            default: return 0;
+        }
+    }
+
+    private readonly behaviors: Record<string, Behavior> = {
+        "ISteamUser017::GetHSteamUser": () => 1,
+        "ISteamUser017::BLoggedOn": () => 1,
+        "ISteamUser017::GetSteamID": (a) => this.steamId(a, STEAM_ACCOUNT_ID, STEAM_ID_HIGH),
+        "ISteamUser017::GetPlayerSteamLevel": () => 1,
+
+        "ISteamUtils007::GetAppID": () => STEAM_APP_ID,
+        "ISteamUtils007::GetConnectedUniverse": () => 1,
+        "ISteamUtils007::GetServerRealTime": () => Math.floor(Date.now() / 1000),
+        "ISteamUtils007::GetIPCountry": () => this.string("US"),
+        "ISteamUtils007::GetCurrentBatteryPower": () => 255,
+        "ISteamUtils007::GetSteamUILanguage": () => this.string("english"),
+        // IsAPICallCompleted(SteamAPICall_t, bool *pbFailed): every call we hand out has completed.
+        "ISteamUtils007::IsAPICallCompleted": (a) => {
+            const known = this.callResults.has(a[0]! >>> 0);
+            if (a[2]) Mem.writeUint32(a[2]!, known ? 0 : 1);
+            return known ? 1 : 0;
+        },
+        // GetAPICallResult(SteamAPICall_t, void *pCallback, int cubCallback, int iCallbackExpected, bool *pbFailed)
+        "ISteamUtils007::GetAPICallResult": (a) => {
+            const payload = this.callResults.get(a[0]! >>> 0);
+            if (a[5]) Mem.writeUint32(a[5]!, payload ? 0 : 1);
+            if (!payload || !a[2]) return 0;
+            Mem.writeBytes(a[2]!, payload.subarray(0, Math.min(payload.length, a[3]! >>> 0)));
+            return 1;
+        },
+
+        "ISteamFriends014::GetPersonaName": () => this.string("Player"),
+        "ISteamFriends014::GetPersonaState": () => 1,
+        "ISteamFriends014::GetFriendPersonaName": () => this.string(""),
+
+        "ISteamApps006::BIsSubscribed": () => 1,
+        "ISteamApps006::BIsSubscribedApp": (a) => (a[0] === STEAM_APP_ID ? 1 : 0),
+        "ISteamApps006::GetCurrentGameLanguage": () => this.string("english"),
+        "ISteamApps006::GetAvailableGameLanguages": () => this.string("english"),
+        "ISteamApps006::GetAppOwner": (a) => this.steamId(a, STEAM_ACCOUNT_ID, STEAM_ID_HIGH),
+
+        "ISteamUserStats011::RequestCurrentStats": () => 1,
+        "ISteamUserStats011::StoreStats": () => 1,
+
+        // Workshop queries succeed and find nothing.
+        "ISteamUGC002::CreateQueryUserUGCRequest": () => this.ret64(this.nextHandle++, 0),
+        "ISteamUGC002::CreateQueryAllUGCRequest": () => this.ret64(this.nextHandle++, 0),
+        "ISteamUGC002::ReleaseQueryUGCRequest": () => 1,
+        "ISteamUGC002::SendQueryUGCRequest": (a) => {
+            const payload = new Uint8Array(UGC_QUERY_COMPLETED_SIZE);
+            const v = new DataView(payload.buffer);
+            v.setUint32(0, a[0]! >>> 0, true);
+            v.setUint32(4, a[1]! >>> 0, true);
+            v.setUint32(8, RESULT_OK, true);
+            return this.completedCall(payload);
+        },
+
+        "ISteamRemoteStorage012::GetQuota": (a) => {
+            if (a[0]) Mem.writeUint32(a[0]!, 100 << 20);
+            if (a[1]) Mem.writeUint32(a[1]!, 100 << 20);
+            return 1;
+        },
+
+        // ISteamClient hands the same objects out by version string (its last argument).
+        ...Object.fromEntries(STEAM_INTERFACES.ISteamClient015!.methods
+            .filter((m) => /^GetISteam/.test(m[0]))
+            .map((m) => [`ISteamClient015::${m[0]}`, (a: number[]): number => {
+                const versionPtr = (a[m[1] / 4 - 1] ?? 0) >>> 0;
+                const bytes = versionPtr ? Mem.readBytes(versionPtr, 64) : null;
+                const end = bytes ? bytes.indexOf(0) : -1;
+                const version = bytes ? String.fromCharCode(...bytes.subarray(0, end < 0 ? 64 : end)) : "";
+                const iface = Object.entries(STEAM_INTERFACES).find(([, v]) => v.version.toLowerCase() === version.toLowerCase())?.[0];
+                return iface ? this.object(iface) : 0;
+            }])),
+        "ISteamClient015::CreateSteamPipe": () => 1,
+        "ISteamClient015::ConnectToGlobalUser": () => 1,
+    };
 }

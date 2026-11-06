@@ -1,19 +1,14 @@
 import { describe, expect, test } from "bun:test";
 import { steamApiModule } from "../../src/worker/api/steam_api.api";
-import { SteamApi, STEAM_MATCHMAKING_LAYOUT } from "../../src/worker/modules/steam_api";
+import { SteamApi, STEAM_MATCHMAKING_LAYOUT, STEAM_APP_ID, slotHandlerName } from "../../src/worker/modules/steam_api";
+import { STEAM_INTERFACES } from "../../src/worker/modules/steam/interfaces";
 import { System } from "../../src/worker/core/system";
 import { ThunkGenerator } from "../../src/worker/core/thunking/thunk-generator";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { resetD3D9SharedState } from "../../src/worker/modules/d3d9/shared-state";
 
-// SteamMatchmaking is excluded here: rise.exe dereferences its result unchecked (see
-// modules/steam_api.ts's class doc comment), so it now answers a real, minimal vtable
-// object instead of NULL. Its own behavior is pinned in the describe block below.
-const INTERFACE_GETTERS = [
-    "SteamClient", "SteamUtils", "SteamUser", "SteamUserStats", "SteamFriends",
-    "SteamUGC", "SteamApps", "SteamMatchmakingServers",
-    "SteamGameServer", "SteamNetworking",
-];
+const call = (m: SteamApi, name: string, args: number[] = [], mem = new Uint8Array(0)) =>
+    m.exports[name]!({} as any, mem, args) as number;
 
 describe("steam_api", () => {
     test("declares every export with a matching handler", () => {
@@ -23,47 +18,30 @@ describe("steam_api", () => {
             expect(typeof module.exports[fn.name]).toBe(`function`);
         }
         // And the reverse: nothing registered at runtime that the descriptor doesn't know
-        // about, which would otherwise bind by inferred ABI instead of a declared one.
-        // ISteamMatchmaking_* keys are the exception: those are vtable slot handlers, not
-        // PE exports, so they're pinned by the ISteamMatchmaking layout test below instead.
+        // about. ISteam* keys are vtable slot handlers, not PE exports; their layout is
+        // pinned against steam/interfaces.ts below.
         const declared = new Set(steamApiModule.functions.map((f) => f.name));
         for (const name of Object.keys(module.exports)) {
-            if (name.startsWith("ISteamMatchmaking_")) continue;
+            if (name.startsWith("ISteam")) continue;
             expect(declared.has(name)).toBe(true);
         }
     });
 
     test("every flat export is plain cdecl — caller cleans up, no generated callee RET N", () => {
-        // steam_api.h's S_API surface is extern "C" cdecl throughout; a callee-cleaning
-        // stub here would desync ESP against every real caller, which always pops its own
-        // arguments.
         for (const fn of steamApiModule.functions) {
             expect(fn.callingConvention).toBe("cdecl");
         }
     });
 
-    test("SteamAPI_Init reports success without a real Steam client backing it", () => {
+    test("SteamAPI_Init reports success", () => {
         const module = new SteamApi();
         module.initialize(null as any);
-        expect(module.exports["SteamAPI_Init"]!({} as any, new Uint8Array(0), [])).toBe(1);
-    });
-
-    test("every interface getter returns NULL rather than a guessed vtable", () => {
-        // steam_api.dll's own RTTI has no ISteam* classes to transcribe a vtable from —
-        // guessing one's slot count/arity is the exact mistake install-com-vtable.ts and
-        // gog-sdk.ts warn about, so every getter must fail safely instead of fabricating an
-        // object a caller would then call through.
-        const module = new SteamApi();
-        module.initialize(null as any);
-        for (const name of INTERFACE_GETTERS) {
-            expect(module.exports[name]!({} as any, new Uint8Array(0), [])).toBe(0);
-        }
+        expect(call(module, "SteamAPI_Init")).toBe(1);
     });
 
     test("call-result (de)registration takes a pointer plus a 64-bit handle as 3 stack dwords", () => {
         const registerCallResult = steamApiModule.functions.find((f) => f.name === "SteamAPI_RegisterCallResult")!;
         const unregisterCallResult = steamApiModule.functions.find((f) => f.name === "SteamAPI_UnregisterCallResult")!;
-        // (pCallback: ptr = 1 dword) + (hAPICall: SteamAPICall_t, a u64 = 2 dwords) = 3.
         expect(registerCallResult.params.length).toBe(3);
         expect(unregisterCallResult.params.length).toBe(3);
     });
@@ -78,23 +56,48 @@ describe("steam_api", () => {
             "SteamAPI_Shutdown", "SteamGameServer_Shutdown",
             "SteamAPI_SetMiniDumpComment", "SteamAPI_WriteMiniDump",
         ]) {
-            expect(() => module.exports[name]!({} as any, new Uint8Array(0), [0, 0, 0])).not.toThrow();
+            expect(() => call(module, name, [0, 0, 0])).not.toThrow();
+        }
+    });
+
+    test("without a process, every getter fails safe to NULL instead of throwing", () => {
+        const module = new SteamApi();
+        module.initialize(null as any);
+        for (const name of ["SteamUser", "SteamUtils", "SteamUGC", "SteamMatchmaking", "SteamGameServer"]) {
+            expect(call(module, name)).toBe(0);
         }
     });
 });
 
-describe("steam_api — SteamMatchmaking", () => {
-    // ISteamMatchmaking's two measured slots — see modules/steam_api.ts's class doc comment
-    // for the disassembly each is transcribed from. Pinned literally so an edit has to
-    // change it deliberately, same rationale as galaxy-gog-sdk-vtables.test.ts.
-    test("publishes 21 slots: 0..14/16..19 unverified (0 args), 15 measured (2 args), 20 measured (4 args)", () => {
-        expect(STEAM_MATCHMAKING_LAYOUT.length).toBe(21);
-        expect([...STEAM_MATCHMAKING_LAYOUT.slice(0, 15)]).toEqual(Array(15).fill(0));
+describe("steam_api — interface layouts", () => {
+    // Slots and stack sizes rise.exe's own call sites pin, independently of the headers.
+    test("the slots rise.exe calls are where its call sites expect them", () => {
+        // rise.exe+0x10542b: call [edx+8] on SteamUser(), one pushed dword (the CSteamID return buffer).
+        expect(STEAM_INTERFACES.ISteamUser017!.methods[2]).toEqual(["GetSteamID", 4, "struct8", ""]);
+        // rise.exe+0x105438/0x105441: call [eax+0x24] on SteamUtils(), nothing pushed.
+        expect(STEAM_INTERFACES.ISteamUtils007!.methods[9]!.slice(0, 2)).toEqual(["GetAppID", 0]);
+        // Measured before these tables existed (#52, #53): slot 15 pops 2 dwords, slot 20 pops 4.
         expect(STEAM_MATCHMAKING_LAYOUT[15]).toBe(2);
-        expect([...STEAM_MATCHMAKING_LAYOUT.slice(16, 20)]).toEqual(Array(4).fill(0));
         expect(STEAM_MATCHMAKING_LAYOUT[20]).toBe(4);
     });
 
+    test("every slot pops whole dwords and has a unique handler", () => {
+        const module = new SteamApi();
+        module.initialize(null as any);
+        for (const [iface, { methods }] of Object.entries(STEAM_INTERFACES)) {
+            const names = new Set<string>();
+            methods.forEach((m, slot) => {
+                expect(m[1] % 4).toBe(0);
+                const key = slotHandlerName(iface, slot);
+                expect(names.has(key)).toBe(false);
+                names.add(key);
+                expect(typeof module.exports[key]).toBe("function");
+            });
+        }
+    });
+});
+
+describe("steam_api — objects", () => {
     let originalProcess: unknown;
     let mem: Uint8Array;
 
@@ -124,51 +127,61 @@ describe("steam_api — SteamMatchmaking", () => {
         resetD3D9SharedState();
         return system.process;
     };
+    const restore = () => {
+        (System.getInstance() as any).process = originalProcess;
+        resetD3D9SharedState();
+    };
 
-    test("returns a real object instead of NULL, and the same one on every call", () => {
+    test("SteamUser() returns a real object, the same one on every call", () => {
         const process = installMockProcess();
         try {
             const module = new SteamApi();
             module.initialize(process);
-            const first = module.exports["SteamMatchmaking"]!({} as any, mem, []);
+            const first = call(module, "SteamUser", [], mem);
             expect(first).not.toBe(0);
-            const second = module.exports["SteamMatchmaking"]!({} as any, mem, []);
-            expect(second).toBe(first);
-        } finally {
-            (System.getInstance() as any).process = originalProcess;
-            resetD3D9SharedState();
-        }
+            expect(call(module, "SteamUser", [], mem)).toBe(first);
+            expect(call(module, "SteamUtils", [], mem)).not.toBe(first);
+        } finally { restore(); }
     });
 
-    test("without a process, SteamMatchmaking fails safe to NULL instead of throwing", () => {
-        const module = new SteamApi();
-        module.initialize(null as any);
-        expect(module.exports["SteamMatchmaking"]!({} as any, new Uint8Array(0), [])).toBe(0);
+    test("GetSteamID writes an individual public-universe CSteamID through the hidden pointer", () => {
+        const process = installMockProcess();
+        try {
+            const module = new SteamApi();
+            module.initialize(process);
+            const out = 0x8000;
+            expect(call(module, "ISteamUser017_GetSteamID", [out], mem)).toBe(out);
+            const hi = Mem.readUint32(out + 4)!;
+            expect(hi >>> 24).toBe(1);            // universe: public
+            expect((hi >>> 20) & 0xf).toBe(1);    // account type: individual
+            expect(Mem.readUint32(out)).not.toBe(0);
+        } finally { restore(); }
     });
 
-    test("slot 15's handler reads both pushed args and never throws", () => {
-        const module = new SteamApi();
-        module.initialize(null as any);
-        expect(() =>
-            module.exports["ISteamMatchmaking_Slot15"]!({} as any, new Uint8Array(0), [0xdeadbeef, 0x1234])
-        ).not.toThrow();
-        expect(module.exports["ISteamMatchmaking_Slot15"]!({} as any, new Uint8Array(0), [0, 0])).toBe(0);
+    test("a Workshop query completes: a real call handle, and an empty OK result", () => {
+        const process = installMockProcess();
+        try {
+            const module = new SteamApi();
+            module.initialize(process);
+            const query = call(module, "ISteamUGC002_CreateQueryUserUGCRequest", [], mem);
+            expect(query).not.toBe(0);
+            const handle = call(module, "ISteamUGC002_SendQueryUGCRequest", [query, 0], mem);
+            expect(handle).not.toBe(0);
+            const failed = 0x9000, result = 0x9100;
+            expect(call(module, "ISteamUtils007_IsAPICallCompleted", [handle, 0, failed], mem)).toBe(1);
+            expect(Mem.readUint32(failed)).toBe(0);
+            expect(call(module, "ISteamUtils007_GetAPICallResult", [handle, 0, result, 24, 3401, failed], mem)).toBe(1);
+            expect(Mem.readUint32(result)).toBe(query);      // m_handle
+            expect(Mem.readUint32(result + 8)).toBe(1);      // m_eResult = k_EResultOK
+            expect(Mem.readUint32(result + 12)).toBe(0);     // no results
+        } finally { restore(); }
     });
 
-    test("every unverified slot (0..14, 16..19) logs instead of silently guessing and returns 0", () => {
+    test("the user is logged on and owns the game", () => {
         const module = new SteamApi();
         module.initialize(null as any);
-        for (const i of [...Array.from({ length: 15 }, (_, i) => i), 16, 17, 18, 19]) {
-            expect(module.exports[`ISteamMatchmaking_Slot${i}`]!({} as any, new Uint8Array(0), [])).toBe(0);
-        }
-    });
-
-    test("slot 20's handler reads all four pushed args and never throws", () => {
-        const module = new SteamApi();
-        module.initialize(null as any);
-        expect(() =>
-            module.exports["ISteamMatchmaking_Slot20"]!({} as any, new Uint8Array(0), [1, 2, 3, 4])
-        ).not.toThrow();
-        expect(module.exports["ISteamMatchmaking_Slot20"]!({} as any, new Uint8Array(0), [0, 0, 0, 0])).toBe(0);
+        expect(call(module, "ISteamUser017_BLoggedOn")).toBe(1);
+        expect(call(module, "ISteamUtils007_GetAppID")).toBe(STEAM_APP_ID);
+        expect(call(module, "ISteamApps006_BIsSubscribedApp", [STEAM_APP_ID])).toBe(1);
     });
 });
