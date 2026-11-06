@@ -19,6 +19,9 @@
  *     the address (see msvcp90.ts's ymath constants for the same shape). Each gets its own
  *     small zeroed cell; the actual value only has to be stable and unique, never a
  *     specific number.
+ *   - the classic locale itself (locale::_Init, use_facet's _Getcat, locale::id, collation):
+ *     real objects, because the importer inlines the code that reads them — see
+ *     crt-cpp-locale-vc11.ts.
  *   - facet/_Facet_base VFTABLES (`??_7...@6B@`): real one-slot vtables pointing at a
  *     shared `ret` stub — both classes declare exactly one virtual (the destructor), and a
  *     zeroed data cell here would make a virtual call jump through NULL.
@@ -34,6 +37,7 @@ import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { Mem } from "../core/memory/mem-accessor";
+import { Vc11ClassicLocale } from "./crt-cpp-locale-vc11";
 
 /** `this` (ECX, __thiscall) is both ctor/dtor return value and the identity of trivial facets. */
 const RETURN_THIS: ThunkImplementation = (ctx) => ctx.ecx >>> 0;
@@ -87,15 +91,7 @@ const ZERO_RETURN_NAMES = [
     "?unshift@?$codecvt@DDH@std@@QBEHAAHPAD1AAPAD@Z",
     "?_Gninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAEPADXZ",
     "?_Pninc@?$basic_streambuf@DU?$char_traits@D@std@@@std@@IAEPADXZ",
-    "?_Getcat@?$codecvt@DDH@std@@SAIPAPBVfacet@locale@2@PBV42@@Z",
     "?_Fiopen@std@@YAPAU_iobuf@@PBDHH@Z", // NULL: "could not open" — never a lie about success
-    "?_Getcoll@_Locinfo@std@@QBE?AU_Collvec@@XZ",
-    "_Strcoll",
-    "??Bid@locale@std@@QAEIXZ",
-    "?_Getgloballocale@locale@std@@CAPAV_Locimp@12@XZ",
-    "?_Getcat@?$ctype@D@std@@SAIPAPBVfacet@locale@2@PBV42@@Z",
-    "_Strxfrm",
-    "?_Init@locale@std@@CAPAV_Locimp@12@_N@Z",
     "?_Decref@facet@locale@std@@UAEPAV_Facet_base@3@XZ",
     "?_Syserror_map@std@@YAPBDH@Z",
     "?_Winerror_map@std@@YAPBDH@Z",
@@ -143,14 +139,19 @@ export class Msvcp110 implements IModule {
     private dataAddrs: Map<string, number> = new Map();
     private vtableStubAddr = 0;
     private badoffAddr = 0;
+    private process: Process | null = null;
+    // Vtable thunks dispatch under "msvcp90": these exports are merged into that module's.
+    private readonly locale = new Vc11ClassicLocale(() => this.process, "msvcp90");
 
     initialize(process: Process): void {
+        this.process = process;
         const exports = this.exports;
 
         for (const n of CTOR_DTOR_NAMES) exports[n] = RETURN_THIS;
         for (const n of VOID_NOOP_NAMES) exports[n] = NOOP_VOID;
         for (const n of ZERO_RETURN_NAMES) exports[n] = RETURN_ZERO;
         registerTolower(exports);
+        this.locale.register(exports);
 
         // basic_streambuf::getloc() returns a `locale` BY VALUE. The x86 MSVC ABI passes
         // that as a hidden pointer — the caller-allocated return slot — as the method's
@@ -210,6 +211,8 @@ export class Msvcp110 implements IModule {
 
     /** Invoked by system.ts's reset loop for every process.registerModule'd instance. */
     reregisterExports(process: Process): void {
+        this.process = process;
+        this.locale.reset();
         this.registerDataExports(process);
     }
 }

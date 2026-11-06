@@ -80,7 +80,8 @@ export const vc110CppExtras: FunctionDescriptor[] = [
         // copy form.
         method("?tolower@?$ctype@D@std@@QBEPBDPADPBD@Z", 2),
         method("?setstate@?$basic_ios@DU?$char_traits@D@std@@@std@@QAEXH_N@Z", 2, { returnType: "void" }),
-        method("?_Getcoll@_Locinfo@std@@QBE?AU_Collvec@@XZ", 0),
+        // Returns _Collvec by value from an instance method: a hidden result pointer, popped by the callee.
+        method("?_Getcoll@_Locinfo@std@@QBE?AU_Collvec@@XZ", 1),
         free("_Strcoll", 5),
         method("??Bid@locale@std@@QAEIXZ", 0),
         free("?_Getgloballocale@locale@std@@CAPAV_Locimp@12@XZ", 0),
