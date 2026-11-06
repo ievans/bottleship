@@ -76,6 +76,25 @@ describe("WaveMixer", () => {
     });
 });
 
+describe("WaveMixer volume", () => {
+    test("SetVolume's hundredths of a decibel scale the mix, ramping from the old level", () => {
+        const mixer = new WaveMixer();
+        const loud = decodeWave(wav(1, 22050, 16, new Array(8).fill(10000)))!;
+        mixer.play("a", loud);
+        mixer.setVolume(-600); // -6 dB: about half
+        const out = new Int16Array(8);
+        mixer.render(out, 4, 2, 22050);
+        expect(out[6]).toBe(5012); // the ramp lands on the new level by the end of the render
+        expect(out[0]).toBeGreaterThan(5012);
+        mixer.render(out, 4, 2, 22050);
+        expect([...out]).toEqual(new Array(8).fill(5012));
+        mixer.setVolume(-9600);
+        mixer.play("b", loud);
+        mixer.render(out, 4, 2, 22050);
+        expect(out[6]).toBe(0);
+    });
+});
+
 describe("wave track timing", () => {
     const synth = { sampleRate: 15360, render: () => {}, allNotesOff: () => {} } as unknown as DlsSynth;
     const segment = (length: number): PerfSegment => {

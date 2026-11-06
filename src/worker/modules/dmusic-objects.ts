@@ -172,6 +172,8 @@ export class AudioPathObject extends DMusicObject {
     buffer = 0;
     /** The path's tool graph (DMUS_PATH_AUDIOPATH_GRAPH), made on first request. */
     graph: GraphObject | null = null;
+    /** SetVolume's level, hundredths of a decibel. */
+    volume = 0;
     /** The waves playing on this path, and the stream that carries their mix into `buffer`. */
     mixer: WaveMixer | null = null;
     sink: DirectSoundSink | null = null;

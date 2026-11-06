@@ -290,6 +290,34 @@ describe("DirectMusic streams and COM lifetimes", () => {
         objects.push(rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as DMusicObject);
     });
 
+    test("StopEx on an audio path stops only what plays on that path; an empty target stops nothing", () => {
+        const {obj: perf, ptr: perfPtr} = make<PerformanceObject>(CLSID_DirectMusicPerformance);
+        const stops: unknown[][] = [];
+        (perf as any).engine = { stop: (seg: unknown, state: unknown, flags: number) => stops.push([seg, state, flags]) };
+        const PP = 0x640;
+        call("IDirectMusicPerformance8_CreateStandardAudioPath", [perfPtr, 8, 2, 1, PP]);
+        const pathA = Mem.readUint32(PP)!;
+        call("IDirectMusicPerformance8_CreateStandardAudioPath", [perfPtr, 8, 2, 1, PP]);
+        const pathB = Mem.readUint32(PP)!;
+        const a = rp.getComObjectByAddress(pathA) as any, b = rp.getComObjectByAddress(pathB) as any;
+        objects.push(a, b);
+        const s1 = { id: 1 }, s2 = { id: 2 }, s3 = { id: 3 };
+        perf.waveRoutes.set(s1 as any, a); perf.waveRoutes.set(s2 as any, b); perf.waveRoutes.set(s3 as any, a);
+
+        expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, pathA, 0, 0, 0x40])).toBe(0);
+        expect(stops).toEqual([[null, s1, 0x40], [null, s3, 0x40]]);
+
+        stops.length = 0;
+        const {ptr: unloaded} = make<SegmentObject>(CLSID_DirectMusicSegment); // nothing loaded behind it
+        expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, unloaded, 0, 0, 0])).toBe(0);
+        expect(call("IDirectMusicPerformance8_Stop", [perfPtr, unloaded, 0, 0, 0])).toBe(0);
+        expect(stops).toEqual([]);
+
+        expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, 0, 0, 0, 0])).toBe(0);
+        expect(stops).toEqual([[null, null, 0]]);
+        perf.waveRoutes.clear();
+    });
+
     test("replacing or destroying a port releases its buffer and DirectSound references", () => {
         const refs = new Map([[0x6000, 1], [0x6100, 1], [0x6200, 1]]);
         const change = (a: number[], n: number) => {

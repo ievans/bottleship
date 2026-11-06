@@ -861,7 +861,11 @@ export class DMusic implements IModule {
         if (!path.buffer) return;
         path.sink ??= new DirectSoundSink(this.process, path.buffer, path.channels, PATH_RATE);
         if (!path.sink.start()) return;
-        (path.mixer ??= new WaveMixer()).play(owner, sound);
+        if (!path.mixer) {
+            path.mixer = new WaveMixer();
+            path.mixer.setVolume(path.volume);
+        }
+        path.mixer.play(owner, sound);
         this.wavePaths.add(path);
         this.startPump();
     }
@@ -1099,18 +1103,33 @@ export class DMusic implements IModule {
             if (!perf) return E_POINTER;
             const seg = a[1] ? this.object<SegmentObject>(a[1]) : null;
             const state = a[2] ? this.object<SegmentStateObject>(a[2]) : null;
-            perf.engine?.stop(seg?.segment ?? null, state?.state ?? null, a[4]! >>> 0);
+            // Only when both are NULL does Stop mean everything; one with nothing playing
+            // behind it (an unloaded segment, an ended state) stops nothing.
+            const segment = seg?.segment ?? null, engineState = state?.state ?? null;
+            if ((a[1] || a[2]) && !segment && !engineState) return S_OK;
+            perf.engine?.stop(segment, engineState, a[4]! >>> 0);
             this.releaseEndedStates(perf);
             return S_OK;
         };
-        // StopEx(pObjectToStop, i64StopTime, dwFlags): a segment, a state, or NULL for all.
+        // StopEx(pObjectToStop, i64StopTime, dwFlags): a segment, a state, an audio path
+        // (everything playing on it), or NULL for everything.
         e["IDirectMusicPerformance8_StopEx"] = (_c, _m, a) => {
             const perf = perfOf(a);
             if (!perf) return E_POINTER;
+            const flags = a[4]! >>> 0;
             const target = a[1] ? this.object<DMusicObject>(a[1]) : null;
-            perf.engine?.stop(
-                target instanceof SegmentObject ? target.segment : null,
-                target instanceof SegmentStateObject ? target.state : null, a[4]! >>> 0);
+            if (!a[1]) {
+                perf.engine?.stop(null, null, flags);
+            } else if (target instanceof AudioPathObject) {
+                const onPath = [...perf.waveRoutes].filter(([, path]) => path === target).map(([state]) => state);
+                for (const state of onPath) perf.engine?.stop(null, state, flags);
+            } else if (target instanceof SegmentObject) {
+                if (target.segment) perf.engine?.stop(target.segment, null, flags);
+            } else if (target instanceof SegmentStateObject) {
+                if (target.state) perf.engine?.stop(null, target.state, flags);
+            } else {
+                return E_INVALIDARG;
+            }
             this.releaseEndedStates(perf);
             return S_OK;
         };
@@ -1646,7 +1665,17 @@ export class DMusic implements IModule {
             return qi({} as Parameters<ThunkImplementation>[0], mem, [path.buffer, a[6]! >>> 0, pp]) as number;
         };
         e["IDirectMusicAudioPath_Activate"] = () => S_OK;
-        e["IDirectMusicAudioPath_SetVolume"] = () => S_OK;
+        // HRESULT SetVolume(long lVolume, DWORD dwDuration): the path's mix gain. The fade
+        // duration is not followed; the change is ramped over the next few milliseconds.
+        e["IDirectMusicAudioPath_SetVolume"] = (_c, _m, a) => {
+            const path = this.object<AudioPathObject>(a[0]!);
+            if (!path) return E_POINTER;
+            const volume = a[1]! | 0;
+            if (volume > 0 || volume < -9600) return E_INVALIDARG;
+            path.volume = volume;
+            path.mixer?.setVolume(volume);
+            return S_OK;
+        };
         e["IDirectMusicAudioPath_ConvertPChannel"] = (_c, _m, a) => { Mem.writeUint32(a[2]! >>> 0, a[1]! >>> 0); return S_OK; };
     }
 
