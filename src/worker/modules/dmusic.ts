@@ -42,7 +42,7 @@ import { type GuestCall, type GuestRoutine, runGuestRoutine } from "../core/thun
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
 import { TimeService } from "../runtime/time";
 import {
-    AudioPathObject, BandObject, CLSID_DirectMusic, CLSID_DirectMusicBand, CLSID_DirectMusicCollection,
+    AudioPathObject, BandObject, GraphObject, CLSID_DirectMusic, CLSID_DirectMusicBand, CLSID_DirectMusicCollection,
     CLSID_DirectMusicComposer, CLSID_DirectMusicLoader, CLSID_DirectMusicPerformance, CLSID_DirectMusicSegment,
     CLSID_DirectMusicStyle, CLSID_DirectMusicSynth, CollectionObject, ComposerObject, DirectMusicObject, DMusicObject,
     IID_IDirectMusicCollection, IID_IDirectMusicGetLoader, IID_IDirectMusicStyle, IID_IUnknown, LoadableObject,
@@ -56,12 +56,17 @@ const E_NOTIMPL = 0x80004001 | 0;
 const E_NOINTERFACE = 0x80004002 | 0;
 const E_POINTER = 0x80004003 | 0;
 const E_FAIL = 0x80004005 | 0;
+const DSSCL_PRIORITY = 2;
+const DMUS_PATH_AUDIOPATH_GRAPH = 0x2200;
+const DMUS_PATH_BUFFER = 0x6000;
+const DMUS_APATH_DYNAMIC_3D = 6;
 const E_INVALIDARG = 0x80070057 | 0;
 const CLASS_E_CLASSNOTAVAILABLE = 0x80040111 | 0;
 const DMUS_S_PARTIALLOAD = 0x08781091;
 const DMUS_E_GET_UNSUPPORTED = 0x88781122 | 0;
 const DMUS_E_SET_UNSUPPORTED = 0x88781123 | 0;
 const DMUS_E_NOT_FOUND = 0x88781161 | 0;
+const DMUS_E_ALREADY_EXISTS = 0x88781177 | 0;
 const DMUS_E_NOT_INIT = 0x88781162 | 0;
 const DMUS_E_TRACK_NOT_FOUND = 0x88781166 | 0;
 const DMUS_E_LOADER_FAILEDOPEN = 0x88781182 | 0;
@@ -192,6 +197,7 @@ export class DMusic implements IModule {
         this.registerBandExports();
         this.registerCollectionExports();
         this.registerAudioPathExports();
+        this.registerGraphExports();
         this.registerComposerExports();
         this.registerDirectMusicExports();
         this.registerPortExports();
@@ -790,6 +796,37 @@ export class DMusic implements IModule {
         port.ownsBuffer = false;
     }
 
+    /** An audio path of standard `type` (0 for the default or a configured one) on `perf`'s DirectSound. */
+    private createAudioPath(perf: PerformanceObject | null, type: number): AudioPathObject {
+        const path = new AudioPathObject();
+        path.directSound = perf?.directMusic?.directSound ?? 0;
+        path.channels = type === DMUS_APATH_DYNAMIC_3D ? 1 : 2;
+        path.onDestroy = () => {
+            soundReference(this.process, path.buffer, true, false);
+            path.buffer = 0;
+        };
+        return path;
+    }
+
+    /** A new IDirectSound8 from the dsound module, at DSSCL_PRIORITY for `hWnd`; 0 when there is none. */
+    private createDirectSound(hWnd: number): number {
+        const exports = this.process.getModule("dsound")?.exports;
+        const create = exports?.["directsoundcreate8"];
+        const mem = Mem.getView();
+        if (!create || !mem) return 0;
+        const scratch = this.process.memory.alloc(4, "HEAP", "rw");
+        try {
+            Mem.writeUint32(scratch, 0);
+            const ctx = {} as Parameters<ThunkImplementation>[0];
+            if ((create(ctx, mem, [0, scratch, 0]) as number) !== S_OK) return 0;
+            const ds = Mem.readUint32(scratch) ?? 0;
+            if (ds) exports["idirectsound8_setcooperativelevel"]?.(ctx, mem, [ds, hWnd, DSSCL_PRIORITY]);
+            return ds;
+        } finally {
+            this.process.memory.free(scratch);
+        }
+    }
+
     private setDirectSound(obj: DirectMusicObject | PortObject, ptr: number): void {
         if (obj.directSound === ptr) return;
         soundReference(this.process, ptr, false, true);
@@ -896,7 +933,15 @@ export class DMusic implements IModule {
         // InitAudio(ppDirectMusic, ppDirectSound, hWnd, dwDefaultPathType, dwPChannelCount, dwFlags, pParams)
         e["IDirectMusicPerformance8_InitAudio"] = (_c, _m, a) => {
             const ppDirectSound = a[2]! >>> 0;
-            const hr = init(a[0]!, a[1]! >>> 0, ppDirectSound ? (Mem.readUint32(ppDirectSound) ?? 0) : 0);
+            let directSound = ppDirectSound ? (Mem.readUint32(ppDirectSound) ?? 0) : 0;
+            // A NULL *ppDirectSound asks InitAudio to create the DirectSound object and hand it
+            // back: the caller owns that reference, and goes on to use it (GetCaps, buffers).
+            if (ppDirectSound && !directSound) {
+                directSound = this.createDirectSound(a[3]! >>> 0);
+                if (!directSound) return E_FAIL;
+                Mem.writeUint32(ppDirectSound, directSound);
+            }
+            const hr = init(a[0]!, a[1]! >>> 0, directSound);
             const perf = perfOf(a);
             // InitAudio brings its own synthesizer: there is no AddPort to wait for.
             if (hr === S_OK && perf && !perf.engine) {
@@ -1175,14 +1220,15 @@ export class DMusic implements IModule {
             return S_OK;
         };
 
-        const audioPath = (ppOut: number): number => this.publish(new AudioPathObject(), ppOut);
-        e["IDirectMusicPerformance8_CreateAudioPath"] = (_c, _m, a) => audioPath(a[3]! >>> 0);
-        e["IDirectMusicPerformance8_CreateStandardAudioPath"] = (_c, _m, a) => audioPath(a[4]! >>> 0);
+        const audioPath = (a: number[], ppOut: number, type = 0): number => this.publish(this.createAudioPath(perfOf(a), type), ppOut);
+        e["IDirectMusicPerformance8_CreateAudioPath"] = (_c, _m, a) => audioPath(a, a[3]! >>> 0);
+        // CreateStandardAudioPath(dwType, dwPChannelCount, fActivate, ppNewPath)
+        e["IDirectMusicPerformance8_CreateStandardAudioPath"] = (_c, _m, a) => audioPath(a, a[4]! >>> 0, a[1]! >>> 0);
         e["IDirectMusicPerformance8_GetDefaultAudioPath"] = (_c, _m, a) => {
             const perf = perfOf(a);
             if (!perf || !a[1]) return E_POINTER;
             if (!validPointer(a[1] >>> 0, 4, "w")) return E_POINTER;
-            perf.defaultAudioPath ??= new AudioPathObject();
+            perf.defaultAudioPath ??= this.createAudioPath(perf, 0);
             return this.queryInterface(perf.defaultAudioPath, IID_IUnknown, a[1] >>> 0);
         };
     }
@@ -1487,12 +1533,81 @@ export class DMusic implements IModule {
 
     private registerAudioPathExports(): void {
         const e = this.exports;
-        // The caller QIs the returned object (usually for IDirectSoundBuffer to set volume);
-        // an audio path here has no buffer of its own to hand back.
-        e["IDirectMusicAudioPath_GetObjectInPath"] = (_c, _m, a) => { Mem.writeUint32(a[7]! >>> 0, 0); return DMUS_E_NOT_FOUND; };
+        // GetObjectInPath(dwPChannel, dwStage, dwBuffer, guidObject, dwIndex, iidInterface, ppObject).
+        // A path's own DirectSound buffer is the object asked for (to set its volume, pan or 3D
+        // position); the stages inside the performance hold nothing a caller can use here.
+        e["IDirectMusicAudioPath_GetObjectInPath"] = (_c, _m, a) => {
+            const pp = a[7]! >>> 0;
+            if (!pp || !validPointer(pp, 4, "w")) return E_POINTER;
+            Mem.writeUint32(pp, 0);
+            const path = this.object<AudioPathObject>(a[0]!);
+            if (!path || a[5]! >>> 0 !== 0) return DMUS_E_NOT_FOUND;
+            // The path's tool graph is made the first time anyone asks for it.
+            if (a[2]! >>> 0 === DMUS_PATH_AUDIOPATH_GRAPH) {
+                if (!path.graph) {
+                    path.graph = new GraphObject();
+                    const prev = path.onDestroy;
+                    path.onDestroy = () => { prev?.(); path.graph?.release(); path.graph = null; };
+                }
+                return this.queryInterface(path.graph, a[6]! >>> 0 ? guidAt(a[6]! >>> 0) : IID_IUnknown, pp);
+            }
+            if (a[2]! >>> 0 !== DMUS_PATH_BUFFER || a[3]! >>> 0 !== 0) return DMUS_E_NOT_FOUND;
+            path.buffer ||= createSinkBuffer(this.process, path.directSound, path.channels, 22050);
+            const qi = this.process.getModule("dsound")?.exports["IDirectSoundBuffer8_QueryInterface"];
+            const mem = Mem.getView();
+            if (!path.buffer || !qi || !mem) return DMUS_E_NOT_FOUND;
+            return qi({} as Parameters<ThunkImplementation>[0], mem, [path.buffer, a[6]! >>> 0, pp]) as number;
+        };
         e["IDirectMusicAudioPath_Activate"] = () => S_OK;
         e["IDirectMusicAudioPath_SetVolume"] = () => S_OK;
         e["IDirectMusicAudioPath_ConvertPChannel"] = (_c, _m, a) => { Mem.writeUint32(a[2]! >>> 0, a[1]! >>> 0); return S_OK; };
+    }
+
+    private registerGraphExports(): void {
+        const e = this.exports;
+        const graphOf = (a: number[]): GraphObject | null => this.object<GraphObject>(a[0]!);
+        const self = this;
+        // Messages are rendered without passing through the graph's tools.
+        e["IDirectMusicGraph_StampPMsg"] = (_c, _m, a) => (a[1] ? S_OK : E_POINTER);
+        // HRESULT InsertTool(IDirectMusicTool *pTool, DWORD *pdwPChannels, DWORD cPChannels, LONG lIndex)
+        e["IDirectMusicGraph_InsertTool"] = (ctx, mem, a) => {
+            const graph = graphOf(a), tool = a[1]! >>> 0;
+            if (!graph || !tool) return E_POINTER;
+            if (graph.tools.includes(tool)) return DMUS_E_ALREADY_EXISTS;
+            const index = a[4]! | 0;
+            const at = index < 0 ? Math.max(0, graph.tools.length + 1 + index) : Math.min(index, graph.tools.length);
+            graph.tools.splice(at, 0, tool);
+            const graphPtr = a[0]! >>> 0;
+            return runGuestRoutine(ctx, mem, (function* (): GuestRoutine {
+                yield self.vcall(tool, 1, [], "IDirectMusicTool::AddRef");
+                yield self.vcall(tool, 3, [graphPtr], "IDirectMusicTool::Init");
+                return S_OK;
+            })(), 20, "IDirectMusicGraph::InsertTool");
+        };
+        // HRESULT GetTool(DWORD dwIndex, IDirectMusicTool **ppTool)
+        e["IDirectMusicGraph_GetTool"] = (ctx, mem, a) => {
+            const pp = a[2]! >>> 0;
+            if (!pp || !validPointer(pp, 4, "w")) return E_POINTER;
+            const tool = graphOf(a)?.tools[a[1]! >>> 0] ?? 0;
+            Mem.writeUint32(pp, tool);
+            if (!tool) return DMUS_E_NOT_FOUND;
+            return runGuestRoutine(ctx, mem, (function* (): GuestRoutine {
+                yield self.vcall(tool, 1, [], "IDirectMusicTool::AddRef");
+                return S_OK;
+            })(), 12, "IDirectMusicGraph::GetTool");
+        };
+        // HRESULT RemoveTool(IDirectMusicTool *pTool)
+        e["IDirectMusicGraph_RemoveTool"] = (ctx, mem, a) => {
+            const graph = graphOf(a), tool = a[1]! >>> 0;
+            if (!graph || !tool) return E_POINTER;
+            const at = graph.tools.indexOf(tool);
+            if (at < 0) return DMUS_E_NOT_FOUND;
+            graph.tools.splice(at, 1);
+            return runGuestRoutine(ctx, mem, (function* (): GuestRoutine {
+                yield self.vcall(tool, 2, [], "IDirectMusicTool::Release");
+                return S_OK;
+            })(), 8, "IDirectMusicGraph::RemoveTool");
+        };
     }
 
     // ── composer ────────────────────────────────────────────────────────────────

@@ -47,6 +47,7 @@ export const IID_IDirectMusicAudioPath = "c87631f5-23be-4986-8836-05832fcc48f9";
 export const IID_IDirectMusicStyle = "d2ac28bd-b39b-11d1-8704-00600893b1bd";
 export const IID_IDirectMusicStyle8 = "fd24ad8a-a260-453d-bf50-6f9384f70985";
 export const IID_IDirectMusicComposer = "d2ac28bf-b39b-11d1-8704-00600893b1bd";
+export const IID_IDirectMusicGraph = "2befc277-5497-11d2-bccb-00a0c922e6eb";
 export const IID_IDirectMusicBand = "d2ac28c0-b39b-11d1-8704-00600893b1bd";
 export const IID_IDirectMusicCollection = "d2ac287c-b39b-11d1-8704-00600893b1bd";
 export const IID_IDirectMusicTrack = "f96029a1-4282-11d2-8717-00600893b1bd";
@@ -156,6 +157,25 @@ export class SegmentStateObject extends DMusicObject {
 export class AudioPathObject extends DMusicObject {
     readonly primaryVtable = "IDirectMusicAudioPath";
     readonly interfaces = { [IID_IDirectMusicAudioPath]: "IDirectMusicAudioPath" };
+    /** The performance's IDirectSound, which the path's buffer is created on. */
+    directSound = 0;
+    /** 1 for a 3D path's mono buffer, 2 for the stereo ones. */
+    channels = 2;
+    /** The path's IDirectSoundBuffer8 (DMUS_PATH_BUFFER 0), made on first request. */
+    buffer = 0;
+    /** The path's tool graph (DMUS_PATH_AUDIOPATH_GRAPH), made on first request. */
+    graph: GraphObject | null = null;
+}
+
+/**
+ * A tool graph. It holds the application's tools in order and gives them their Init call,
+ * but the performance here renders without routing messages through them.
+ */
+export class GraphObject extends DMusicObject {
+    readonly primaryVtable = "IDirectMusicGraph";
+    readonly interfaces = { [IID_IDirectMusicGraph]: "IDirectMusicGraph" };
+    /** Guest IDirectMusicTool pointers, each holding the reference InsertTool took. */
+    readonly tools: number[] = [];
 }
 
 export class ComposerObject extends DMusicObject {
