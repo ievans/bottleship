@@ -84,7 +84,6 @@ export const vc110Extras: FunctionDescriptor[] = [
     f("_wcsnicoll", 3),
     f("_wcstoui64", 3),
 
-    f("fgetws", 3),
     f("fputws", 2),
     f("fwprintf", 16),
 ];
