@@ -74,6 +74,9 @@ interface BandRef { time: number; band: LoadedBand }
  * What an IDirectMusicSegment holds: the track data, shared by every state playing it and
  * mutable while they do (a groove level set on the segment is heard by a state in flight).
  */
+/** One wave a segment starts. `sound` is whatever the host mixes; the performance only times it. */
+export interface WaveItem { time: number; sound: unknown }
+
 export class PerfSegment {
     length = 0;
     playStart = 0;
@@ -93,6 +96,8 @@ export class PerfSegment {
     chordScale = 0;
     events: SeqItem[] = [];
     curves: SeqCurve[] = [];
+    /** Wave track items: a sound that starts at `time` and plays out on the state's audio path. */
+    waves: WaveItem[] = [];
     /** A motif or transition plays this one pattern instead of choosing by groove level. */
     fixedPattern: { style: Style; pattern: StylePattern } | null = null;
 
@@ -209,6 +214,10 @@ export class Performance {
     random: () => number = Math.random;
     /** Segment notifications: (DMUS_NOTIFICATION_SEG*, state, music time it happens at). */
     onNotification: ((type: number, state: PerfSegmentState, time: number) => void) | null = null;
+    /** A wave track item came due: the host starts the sound for `state`. */
+    onWave: ((state: PerfSegmentState, wave: WaveItem) => void) | null = null;
+    /** A state ended, however it ended: the host stops whatever it started for it. */
+    onStateEnd: ((state: PerfSegmentState) => void) | null = null;
     /** Instruments a band takes from the default (GM) collection resolve here. */
     defaultCollection: DlsCollection | null = null;
 
@@ -429,6 +438,7 @@ export class Performance {
     private finish(s: PerfSegmentState, notification: number, at: number): void {
         if (s.ended) return;
         s.ended = true;
+        this.onStateEnd?.(s);
         // Notes this state started stop with it; ones it had yet to start never do.
         this.events = this.events.filter((e) => e.owner !== s || e.kind === "off" || e.time < at);
         for (const e of this.events) if (e.owner === s && e.kind === "off" && e.time > at) e.time = at;
@@ -478,6 +488,11 @@ export class Performance {
 
         if (seg.fixedPattern || seg.styles.length > 0) this.playPatterns(s, a, b, fresh);
         if (seg.events.length > 0 || seg.curves.length > 0) this.playSequence(s, a, b);
+        // A wave starts when its time comes; unlike a band or a tempo, one already past
+        // when playback lands later in the segment does not start.
+        for (const wave of seg.waves) {
+            if (wave.time >= a - TICK_SLACK && wave.time < b - TICK_SLACK) this.onWave?.(s, wave);
+        }
     }
 
     private applyBand(loaded: LoadedBand): void {
