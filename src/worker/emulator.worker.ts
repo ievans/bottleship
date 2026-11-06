@@ -56,6 +56,7 @@ import { WinMM } from "./modules/winmm";
 import { Ole32 } from "./modules/ole32";
 import { Oleaut32 } from "./modules/oleaut32";
 import { Oledlg } from "./modules/oledlg";
+import { D3D11 } from "./modules/d3d11";
 import { DDraw } from "./modules/ddraw";
 import { getOverlayCompositePlan } from "./modules/user32/dialog-overlay";
 import { dropVideoPlaneDirty, getVideoPlanePlan, isVideoPlaneDirty, notifyVideoPlaneComposited } from "./video/video-plane-policy";
@@ -2544,6 +2545,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       const ole32 = new Ole32();
       const oleaut32 = new Oleaut32();
       const oledlg = new Oledlg();
+      const d3d11 = new D3D11();
       const ddraw = new DDraw();
       const dinput = new DInput();
       const dplayx = new DPlayX();
@@ -2626,6 +2628,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       ole32.initialize(process);
       oleaut32.initialize(process);
       oledlg.initialize(process);
+      d3d11.initialize(process);
       ddraw.initialize(process);
       dinput.initialize(process);
       dplayx.initialize(process);
@@ -2733,6 +2736,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.registerModule(ole32.name, ole32);
       process.registerModule(oleaut32.name, oleaut32);
       process.registerModule(oledlg.name, oledlg);
+      process.registerModule(d3d11.name, d3d11);
       process.registerModule(ddraw.name, ddraw);
       process.registerModule(dinput.name, dinput);
       process.registerModule(dplayx.name, dplayx);
@@ -2816,6 +2820,7 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       process.dispatcher.registerModule(winmm.name, winmm.exports);
       process.dispatcher.registerModule(ole32.name, ole32.exports);
       process.dispatcher.registerModule(oledlg.name, oledlg.exports);
+      process.dispatcher.registerModule(d3d11.name, d3d11.exports);
       process.dispatcher.registerModule(ddraw.name, ddraw.exports);
       process.dispatcher.registerModule(dinput.name, dinput.exports);
       process.dispatcher.registerModule(dplayx.name, dplayx.exports);
