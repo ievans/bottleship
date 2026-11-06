@@ -141,6 +141,10 @@ export class WebGPUBackend implements RenderBackend {
         if (adapter.features.has("float32-blendable" as GPUFeatureName)) {
             requiredFeatures.push("float32-blendable" as GPUFeatureName);
         }
+        // D3D11's D32_FLOAT_S8X24 depth-stencil family has no other faithful WebGPU format.
+        if (adapter.features.has("depth32float-stencil8")) {
+            requiredFeatures.push("depth32float-stencil8");
+        }
         return await adapter.requestDevice({ requiredFeatures });
     }
 

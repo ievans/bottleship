@@ -80,7 +80,7 @@ export interface RenderActive {
 /** `video` is OURS: the compositor that puts a fallback video-overlay frame on the
  *  screen when the guest is inside a playback loop and presenting nothing. Everything
  *  else is a present the GUEST asked for. */
-export type PresenterKind = "ddraw" | "glide" | "d3d8" | "d3d9" | "gdi" | "opengl" | "video";
+export type PresenterKind = "ddraw" | "glide" | "d3d8" | "d3d9" | "d3d11" | "gdi" | "opengl" | "video";
 
 export class RenderService {
     private backend: RenderBackend | null = null;

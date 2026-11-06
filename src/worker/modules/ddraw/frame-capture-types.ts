@@ -199,6 +199,9 @@ export type CapturedDrawCall = {
     // Draw-time viewport (as handed to the executor). Distinguishes main-view vs
     // inset-view (HUD) draws and exposes stale/mangled viewports (thin-sliver geometry).
     viewport?: { x: number; y: number; width: number; height: number; minZ: number; maxZ: number } | null;
+    /** D3D11 draws: topology, bound shader resources, depth/blend state, and why a draw was
+     *  skipped (`skipped`), which the shared FFP fields above cannot describe. */
+    d3d11?: Record<string, unknown>;
     // ARGB1555 pixel sampling (first 8 raw pixels from texture guest memory)
     tex0Pixels?: Array<{raw: number; bit15: boolean; r5: number; g5: number; b5: number}>;
 };
