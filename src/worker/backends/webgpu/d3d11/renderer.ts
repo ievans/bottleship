@@ -22,7 +22,7 @@ import type { WebGPUBackend } from "../webgpu-backend";
 import { parseDxbc, type DxbcContainer } from "./sm4/dxbc";
 import { pixelLinkage, translateShader, semanticKey, type TranslatedShader, type ShaderBindings,
     CB_BINDING_BASE, TEXTURE_BINDING_BASE, SAMPLER_BINDING_BASE, UnsupportedShader } from "./sm4/wgsl";
-import { textureFormat, viewFormat, vertexFormat, isFloat32Format, type TextureFormatInfo } from "./formats";
+import { textureFormat, viewFormat, vertexFormat, isFloat32Format, isDepthFamily, type TextureFormatInfo } from "./formats";
 import { decodeBlend, decodeRaster, decodeDepthStencil, decodeSampler, type BlendState, type RasterState, type DepthStencilState } from "./states";
 import * as frameCapture from "../../../modules/ddraw/frame-capture";
 
@@ -138,11 +138,15 @@ export class D3D11Renderer implements RenderActive {
 
     presentCount = 0;
     drawCount = 0;
+    /** The device enabled the 16-bit normalized texture formats (an optional WebGPU feature). */
+    private readonly norm16: boolean;
 
     constructor(private readonly backend: WebGPUBackend) {
         const device = backend.getDevice();
         if (!device) throw new Error("D3D11: no WebGPU device");
         this.device = device;
+        const features = device.features as ReadonlySet<string> | undefined;
+        this.norm16 = !!features && (features.has("texture-formats-tier1") || (features.has("unorm16-texture-formats") && features.has("snorm16-texture-formats")));
         this.arena = this.createArena(ARENA_INITIAL);
         this.dummies = {
             texture: new Map(),
@@ -220,7 +224,7 @@ export class D3D11Renderer implements RenderActive {
     }
 
     createTexture2D(width: number, height: number, mips: number, layers: number, dxgi: number, bind: number, misc: number): TextureRes | null {
-        const info = textureFormat(dxgi, (bind & BIND_DEPTH_STENCIL) !== 0);
+        const info = textureFormat(dxgi, (bind & BIND_DEPTH_STENCIL) !== 0, this.norm16);
         if (!info) { this.warnOnce(`fmt${dxgi}`, `texture format ${dxgi} has no WebGPU mapping`); return null; }
         const fullChain = Math.floor(Math.log2(Math.max(width, height, 1))) + 1;
         const levels = mips === 0 ? fullChain : Math.min(mips, fullChain);
@@ -765,6 +769,28 @@ export class D3D11Renderer implements RenderActive {
             backend: "d3d11", min: this.scrubMin, max: this.scrubMax, target: this.scrubTarget,
             exclude: this.scrubExclude, lastFrameDraws: this.scrubLastFrameDraws, lastCut: this.scrubLastCut,
         };
+    }
+
+    /**
+     * D3D11_FORMAT_SUPPORT bits for a DXGI format, from what this renderer can create:
+     * 0 when the format has no texture, vertex or index use here. No multisampling.
+     */
+    formatSupport(dxgi: number): number {
+        const BUFFER = 0x1, IA_VERTEX = 0x2, IA_INDEX = 0x4, TEX = 0x20 | 0x40 | 0x80, LOAD = 0x100, SAMPLE = 0x200,
+            COMPARISON = 0x400, MIP = 0x1000, MIP_AUTOGEN = 0x2000, RENDER_TARGET = 0x4000, BLENDABLE = 0x8000,
+            DEPTH_STENCIL = 0x10000, CPU_LOCKABLE = 0x20000, DISPLAY = 0x80000;
+        let bits = 0;
+        const color = textureFormat(dxgi, false, this.norm16);
+        if (color) {
+            bits |= TEX | LOAD | MIP | CPU_LOCKABLE;
+            if (!/int$/.test(color.format)) bits |= SAMPLE;
+            if (!color.block) bits |= RENDER_TARGET | (/int$/.test(color.format) ? 0 : BLENDABLE | MIP_AUTOGEN);
+            if (dxgi === 28 || dxgi === 29 || dxgi === 87 || dxgi === 91 || dxgi === 24) bits |= DISPLAY;
+        }
+        if (isDepthFamily(dxgi)) bits |= 0x20 | DEPTH_STENCIL | (textureFormat(dxgi, true) ? LOAD | SAMPLE | COMPARISON : 0);
+        if (vertexFormat(dxgi)) bits |= BUFFER | IA_VERTEX;
+        if (dxgi === 42 || dxgi === 57) bits |= BUFFER | IA_INDEX; // R32_UINT, R16_UINT
+        return bits;
     }
 
     // ---- copies and mips ----

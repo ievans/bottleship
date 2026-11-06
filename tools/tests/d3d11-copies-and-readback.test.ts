@@ -86,7 +86,7 @@ describe("D3D11Device CopySubresourceRegion, Map and Unmap", () => {
 
     test("Map(READ) of a texture fills the mapping from the GPU, and its Unmap writes nothing back", async () => {
         const tex = texture(2, 1);
-        put(0x100, tex, { rowPitch: 8, mapSize: 8 });
+        put(0x100, tex);
         const pMapped = 0x400;
         expect(await impl("Map", [0x100, 0, 1, 0, pMapped])).toBe(0);
         const ptr = new DataView(mem.buffer).getUint32(pMapped, true);
@@ -98,7 +98,7 @@ describe("D3D11Device CopySubresourceRegion, Map and Unmap", () => {
 
     test("Map(WRITE) of a texture uploads on Unmap without a readback", () => {
         const tex = texture(2, 1);
-        put(0x100, tex, { rowPitch: 8, mapSize: 8 });
+        put(0x100, tex);
         expect(impl("Map", [0x100, 0, 2, 0, 0x400])).toBe(0);
         impl("Unmap", [0x100, 0]);
         expect(calls.map((c) => c[0])).toEqual(["writeTexture"]);

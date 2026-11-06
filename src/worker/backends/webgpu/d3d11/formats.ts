@@ -36,17 +36,21 @@ export function isDepthFamily(format: number): boolean {
     return depthFamily(format) !== null && [40, 45, 20, 55, 39, 44, 19, 53].includes(format);
 }
 
-/** Resolve a resource's DXGI format; `asDepth` when the resource is bound DEPTH_STENCIL. */
-export function textureFormat(f: number, asDepth: boolean): TextureFormatInfo | null {
+/**
+ * Resolve a resource's DXGI format; `asDepth` when the resource is bound DEPTH_STENCIL.
+ * The 16-bit normalized formats exist in WebGPU only with an optional device feature, so
+ * they resolve only when `norm16` says the device enabled it.
+ */
+export function textureFormat(f: number, asDepth: boolean, norm16 = false): TextureFormatInfo | null {
     if (asDepth) return depthFamily(f);
     switch (f) {
         case 1: case 2: return color("rgba32float", 16);
         case 3: return color("rgba32uint", 16);
         case 4: return color("rgba32sint", 16);
         case 9: case 10: return color("rgba16float", 8);
-        case 11: return color("rgba16unorm" as GPUTextureFormat, 8);
+        case 11: return norm16 ? color("rgba16unorm" as GPUTextureFormat, 8) : null;
         case 12: return color("rgba16uint", 8);
-        case 13: return color("rgba16snorm" as GPUTextureFormat, 8);
+        case 13: return norm16 ? color("rgba16snorm" as GPUTextureFormat, 8) : null;
         case 14: return color("rgba16sint", 8);
         case 15: case 16: return color("rg32float", 8);
         case 17: return color("rg32uint", 8);
@@ -59,7 +63,7 @@ export function textureFormat(f: number, asDepth: boolean): TextureFormatInfo | 
         case 31: return color("rgba8snorm", 4);
         case 32: return color("rgba8sint", 4);
         case 33: case 34: return color("rg16float", 4);
-        case 35: return color("rg16unorm" as GPUTextureFormat, 4);
+        case 35: return norm16 ? color("rg16unorm" as GPUTextureFormat, 4) : null;
         case 36: return color("rg16uint", 4);
         case 39: case 41: return color("r32float", 4);
         case 42: return color("r32uint", 4);
@@ -68,7 +72,7 @@ export function textureFormat(f: number, asDepth: boolean): TextureFormatInfo | 
         case 50: return color("rg8uint", 2);
         case 51: return color("rg8snorm", 2);
         case 53: case 54: return color("r16float", 2);
-        case 56: return color("r16unorm" as GPUTextureFormat, 2);
+        case 56: return norm16 ? color("r16unorm" as GPUTextureFormat, 2) : null;
         case 57: return color("r16uint", 2);
         case 60: case 61: case 65: return color("r8unorm", 1);
         case 62: return color("r8uint", 1);

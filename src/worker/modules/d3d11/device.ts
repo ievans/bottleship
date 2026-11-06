@@ -14,7 +14,7 @@
 import { Process } from "../../core/process";
 import { ThunkImplementation } from "../../core/thunking/thunk-dispatcher";
 import { installComVtable } from "../../core/com/install-com-vtable";
-import { allocateComObject } from "../../core/com/com-memory";
+import { allocateComObject, freeComObject } from "../../core/com/com-memory";
 import { Mem } from "../../core/memory/mem-accessor";
 import { Logger, LogCategory } from "../../core/logger";
 import { System } from "../../core/system";
@@ -32,6 +32,7 @@ const E_NOINTERFACE = 0x80004002;
 const MAP_READ = 1, MAP_READ_WRITE = 3;
 const E_POINTER = 0x80004003;
 const E_NOTIMPL = 0x80004001;
+const E_FAIL = 0x80004005;
 const E_INVALIDARG = 0x80070057;
 const DXGI_ERROR_NOT_FOUND = 0x887a0002;
 const COM_MODULE = "d3d11_com";
@@ -47,23 +48,27 @@ interface TraceRecord {
 type Res = BufferRes | TextureRes | ViewRes | ShaderRes | InputLayoutRes | SamplerRes | StateRes<unknown>;
 
 interface ComObj {
+    /** The vtable layout (an INTERFACES key). */
     iface: string;
+    /** The real interfaces the object answers QueryInterface for, beyond `iface` and IUnknown. */
+    iids?: ReadonlyArray<keyof typeof IID>;
     refs: number;
+    /** Device-level objects live as long as the device: their last Release frees nothing. */
+    pinned?: boolean;
     aliases: Map<string, number>;
     desc?: Uint8Array;
     res?: Res;
     /** The resource a view was made from (ID3D11View::GetResource). */
     resource?: number;
-    /** Guest memory Map hands out, and how it was last mapped. */
-    mapPtr?: number;
-    mapSize?: number;
-    mapType?: number;
-    mapSub?: number;
-    rowPitch?: number;
+    /** Guest memory Map hands out, per subresource, and how it is mapped. */
+    maps?: Map<number, { ptr: number; size: number; rowPitch: number; type: number }>;
     queryType?: number;
     /** Swap chain: the current back buffer object. */
     backBuffer?: number;
 }
+
+/** Buffers and textures answer QueryInterface for ID3D11Resource as well as their own interface. */
+const RESOURCE_IIDS = ["ID3D11Resource"] as const;
 
 const hex = (n: number): string => "0x" + (n >>> 0).toString(16);
 const f32 = (bits: number): number => new Float32Array(new Uint32Array([bits >>> 0]).buffer)[0]!;
@@ -88,7 +93,12 @@ function writeWide(ptr: number, text: string, maxChars: number): void {
 const readU32 = (p: number): number => (Mem.readUint32(p) ?? 0) >>> 0;
 const readF32 = (p: number): number => f32(readU32(p));
 const readStruct = (p: number, size: number): Uint8Array | null => (p ? Mem.readBytes(p, size)?.slice() ?? null : null);
-const SRV_DIM: Record<number, GPUTextureViewDimension> = { 2: "1d", 3: "2d-array", 4: "2d", 5: "2d-array", 6: "2d", 8: "3d", 9: "cube", 10: "cube-array" };
+/**
+ * D3D11_SRV_DIMENSION: 2 TEXTURE1D, 3 TEXTURE1DARRAY, 4 TEXTURE2D, 5 TEXTURE2DARRAY, 6 TEXTURE2DMS,
+ * 7 TEXTURE2DMSARRAY, 8 TEXTURE3D, 9 TEXTURECUBE, 10 TEXTURECUBEARRAY. WebGPU has no 1D arrays,
+ * and this device creates no multisampled textures, so the MS views read single-sample 2D.
+ */
+const SRV_DIM: Record<number, GPUTextureViewDimension> = { 2: "1d", 3: "2d-array", 4: "2d", 5: "2d-array", 6: "2d", 7: "2d-array", 8: "3d", 9: "cube", 10: "cube-array" };
 
 export class D3D11Device {
     private readonly vtables = new Map<string, number>();
@@ -100,6 +110,7 @@ export class D3D11Device {
     private factory = 0;
     private output = 0;
     private readonly record: TraceRecord = { counts: {}, recent: [], presents: 0 };
+    private readonly unimplemented = new Set<string>();
 
     constructor(private readonly process: Process, readonly featureLevel: number, private readonly renderer: D3D11Renderer) {
         (globalThis as Record<string, unknown>).__d3d11Trace = this.record;
@@ -127,6 +138,7 @@ export class D3D11Device {
         return vt;
     }
 
+    /** A new object holding one reference, which belongs to whoever receives it. */
     private create(iface: string, extra: Partial<ComObj> = {}): number {
         const mem = this.process.getCurrentMemory();
         const ptr = allocateComObject(this.process.memory, mem, this.vtable(iface)) >>> 0;
@@ -134,12 +146,39 @@ export class D3D11Device {
         return ptr;
     }
 
+    /** Hand a just-created object to the caller: its first reference is theirs. */
+    private give(pp: number, ptr: number): number {
+        if (!pp) { this.release(ptr); return E_POINTER; }
+        Mem.writeUint32(pp, ptr >>> 0);
+        return S_OK;
+    }
+
+    /** Hand out an existing object, adding the caller's reference. */
     private out(pp: number, ptr: number): number {
         if (!pp) return E_POINTER;
         Mem.writeUint32(pp, ptr >>> 0);
         const o = this.objects.get(ptr);
         if (o) o.refs++;
         return S_OK;
+    }
+
+    /**
+     * Drop one reference; the last one frees the guest COM block and whatever the object
+     * holds (a view its resource, a swap chain its back buffer). GPU objects are left to
+     * garbage collection: the context may still have them bound, which in D3D11 keeps them
+     * alive.
+     */
+    private release(ptr: number): number {
+        const o = this.objects.get(ptr >>> 0);
+        if (!o) return 0;
+        if (o.refs > 0) o.refs--;
+        if (o.refs > 0 || o.pinned) return o.refs;
+        this.objects.delete(ptr >>> 0);
+        for (const m of o.maps?.values() ?? []) this.process.memory.free(m.ptr);
+        if (o.resource) this.release(o.resource);
+        if (o.backBuffer) this.release(o.backBuffer);
+        freeComObject(this.process.memory, ptr >>> 0);
+        return 0;
     }
 
     private res<T extends Res["kind"]>(ptr: number, kind: T): Extract<Res, { kind: T }> | null {
@@ -154,6 +193,7 @@ export class D3D11Device {
         this.adapter = this.create("IDXGIAdapter");
         this.factory = this.create("IDXGIFactory");
         this.output = this.create("IDXGIOutput");
+        for (const p of [this.device, this.context, this.dxgiDevice, this.adapter, this.factory, this.output]) this.objects.get(p)!.pinned = true;
         const dev = this.objects.get(this.device)!;
         for (const iid of [IID.IDXGIDevice, IID.IDXGIDevice1, IID.IDXGIObject]) dev.aliases.set(iid, this.dxgiDevice);
         this.objects.get(this.dxgiDevice)!.aliases.set(IID.ID3D11Device, this.device);
@@ -169,11 +209,18 @@ export class D3D11Device {
         const key = `${iface}::${name}`;
         return (_ctx, _mem, args) => {
             const impl = this.impls[name];
-            const unhandledCreate = !impl && name.startsWith("Create");
-            if (unhandledCreate && args[argCount - 1]) Mem.writeUint32(args[argCount - 1]! >>> 0, 0);
+            if (!impl) {
+                // Not implemented: say so once, NULL an object out-parameter, and fail rather than
+                // report a success nothing backs.
+                if (!this.unimplemented.has(key)) {
+                    this.unimplemented.add(key);
+                    Logger.warn(LogCategory.D3D9, `[D3D11] ${key} is not implemented (E_NOTIMPL)`);
+                }
+                if (/^(Create|Get|Enum|Open)/.test(name) && argCount > 1 && args[argCount - 1]) Mem.writeUint32(args[argCount - 1]! >>> 0, 0);
+            }
             let result: number | Promise<number>;
             try {
-                result = impl ? impl.call(this, args.map((a) => a >>> 0), iface) : unhandledCreate ? E_NOTIMPL : S_OK;
+                result = impl ? impl.call(this, args.map((a) => a >>> 0), iface) : E_NOTIMPL;
             } catch (e) {
                 Logger.error(LogCategory.D3D9, `[D3D11] ${key} threw: ${e}`);
                 result = E_INVALIDARG;
@@ -195,10 +242,9 @@ export class D3D11Device {
             const iid = readGuid(riid!);
             const obj = this.objects.get(self!);
             if (!ppv) return E_POINTER;
-            const isResource = obj?.iface === "ID3D11Texture2D" || obj?.iface === "ID3D11Buffer";
             const own = obj && (iid === IID.IUnknown || IID[obj.iface as keyof typeof IID] === iid
-                || (obj.iface.startsWith("ID3D11") && iid === IID.ID3D11DeviceChild)
-                || (isResource && iid === IID.ID3D11Resource));
+                || (obj.iface.startsWith("ID3D11") && obj.iface !== "ID3D11Device" && iid === IID.ID3D11DeviceChild)
+                || obj.iids?.some((name) => IID[name] === iid));
             const target = own ? self! : obj?.aliases.get(iid);
             if (target === undefined) {
                 Mem.writeUint32(ppv, 0);
@@ -208,7 +254,7 @@ export class D3D11Device {
             return this.out(ppv, target);
         },
         AddRef(a) { const o = this.objects.get(a[0]!); return o ? ++o.refs : 1; },
-        Release(a) { const o = this.objects.get(a[0]!); return o ? Math.max(--o.refs, 0) : 0; },
+        Release(a) { return this.release(a[0]!); },
 
         // ---- device: resources ----
         CreateBuffer(a) {
@@ -220,7 +266,8 @@ export class D3D11Device {
             const sysMem = a[2] ? readU32(a[2]!) : 0;
             const init = sysMem ? Mem.readBytes(sysMem, size) : null;
             const res = this.renderer.createBuffer(size, bind, init);
-            return this.out(a[3]!, this.create("ID3D11Buffer", { desc, res, mapSize: size, rowPitch: size }));
+            if (!a[3]) return S_FALSE; // a parameter check: no object wanted
+            return this.give(a[3]!, this.create("ID3D11Buffer", { desc, res, iids: RESOURCE_IIDS }));
         },
         CreateTexture2D(a) {
             // D3D11_TEXTURE2D_DESC: Width, Height, MipLevels, ArraySize, Format, SampleDesc, Usage, BindFlags, CPUAccessFlags, MiscFlags.
@@ -242,12 +289,10 @@ export class D3D11Device {
                     }
                 }
             }
-            const rowPitch = res ? (res.info.block ? Math.ceil(res.width / 4) * res.info.bytes : res.width * res.info.bytes) : u(0) * 4;
-            const rows = res?.info.block ? Math.ceil(u(4) / 4) : u(4);
-            return this.out(a[3]!, this.create("ID3D11Texture2D", { desc, res: res ?? undefined, rowPitch, mapSize: rowPitch * Math.max(1, rows) }));
+            if (!res) { if (a[3]) Mem.writeUint32(a[3]!, 0); return E_INVALIDARG; } // format the renderer cannot create
+            if (!a[3]) return S_FALSE;
+            return this.give(a[3]!, this.create("ID3D11Texture2D", { desc, res, iids: RESOURCE_IIDS }));
         },
-        CreateTexture1D(a) { Logger.warn(LogCategory.D3D9, "[D3D11] CreateTexture1D: not rendered"); return this.out(a[3]!, this.create("ID3D11Texture2D", { desc: readStruct(a[1]!, 32) ?? undefined })); },
-        CreateTexture3D(a) { Logger.warn(LogCategory.D3D9, "[D3D11] CreateTexture3D: not rendered"); return this.out(a[3]!, this.create("ID3D11Texture2D", { desc: readStruct(a[1]!, 36) ?? undefined })); },
         CreateShaderResourceView(a) {
             const tex = this.res(a[1]!, "texture");
             let view: ViewRes | undefined;
@@ -263,7 +308,7 @@ export class D3D11Device {
                     view = this.renderer.createView(tex, 0, 0, 0, 0, tex.layers, tex.layers > 1 ? "2d-array" : "2d", false);
                 }
             }
-            return this.out(a[3]!, this.create("ID3D11View", { res: view, resource: a[1] }));
+            return this.view(a[1]!, view, a[3]!, "ID3D11ShaderResourceView");
         },
         CreateRenderTargetView(a) {
             const tex = this.res(a[1]!, "texture");
@@ -275,7 +320,7 @@ export class D3D11Device {
                 const layer = v && v.getUint32(4, true) === 5 ? v.getUint32(12, true) : 0;
                 view = this.renderer.createView(tex, v ? v.getUint32(0, true) : 0, mip, 1, layer, 1, "2d", true);
             }
-            return this.out(a[3]!, this.create("ID3D11View", { res: view, resource: a[1] }));
+            return this.view(a[1]!, view, a[3]!, "ID3D11RenderTargetView");
         },
         CreateDepthStencilView(a) {
             const tex = this.res(a[1]!, "texture");
@@ -285,7 +330,7 @@ export class D3D11Device {
                 const mip = d ? new DataView(d.buffer).getUint32(12, true) : 0;
                 view = this.renderer.createView(tex, 0, mip, 1, 0, 1, "2d", true);
             }
-            return this.out(a[3]!, this.create("ID3D11View", { res: view, resource: a[1] }));
+            return this.view(a[1]!, view, a[3]!, "ID3D11DepthStencilView");
         },
         CreateInputLayout(a) {
             // D3D11_INPUT_ELEMENT_DESC: SemanticName, SemanticIndex, Format, InputSlot, AlignedByteOffset, InputSlotClass, InstanceDataStepRate.
@@ -301,19 +346,23 @@ export class D3D11Device {
                     perInstance: readU32(e + 20) === 1, stepRate: readU32(e + 24),
                 });
             }
-            return this.out(a[5]!, this.create("ID3D11Shader", { res: this.renderer.createInputLayout(elements) }));
+            return this.give(a[5]!, this.create("ID3D11Shader", { res: this.renderer.createInputLayout(elements), iids: ["ID3D11InputLayout"] }));
         },
         CreateVertexShader(a) { return this.shader("vertex", a[1]!, a[2]!, a[4]!); },
         CreatePixelShader(a) { return this.shader("pixel", a[1]!, a[2]!, a[4]!); },
         CreateGeometryShader(a) { return this.shader("geometry", a[1]!, a[2]!, a[4]!); },
         CreateGeometryShaderWithStreamOutput(a) { return this.shader("geometry", a[1]!, a[2]!, a[9]!); },
-        CreateBlendState(a) { return this.out(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 264) ?? undefined, res: this.renderer.blendState(readStruct(a[1]!, 264)) })); },
-        CreateDepthStencilState(a) { return this.out(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 52) ?? undefined, res: this.renderer.depthStencilState(readStruct(a[1]!, 52)) })); },
-        CreateRasterizerState(a) { return this.out(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 40) ?? undefined, res: this.renderer.rasterState(readStruct(a[1]!, 40)) })); },
-        CreateSamplerState(a) { return this.out(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 52) ?? undefined, res: this.renderer.createSampler(readStruct(a[1]!, 52)) })); },
-        CreateQuery(a) { return a[2] ? this.out(a[2]!, this.create("ID3D11Query", { queryType: a[1] ? readU32(a[1]!) : 0 })) : S_FALSE; },
-        CreatePredicate(a) { return a[2] ? this.out(a[2]!, this.create("ID3D11Query", { queryType: 1 })) : S_FALSE; },
-        CheckFormatSupport(a) { if (a[2]) Mem.writeUint32(a[2]!, 0x7fffffff); return S_OK; },
+        CreateBlendState(a) { return this.give(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 264) ?? undefined, res: this.renderer.blendState(readStruct(a[1]!, 264)), iids: ["ID3D11BlendState"] })); },
+        CreateDepthStencilState(a) { return this.give(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 52) ?? undefined, res: this.renderer.depthStencilState(readStruct(a[1]!, 52)), iids: ["ID3D11DepthStencilState"] })); },
+        CreateRasterizerState(a) { return this.give(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 40) ?? undefined, res: this.renderer.rasterState(readStruct(a[1]!, 40)), iids: ["ID3D11RasterizerState"] })); },
+        CreateSamplerState(a) { return this.give(a[2]!, this.create("ID3D11State", { desc: readStruct(a[1]!, 52) ?? undefined, res: this.renderer.createSampler(readStruct(a[1]!, 52)), iids: ["ID3D11SamplerState"] })); },
+        CreateQuery(a) { return a[2] ? this.give(a[2]!, this.create("ID3D11Query", { queryType: a[1] ? readU32(a[1]!) : 0, iids: ["ID3D11Asynchronous"] })) : S_FALSE; },
+        CreatePredicate(a) { return a[2] ? this.give(a[2]!, this.create("ID3D11Query", { queryType: 1, iids: ["ID3D11Asynchronous", "ID3D11Predicate"] })) : S_FALSE; },
+        CheckFormatSupport(a) {
+            const bits = this.renderer.formatSupport(a[1]!);
+            if (a[2]) Mem.writeUint32(a[2]!, bits);
+            return bits ? S_OK : E_FAIL;
+        },
         CheckMultisampleQualityLevels(a) { if (a[3]) Mem.writeUint32(a[3]!, a[2] === 1 ? 1 : 0); return S_OK; },
         CheckFeatureSupport(a) { if (a[2]) Mem.writeBytes(a[2]!, new Uint8Array(a[3]!)); return S_OK; },
         GetFeatureLevel() { return this.featureLevel; },
@@ -342,6 +391,10 @@ export class D3D11Device {
         VSSetShader(a) { this.renderer.setShader("vs", this.res(a[1]!, "shader")); return 0; },
         PSSetShader(a) { this.renderer.setShader("ps", this.res(a[1]!, "shader")); return 0; },
         GSSetShader(a) { this.renderer.setShader("gs", this.res(a[1]!, "shader")); return 0; },
+        // Draws with a geometry shader are skipped, so its resources have nowhere to go yet.
+        GSSetConstantBuffers() { return 0; },
+        GSSetShaderResources() { return 0; },
+        GSSetSamplers() { return 0; },
         VSSetConstantBuffers(a) { return this.stageBuffers("vs", a); },
         PSSetConstantBuffers(a) { return this.stageBuffers("ps", a); },
         VSSetShaderResources(a) { return this.stageViews("vs", a); },
@@ -400,29 +453,32 @@ export class D3D11Device {
         Map(a) {
             const [, resPtr, sub, mapType, , pMapped] = a;
             const o = this.objects.get(resPtr!);
-            if (!o || !pMapped) return E_INVALIDARG;
-            const census = `Map:${o.res?.kind ?? "?"}:type${mapType}`;
+            if (!o?.res || !pMapped || (o.res.kind !== "buffer" && o.res.kind !== "texture")) return E_INVALIDARG;
+            const census = `Map:${o.res.kind}:type${mapType}`;
             this.record.counts[census] = (this.record.counts[census] ?? 0) + 1;
-            if (!o.mapPtr) {
-                o.mapPtr = this.process.memory.alloc(Math.max(o.mapSize ?? 16, 16), "HEAP", "rw") >>> 0;
-                const buf = o.res?.kind === "buffer" ? o.res : null;
-                if (buf) Mem.writeBytes(o.mapPtr, buf.shadow.subarray(0, buf.size));
+            const layout = this.subresourceLayout(o.res, sub!);
+            if (!layout) return E_INVALIDARG;
+            o.maps ??= new Map();
+            let m = o.maps.get(sub!);
+            if (!m) {
+                const ptr = this.process.memory.alloc(Math.max(layout.size, 16), "HEAP", "rw") >>> 0;
+                if (o.res.kind === "buffer") Mem.writeBytes(ptr, o.res.shadow.subarray(0, o.res.size));
+                m = { ptr, size: layout.size, rowPitch: layout.rowPitch, type: mapType! };
+                o.maps.set(sub!, m);
             }
-            o.mapType = mapType;
-            o.mapSub = sub;
-            const mapPtr = o.mapPtr;
+            m.type = mapType!;
+            const mapping = m;
             const answer = (): number => {
-                Mem.writeUint32(pMapped!, mapPtr);
-                Mem.writeUint32(pMapped! + 4, o.rowPitch ?? o.mapSize ?? 0);
-                Mem.writeUint32(pMapped! + 8, o.mapSize ?? 0);
+                Mem.writeUint32(pMapped!, mapping.ptr);
+                Mem.writeUint32(pMapped! + 4, mapping.rowPitch);
+                Mem.writeUint32(pMapped! + 8, mapping.size);
                 return S_OK;
             };
             // A READ or READ_WRITE map of a texture sees what the GPU holds: a staging copy of
             // a render target (Rise of Nations builds its minimap this way) reads back here.
-            const tex = o.res?.kind === "texture" ? o.res : null;
-            if (tex && (mapType === MAP_READ || mapType === MAP_READ_WRITE) && (sub ?? 0) % tex.mips === 0) {
-                return this.renderer.readTextureData(tex, 0, Math.floor((sub ?? 0) / tex.mips)).then((data) => {
-                    if (data) Mem.writeBytes(mapPtr, data.bytes.subarray(0, o.mapSize ?? data.bytes.length));
+            if (o.res.kind === "texture" && (mapType === MAP_READ || mapType === MAP_READ_WRITE)) {
+                return this.renderer.readTextureData(o.res, layout.mip, layout.layer).then((data) => {
+                    if (data) Mem.writeBytes(mapping.ptr, data.bytes.subarray(0, mapping.size));
                     return answer();
                 });
             }
@@ -430,15 +486,15 @@ export class D3D11Device {
         },
         Unmap(a) {
             const o = this.objects.get(a[1]!);
-            if (!o?.mapPtr || !o.res) return 0;
-            const bytes = Mem.readBytes(o.mapPtr, o.mapSize ?? 0);
+            const m = o?.maps?.get(a[2]!);
+            if (!o?.res || !m) return 0;
+            if (m.type === MAP_READ) return 0; // nothing written: leave the GPU copy as it is
+            const bytes = Mem.readBytes(m.ptr, m.size);
             if (!bytes) return 0;
-            if (o.mapType === MAP_READ) return 0; // nothing written: leave the GPU copy as it is
-            if (o.res.kind === "buffer") this.renderer.updateBuffer(o.res, bytes, 0, o.mapType ?? 0);
+            if (o.res.kind === "buffer") this.renderer.updateBuffer(o.res, bytes, 0, m.type);
             else if (o.res.kind === "texture") {
-                const mips = o.res.mips;
-                const sub = o.mapSub ?? 0;
-                if (sub % mips === 0) this.renderer.writeTexture(o.res, 0, Math.floor(sub / mips), bytes, o.rowPitch ?? 0);
+                const layout = this.subresourceLayout(o.res, a[2]!)!;
+                this.renderer.writeTexture(o.res, layout.mip, layout.layer, bytes, m.rowPitch);
             }
             return 0;
         },
@@ -522,6 +578,14 @@ export class D3D11Device {
         EnumOutputs(a) { return a[1] === 0 ? this.out(a[2]!, this.output) : DXGI_ERROR_NOT_FOUND; },
         GetContainingOutput(a) { return this.out(a[1]!, this.output); },
         IsCurrent() { return 1; },
+        SetMaximumFrameLatency() { return S_OK; },
+        GetMaximumFrameLatency(a) { if (!a[1]) return E_INVALIDARG; Mem.writeUint32(a[1]!, 3); return S_OK; },
+        GetDesc1(a) {
+            if (!a[1]) return E_INVALIDARG;
+            this.adapterDesc(a[1]!);
+            Mem.writeUint32(a[1]! + 292, 0); // DXGI_ADAPTER_DESC1::Flags: a hardware adapter
+            return S_OK;
+        },
         GetDisplayModeList(a) { return this.modeList(a[1]!, a[3]!, a[4]!); },
         FindClosestMatchingMode(a) { const m = Mem.readBytes(a[1]!, 28); if (m && a[2]) Mem.writeBytes(a[2]!, m); return S_OK; },
         CreateSwapChain(a) {
@@ -535,7 +599,7 @@ export class D3D11Device {
             const windowed = v.getUint32(48, true) !== 0;
             System.getInstance().requestHostResize(v.getUint32(0, true), v.getUint32(4, true), { modeSet: !windowed });
             this.renderer.presentsExclusiveFullscreen = !windowed;
-            return this.out(a[3]!, chain);
+            return this.give(a[3]!, chain);
         },
         GetBuffer(a) { return this.out(a[3]!, this.objects.get(a[0]!)?.backBuffer ?? 0); },
         ResizeBuffers(a) {
@@ -544,6 +608,7 @@ export class D3D11Device {
             const v = new DataView(o.desc.buffer);
             const w = a[2] || v.getUint32(0, true), h = a[3] || v.getUint32(4, true), fmt = a[4] || v.getUint32(16, true);
             v.setUint32(0, w, true); v.setUint32(4, h, true); v.setUint32(16, fmt, true);
+            if (o.backBuffer) this.release(o.backBuffer);
             o.backBuffer = this.backBuffer(w, h, fmt);
             System.getInstance().requestHostResize(w, h, { modeSet: this.renderer.presentsExclusiveFullscreen });
             return S_OK;
@@ -573,10 +638,31 @@ export class D3D11Device {
 
     // ---- helpers ----
 
+    /** A view object: it holds a reference on its resource, as D3D11 views do. */
+    private view(resourcePtr: number, view: ViewRes | undefined, pp: number, iid: keyof typeof IID): number {
+        if (!view) { if (pp) Mem.writeUint32(pp, 0); return E_INVALIDARG; }
+        if (!pp) return S_FALSE;
+        const resource = this.objects.get(resourcePtr);
+        if (resource) resource.refs++;
+        return this.give(pp, this.create("ID3D11View", { res: view, resource: resourcePtr, iids: ["ID3D11View", iid] }));
+    }
+
+    /** Where subresource `sub` lives and how Map lays it out: tightly packed rows, mip size. */
+    private subresourceLayout(res: BufferRes | TextureRes, sub: number): { mip: number; layer: number; rowPitch: number; size: number } | null {
+        if (res.kind === "buffer") return sub === 0 ? { mip: 0, layer: 0, rowPitch: res.size, size: res.size } : null;
+        const mip = sub % res.mips, layer = Math.floor(sub / res.mips);
+        if (layer >= res.layers) return null;
+        const w = Math.max(1, res.width >> mip), h = Math.max(1, res.height >> mip);
+        const rowPitch = res.info.block ? Math.ceil(w / 4) * res.info.bytes : w * res.info.bytes;
+        const rows = res.info.block ? Math.ceil(h / 4) : h;
+        return { mip, layer, rowPitch, size: rowPitch * rows };
+    }
+
     private shader(stage: ShaderRes["stage"], code: number, length: number, pp: number): number {
         const bytes = Mem.readBytes(code, length);
         const res = this.renderer.createShader(stage, bytes ? bytes.slice() : new Uint8Array(0));
-        return this.out(pp, this.create("ID3D11Shader", { res }));
+        const iid = stage === "vertex" ? "ID3D11VertexShader" : stage === "pixel" ? "ID3D11PixelShader" : "ID3D11GeometryShader";
+        return this.give(pp, this.create("ID3D11Shader", { res, iids: [iid] }));
     }
 
     private stageBuffers(stage: "vs" | "ps", a: number[]): number {
