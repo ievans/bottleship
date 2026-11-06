@@ -119,7 +119,7 @@ export class SteamApi implements IModule {
             return 1;
         };
         exports["SteamAPI_Shutdown"] = () => 0;
-        exports["SteamAPI_RunCallbacks"] = (ctx, mem) => this.runCallbacks(ctx, mem);
+        exports["SteamAPI_RunCallbacks"] = (ctx, mem, _args) => this.runCallbacks(ctx, mem);
         exports["SteamGameServer_RunCallbacks"] = () => 0;
         exports["SteamGameServer_Shutdown"] = () => 0;
         exports["SteamAPI_SetMiniDumpComment"] = () => 0;
