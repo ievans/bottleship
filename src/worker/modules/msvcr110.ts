@@ -46,7 +46,7 @@ const PROXIED_NAMES = [
     "??0bad_cast@std@@QAE@ABV01@@Z", "??0bad_cast@std@@QAE@PBD@Z", "??0exception@std@@QAE@ABV01@@Z",
     "??1bad_cast@std@@UAE@XZ", "??1type_info@@UAE@XZ", "?terminate@@YAXXZ",
     "abort", "atoi", "calloc", "exit", "fclose", "feof", "ferror", "fflush", "fgetc", "fgetpos",
-    "fgets", "fopen", "fprintf", "fputc", "fputs", "fputwc", "fread", "free", "fseek", "fsetpos",
+    "fgets", "fgetws", "fopen", "fprintf", "fputc", "fputs", "fputwc", "fread", "free", "fseek", "fsetpos",
     "ftell", "fwrite", "isdigit", "iswspace", "isxdigit", "malloc", "mbstowcs", "memcpy",
     "memmove", "memset", "printf", "qsort", "realloc", "rewind", "setvbuf", "sprintf",
     "sprintf_s", "strcat_s", "strchr", "strcpy_s", "strncmp", "strncpy_s", "strtod", "strtok_s",
@@ -623,9 +623,8 @@ export class Msvcr110 implements IModule {
             return Number(value & 0xffffffffn) | 0;
         };
 
-        // Rarely-exercised wide text I/O: no existing FILE*-level wide-char plumbing to
-        // build on yet. Fail cleanly (EOF/NULL) rather than fabricate success.
-        exports["fgetws"] = () => 0;
+        // Wide text output has no FILE*-level plumbing yet. Fail cleanly (WEOF/-1) rather
+        // than fabricate success. (fgetws is msvcrt's, through PROXIED_NAMES.)
         exports["fputws"] = () => -1; // WEOF
         exports["fwprintf"] = () => -1;
         // swprintf_s(buffer, sizeInWords, format, ...) — unlike _vsnwprintf's va_list

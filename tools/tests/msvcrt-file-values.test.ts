@@ -134,6 +134,39 @@ describe('CRT binary integers and wide stdio', () => {
         expect(await result(crt.readFileValue(fp, true))).toBe(65);
         expect(crt.ungetwc(0xffff, fp)).toBe(0xffff);
     });
+    test('fgetws reads a text line per call: CRLF becomes L"\\n", kept, and NUL-terminated', async () => {
+        const text = '[land doobers]\r\nrocks, 2\r\nend';
+        const fp = await open([...text].map((c) => c.charCodeAt(0)), 'rt');
+        const line = (n = 64) => {
+            const r = crt.fgetws(0x8000, n, fp);
+            if (r === 0) return null;
+            let s = '';
+            for (let a = 0x8000, c = Mem.readUint16(a)!; c; c = Mem.readUint16(a += 2)!) s += String.fromCharCode(c);
+            return s;
+        };
+        expect(line()).toBe('[land doobers]\n');
+        expect(line(4)).toBe('roc');   // count-1 characters, then the rest on the next call
+        expect(line()).toBe('ks, 2\n');
+        expect(line()).toBe('end');     // last line without a newline still comes back
+        expect(line()).toBeNull();      // WEOF before any character: NULL
+        expect(crt.fgetws(0x8000, 1, fp)).toBe(0x8000); // room for the terminator only: L""
+        expect(crt.fgetws(0x8000, 0, fp)).toBe(0);
+    });
+    test('fgetws continues a line on the async path when the data is not resident', async () => {
+        const fp = await open([0x61, 0x62, 0x0a, 0x63], 'rt');
+        const originalRead = vfs.readSync.bind(vfs);
+        vfs.readSync = () => null;
+        vfs.read = async (h, n) => originalRead(h, n)!;
+        const pending = crt.fgetws(0x8000, 16, fp);
+        expect(pending).toBeInstanceOf(Promise);
+        expect(await pending).toEqual({ value: 0x8000, stackCleanup: 0 });
+        expect([0, 2, 4, 6].map((o) => Mem.readUint16(0x8000 + o))).toEqual([0x61, 0x62, 0x0a, 0]);
+    });
+    test('fgetws is declared cdecl with three arguments', () => {
+        const f = msvcrtModule.functions.find(f => f.name === 'fgetws')!;
+        expect(f.callingConvention).toBe('cdecl');
+        expect(f.params.length).toBe(3);
+    });
     test('cold wide reads await data with cdecl cleanup; I/O errors set error instead of EOF', async () => {
         const fp = await open([0x34, 0x12]);
         const originalRead = vfs.readSync.bind(vfs);
