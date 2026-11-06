@@ -11,6 +11,7 @@ import { BaseComObject } from "../core/com/base-com-object";
 import type { LoadedBand, PerfSegment, PerfSegmentState, Performance } from "../core/audio/directmusic/performance";
 import type { DlsSynth } from "../core/audio/directmusic/synth";
 import type { DirectSoundSink } from "./dmusic-sink";
+import type { WaveMixer } from "./dmusic-wave";
 
 export const IID_IUnknown = "00000000-0000-0000-c000-000000000046";
 export const IID_IPersist = "0000010c-0000-0000-c000-000000000046";
@@ -110,6 +111,8 @@ export class PerformanceObject extends DMusicObject {
     };
     directMusic: DirectMusicObject | null = null;
     port: PortObject | null = null;
+    /** The audio path each playing state's waves sound on, holding a reference to it. */
+    readonly waveRoutes = new Map<PerfSegmentState, AudioPathObject>();
     /** Null until a port has been added: there is nothing to play on. */
     engine: Performance | null = null;
     notificationHandle = 0;
@@ -161,10 +164,15 @@ export class AudioPathObject extends DMusicObject {
     directSound = 0;
     /** 1 for a 3D path's mono buffer, 2 for the stereo ones. */
     channels = 2;
+    /** DSBCAPS control flags beyond volume for the path's buffer: 3D or pan. */
+    flags = 0;
     /** The path's IDirectSoundBuffer8 (DMUS_PATH_BUFFER 0), made on first request. */
     buffer = 0;
     /** The path's tool graph (DMUS_PATH_AUDIOPATH_GRAPH), made on first request. */
     graph: GraphObject | null = null;
+    /** The waves playing on this path, and the stream that carries their mix into `buffer`. */
+    mixer: WaveMixer | null = null;
+    sink: DirectSoundSink | null = null;
 }
 
 /**

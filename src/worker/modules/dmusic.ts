@@ -48,6 +48,7 @@ import {
     IID_IDirectMusicCollection, IID_IDirectMusicGetLoader, IID_IDirectMusicStyle, IID_IUnknown, LoadableObject,
     LoaderObject, PerformanceObject, PortObject, SegmentObject, SegmentStateObject, StyleObject, TrackObject,
 } from "./dmusic-objects";
+import { decodeWave, WaveMixer, type WaveSound } from "./dmusic-wave";
 import { createSinkBuffer, DirectSoundSink, sinkBufferBytes, soundReference, writeWaveFormat } from "./dmusic-sink";
 
 const S_OK = 0;
@@ -60,6 +61,13 @@ const DSSCL_PRIORITY = 2;
 const DMUS_PATH_AUDIOPATH_GRAPH = 0x2200;
 const DMUS_PATH_BUFFER = 0x6000;
 const DMUS_APATH_DYNAMIC_3D = 6;
+const DMUS_OBJ_MEMORY = 0x400;
+const DSBCAPS_CTRL3D = 0x10;
+const DSBCAPS_CTRLPAN = 0x40;
+/** The rate an audio path's buffer runs at, and so the rate its waves are mixed to. */
+const PATH_RATE = 22050;
+/** A wave segment's length in music time is its duration at DirectMusic's default 120 bpm. */
+const WAVE_TICKS_PER_SECOND = (120 * 768) / 60;
 const E_INVALIDARG = 0x80070057 | 0;
 const CLASS_E_CLASSNOTAVAILABLE = 0x80040111 | 0;
 const DMUS_S_PARTIALLOAD = 0x08781091;
@@ -101,7 +109,13 @@ const DMUS_PORTPARAMS_AUDIOCHANNELS = 0x04;
 const DMUS_PORTPARAMS_SAMPLERATE = 0x08;
 
 /** DMUS_OBJECTDESC field offsets (dmusici.h). */
-const DESC = { size: 0x350, validData: 4, guidObject: 8, guidClass: 0x18, version: 0x30, name: 0x38, category: 0xb8, fileName: 0x138 } as const;
+const DESC = {
+    size: 0x350, validData: 4, guidObject: 8, guidClass: 0x18, version: 0x30, name: 0x38, category: 0xb8, fileName: 0x138,
+    memLength: 0x340, memData: 0x348,
+} as const;
+
+const isWave = (b: Uint8Array): boolean =>
+    b.length >= 12 && String.fromCharCode(b[0]!, b[1]!, b[2]!, b[3]!) === "RIFF" && String.fromCharCode(b[8]!, b[9]!, b[10]!, b[11]!) === "WAVE";
 const DESC_NAME_CHARS = 64;
 const DESC_FILENAME_CHARS = 260;
 
@@ -172,6 +186,8 @@ export class DMusic implements IModule {
     private readonly performances = new Set<PerformanceObject>();
     private readonly loading = new Set<LoadableObject>();
     private pumpTimer: number | null = null;
+    /** Audio paths whose buffers stream a wave mix. */
+    private readonly wavePaths = new Set<AudioPathObject>();
     private mixLeft = new Float32Array(0);
     private mixRight = new Float32Array(0);
     /** Guest blocks AllocPMsg and GetNotificationPMsg handed out, with what FreePMsg owes each. */
@@ -688,8 +704,16 @@ export class DMusic implements IModule {
             if ((valid & DMUS_OBJ_OBJECT) && guidAt(desc + DESC.guidObject) === GUID_DefaultGMCollection) {
                 return this.queryInterface(this.defaultCollection(loader), guidAt(a[2]! >>> 0), ppv);
             }
+            // A WAVE image in memory loads as a wave segment.
+            if (valid & DMUS_OBJ_MEMORY) {
+                const length = Mem.readUint32(desc + DESC.memLength) ?? 0;
+                const data = Mem.readUint32(desc + DESC.memData) ?? 0;
+                const bytes = data && length ? Mem.readBytes(data, length) : null;
+                const sound = bytes && isWave(bytes) ? decodeWave(bytes) : null;
+                if (sound) return this.queryInterface(this.waveSegment(sound), guidAt(a[2]! >>> 0), ppv);
+            }
             const name = valid & DMUS_OBJ_FILENAME ? readWide(desc + DESC.fileName, DESC_FILENAME_CHARS) : "";
-            Logger.log(LogCategory.COM, `[DMusic] system loader GetObject("${name}") -> DMUS_E_LOADER_OBJECTNOTFOUND`);
+            Logger.log(LogCategory.COM, `[DMusic] system loader GetObject("${name}", valid=0x${valid.toString(16)}) -> DMUS_E_LOADER_OBJECTNOTFOUND`);
             return name ? DMUS_E_LOADER_FAILEDOPEN : DMUS_E_LOADER_OBJECTNOTFOUND;
         };
         e["IDirectMusicLoader8_SetObject"] = () => S_OK;
@@ -801,11 +825,27 @@ export class DMusic implements IModule {
         const path = new AudioPathObject();
         path.directSound = perf?.directMusic?.directSound ?? 0;
         path.channels = type === DMUS_APATH_DYNAMIC_3D ? 1 : 2;
+        path.flags = type === DMUS_APATH_DYNAMIC_3D ? DSBCAPS_CTRL3D : DSBCAPS_CTRLPAN;
         path.onDestroy = () => {
+            this.wavePaths.delete(path);
+            path.sink?.release();
+            path.sink = null;
+            path.mixer = null;
             soundReference(this.process, path.buffer, true, false);
             path.buffer = 0;
         };
         return path;
+    }
+
+    /** Start `sound` on `path`, its buffer streaming the path's mix from then on. */
+    private playWave(path: AudioPathObject, owner: PerfSegmentState, sound: WaveSound): void {
+        path.buffer ||= createSinkBuffer(this.process, path.directSound, path.channels, PATH_RATE, path.flags);
+        if (!path.buffer) return;
+        path.sink ??= new DirectSoundSink(this.process, path.buffer, path.channels, PATH_RATE);
+        if (!path.sink.start()) return;
+        (path.mixer ??= new WaveMixer()).play(owner, sound);
+        this.wavePaths.add(path);
+        this.startPump();
     }
 
     /** A new IDirectSound8 from the dsound module, at DSSCL_PRIORITY for `hWnd`; 0 when there is none. */
@@ -844,6 +884,17 @@ export class DMusic implements IModule {
         engine.setMasterTempo(perf.masterTempo);
         port.synth.setMasterVolume(perf.masterVolume);
         engine.onNotification = (type, state, time) => this.notify(perf, type, state, time);
+        engine.onWave = (state, wave) => {
+            const path = perf.waveRoutes.get(state);
+            if (path) this.playWave(path, state, wave.sound as WaveSound);
+        };
+        engine.onStateEnd = (state) => {
+            const path = perf.waveRoutes.get(state);
+            if (!path) return;
+            perf.waveRoutes.delete(state);
+            path.mixer?.stop(state);
+            path.release();
+        };
         perf.engine = engine;
     }
 
@@ -1001,20 +1052,27 @@ export class DMusic implements IModule {
 
         // HRESULT PlaySegment(IDirectMusicSegment *pSegment, DWORD dwFlags, __int64 i64StartTime,
         //                     IDirectMusicSegmentState **ppSegmentState)
-        const play = (perf: PerformanceObject | null, segPtr: number, flags: number, ppState: number): number => {
+        const play = (perf: PerformanceObject | null, segPtr: number, flags: number, ppState: number, pathPtr = 0): number => {
             if (ppState && !validPointer(ppState, 4, "w")) return E_POINTER;
             if (ppState) Mem.writeUint32(ppState, 0);
             const seg = this.object<SegmentObject>(segPtr);
             if (!perf || !seg) return E_POINTER;
             if (!perf.engine) return DMUS_E_NOT_INIT;
             if (!seg.segment) return E_FAIL;
+            const path = pathPtr ? this.object<AudioPathObject>(pathPtr) : null;
+            if (pathPtr && !path) return E_INVALIDARG;
             const state = perf.engine.playSegment(seg.segment, flags >>> 0);
+            if (state && seg.segment.waves.length > 0) {
+                const route = path ?? (perf.defaultAudioPath ??= this.createAudioPath(perf, 0));
+                route.addRef();
+                perf.waveRoutes.set(state, route);
+            }
             if (state) this.holdStateSegment(this.stateObject(perf, state), seg);
             return this.publishState(perf, state, seg, ppState);
         };
         e["IDirectMusicPerformance8_PlaySegment"] = (_c, _m, a) => play(perfOf(a), a[1]!, a[2]!, a[5]! >>> 0);
         // PlaySegmentEx(pSource, pwzSegmentName, pTransition, dwFlags, i64StartTime, ppSegmentState, pFrom, pAudioPath)
-        e["IDirectMusicPerformance8_PlaySegmentEx"] = (_c, _m, a) => play(perfOf(a), a[1]!, a[4]!, a[7]! >>> 0);
+        e["IDirectMusicPerformance8_PlaySegmentEx"] = (_c, _m, a) => play(perfOf(a), a[1]!, a[4]!, a[7]! >>> 0, a[9]! >>> 0);
 
         // HRESULT Stop(IDirectMusicSegment *pSegment, IDirectMusicSegmentState *pSegmentState,
         //              MUSIC_TIME mtTime, DWORD dwFlags)
@@ -1234,6 +1292,14 @@ export class DMusic implements IModule {
     }
 
     // ── segments ────────────────────────────────────────────────────────────────
+
+    /** A segment that plays one wave from its start, as long as the wave. */
+    private waveSegment(sound: WaveSound): SegmentObject {
+        const segment = new PerfSegment();
+        segment.length = Math.max(1, Math.ceil((sound.frames / sound.sampleRate) * WAVE_TICKS_PER_SECOND));
+        segment.waves.push({ time: 0, sound });
+        return this.wrapSegment(segment, "Wave");
+    }
 
     /** A segment object around an engine segment the HLE made itself (a motif, a band, a transition). */
     private wrapSegment(segment: PerfSegment, name: string): SegmentObject {
@@ -1552,7 +1618,7 @@ export class DMusic implements IModule {
                 return this.queryInterface(path.graph, a[6]! >>> 0 ? guidAt(a[6]! >>> 0) : IID_IUnknown, pp);
             }
             if (a[2]! >>> 0 !== DMUS_PATH_BUFFER || a[3]! >>> 0 !== 0) return DMUS_E_NOT_FOUND;
-            path.buffer ||= createSinkBuffer(this.process, path.directSound, path.channels, 22050);
+            path.buffer ||= createSinkBuffer(this.process, path.directSound, path.channels, PATH_RATE, path.flags);
             const qi = this.process.getModule("dsound")?.exports["IDirectSoundBuffer8_QueryInterface"];
             const mem = Mem.getView();
             if (!path.buffer || !qi || !mem) return DMUS_E_NOT_FOUND;
@@ -1867,6 +1933,11 @@ export class DMusic implements IModule {
         for (const port of this.ports) {
             if (!port.active || !port.sink) continue;
             port.sink.pump((pcm, frames) => this.render(port, pcm, frames));
+        }
+        // After the music: a wave the performance started above is mixed in this same pump.
+        for (const path of this.wavePaths) {
+            const mixer = path.mixer;
+            path.sink?.pump((pcm, frames) => mixer ? mixer.render(pcm, frames, path.channels, PATH_RATE) : pcm.fill(0, 0, frames * path.channels));
         }
     }
 
