@@ -24,6 +24,7 @@ import { pixelLinkage, translateShader, semanticKey, type TranslatedShader, type
     CB_BINDING_BASE, TEXTURE_BINDING_BASE, SAMPLER_BINDING_BASE, UnsupportedShader } from "./sm4/wgsl";
 import { textureFormat, viewFormat, vertexFormat, isFloat32Format, type TextureFormatInfo } from "./formats";
 import { decodeBlend, decodeRaster, decodeDepthStencil, decodeSampler, type BlendState, type RasterState, type DepthStencilState } from "./states";
+import * as frameCapture from "../../../modules/ddraw/frame-capture";
 
 const BIND_VERTEX = 0x1, BIND_INDEX = 0x2, BIND_CONSTANT = 0x4, BIND_RENDER_TARGET = 0x20, BIND_DEPTH_STENCIL = 0x40;
 const MISC_GENERATE_MIPS = 0x1;
@@ -119,6 +120,22 @@ export class D3D11Renderer implements RenderActive {
     private readonly mipPipelines = new Map<GPUTextureFormat, GPURenderPipeline>();
     private readonly warned = new Set<string>();
 
+    // Harness instruments: captureFrame records every draw (frame-capture.ts), and drawScrub
+    // renders only draws [min, max] of each frame, numbered within one render target when
+    // scoped (as D3D9's scrub does). Textures are numbered for both.
+    private readonly textureIds = new WeakMap<TextureRes, number>();
+    private readonly texturesById = new Map<number, WeakRef<TextureRes>>();
+    /** How each texture got its contents, for textureHistory(id). */
+    private readonly textureEvents = new WeakMap<TextureRes, Record<string, number>>();
+    private nextTextureId = 1;
+    private scrubMin = 0;
+    private scrubMax = -1;
+    private scrubTarget = 0;
+    private scrubExclude = false;
+    private scrubDrawIndex = 0;
+    private scrubLastFrameDraws = 0;
+    private scrubLastCut: { index: number; vertexShader: number; pixelShader: number } | null = null;
+
     presentCount = 0;
     drawCount = 0;
 
@@ -139,6 +156,9 @@ export class D3D11Renderer implements RenderActive {
         if (this.warned.has(key)) return;
         this.warned.add(key);
         Logger.warn(LogCategory.D3D9, `[D3D11] ${msg}`);
+        // Readable from the harness (evalWorker) alongside globalThis.__d3d11Trace.
+        const g = globalThis as { __d3d11Warnings?: string[] };
+        (g.__d3d11Warnings ??= []).push(msg);
     }
 
     // ---- resources ----
@@ -218,6 +238,7 @@ export class D3D11Renderer implements RenderActive {
 
     /** Write one subresource (`pitch` bytes per row of texels or blocks). */
     writeTexture(tex: TextureRes, mip: number, layer: number, data: Uint8Array, pitch: number, box?: { x: number; y: number; w: number; h: number }): void {
+        this.noteTexture(tex, `cpuWrite mip${mip}${box ? " box" : ""}`);
         if (tex.info.depth) { this.warnOnce("depthwrite", "CPU write to a depth texture skipped"); return; }
         this.flush();
         const mw = Math.max(1, tex.width >> mip), mh = Math.max(1, tex.height >> mip);
@@ -320,6 +341,7 @@ export class D3D11Renderer implements RenderActive {
     private beginPass(): GPURenderPassEncoder {
         if (this.pass && this.passKey === this.passIdentity()) return this.pass;
         this.endPass();
+        for (const r of this.rtvs) if (r) this.noteTexture(r.texture, "renderTarget");
         const enc = this.ensureEncoder();
         const color: Array<GPURenderPassColorAttachment | null> = this.rtvs.map((r) => (r ? { view: r.view, loadOp: "load", storeOp: "store" } : null));
         const desc: GPURenderPassDescriptor = { colorAttachments: color };
@@ -552,11 +574,16 @@ export class D3D11Renderer implements RenderActive {
     draw(vertexCount: number, instanceCount: number, firstVertex: number, firstInstance: number, indexed: false): void;
     draw(indexCount: number, instanceCount: number, firstIndex: number, firstInstance: number, indexed: true, baseVertex: number): void;
     draw(count: number, instances: number, first: number, firstInstance: number, indexed: boolean, baseVertex = 0): void {
-        if (this.gs) { this.warnOnce("gs", "draws with a geometry shader bound are skipped (not emulated yet)"); return; }
-        if (!this.rtvs.some((r) => r) && !this.dsv) return;
-        if (indexed && !this.ib) return;
+        const target = this.rtvs[0]?.texture ?? this.dsv?.texture ?? null;
+        const targetId = target ? this.textureId(target) : 0;
+        const skip = (reason: string): void => this.captureDraw(count, instances, first, baseVertex, indexed, target, targetId, reason);
+        if (this.gs) { this.warnOnce("gs", "draws with a geometry shader bound are skipped (not emulated yet)"); return skip("geometry shader"); }
+        if (!target) return skip("no render target or depth view");
+        if (indexed && !this.ib) return skip("no index buffer");
+        if (this.scrubCuts(targetId)) return skip("draw scrub");
         const p = this.pipeline();
-        if (!p) return;
+        if (!p) return skip("no pipeline (see __d3d11Warnings)");
+        this.captureDraw(count, instances, first, baseVertex, indexed, target, targetId, null);
         const pass = this.beginPass();
         pass.setPipeline(p.pipeline);
         pass.setBindGroup(0, this.bindGroup("vs", p.linked.vs.bindings, p.pipeline.getBindGroupLayout(0)));
@@ -588,9 +615,162 @@ export class D3D11Renderer implements RenderActive {
         this.drawCount++;
     }
 
+    private textureId(t: TextureRes): number {
+        let id = this.textureIds.get(t);
+        if (!id) {
+            this.textureIds.set(t, id = this.nextTextureId++);
+            this.texturesById.set(id, new WeakRef(t));
+        }
+        return id;
+    }
+
+    /** True when the draw scrub cuts this draw; counts it either way. */
+    private scrubCuts(targetId: number): boolean {
+        if (this.scrubTarget && targetId !== this.scrubTarget) return false;
+        const index = this.scrubDrawIndex++;
+        if (this.scrubMax < 0) return false;
+        const inside = index >= this.scrubMin && index <= this.scrubMax;
+        if (inside === this.scrubExclude) {
+            this.scrubLastCut = { index, vertexShader: this.vs?.id ?? 0, pixelShader: this.ps?.id ?? 0 };
+            return true;
+        }
+        return false;
+    }
+
+    /** Vertex `first` of this draw (an index position when indexed), per input-layout element, as raw bytes. */
+    private captureVertex(first: number, baseVertex: number, indexed: boolean): Array<{ semantic: string; index: number; format: number; slot: number; offset: number; bytes: number[]; floats: number[] }> {
+        if (!this.layout) return [];
+        let vertex = first;
+        if (indexed && this.ib) {
+            const size = this.ib.format === "uint32" ? 4 : 2;
+            const at = this.ib.offset + first * size;
+            const view = new DataView(this.ib.buf.shadow.buffer, this.ib.buf.shadow.byteOffset, this.ib.buf.shadow.byteLength);
+            vertex = (at + size <= view.byteLength ? (size === 4 ? view.getUint32(at, true) : view.getUint16(at, true)) : 0) + baseVertex;
+        }
+        const cursor = new Map<number, number>();
+        return this.layout.elements.map((e) => {
+            const at = e.offset === 0xffffffff ? (cursor.get(e.slot) ?? 0) : e.offset;
+            const vf = vertexFormat(e.format);
+            const size = vf?.bytes ?? 4;
+            cursor.set(e.slot, at + size);
+            const vb = this.vbs[e.slot];
+            const start = vb ? vb.offset + vertex * vb.stride + at : -1;
+            const bytes = vb && start >= 0 && start + size <= vb.buf.shadow.length ? Array.from(vb.buf.shadow.subarray(start, start + size)) : [];
+            const floats = bytes.length >= 4 && bytes.length % 4 === 0 ? Array.from(new Float32Array(new Uint8Array(bytes).buffer)) : [];
+            return { semantic: e.semantic, index: e.index, format: e.format, slot: e.slot, offset: at, bytes, floats };
+        });
+    }
+
+    private captureConstants(stage: "vs" | "ps"): Record<number, number[]> {
+        const out: Record<number, number[]> = {};
+        this.cbs[stage].forEach((b, slot) => {
+            if (b) out[slot] = Array.from(new Float32Array(b.shadow.buffer, b.shadow.byteOffset, Math.min(64, b.shadow.length >> 2)));
+        });
+        return out;
+    }
+
+    private captureDraw(count: number, instances: number, first: number, baseVertex: number, indexed: boolean, target: TextureRes | null, targetId: number, skipped: string | null): void {
+        if (!frameCapture.isCapturing()) return;
+        const srv = (stage: "vs" | "ps") => this.srvs[stage].map((v, slot) => v && {
+            slot, texture: this.textureId(v.texture), width: v.texture.width, height: v.texture.height,
+            format: v.format, dxgi: v.texture.dxgi, depth: v.texture.info.depth, mips: v.texture.mips,
+        }).filter(Boolean);
+        frameCapture.recordRawDraw({
+            backend: "d3d11",
+            primitiveType: this.topology,
+            primitiveTypeName: `D3D11_PRIMITIVE_TOPOLOGY(${this.topology})`,
+            vertexCount: indexed ? 0 : count,
+            indexCount: indexed ? count : 0,
+            programmable: true,
+            vertexShader: this.vs?.id ?? 0,
+            pixelShader: this.ps?.id ?? 0,
+            rtSurfacePtr: targetId,
+            rtWidth: target?.width ?? 0,
+            rtHeight: target?.height ?? 0,
+            rtFormat: target?.gpu.format ?? null,
+            viewport: this.viewport && { x: this.viewport.x, y: this.viewport.y, width: this.viewport.w, height: this.viewport.h, minZ: this.viewport.minDepth, maxZ: this.viewport.maxDepth },
+            warnings: skipped ? [`skipped: ${skipped}`] : [],
+            d3d11: {
+                skipped, instances,
+                geometryShader: this.gs?.id ?? 0,
+                inputLayout: this.layout?.id ?? 0,
+                vertexStrides: this.vbs.map((v) => v?.stride ?? 0),
+                firstVertex: this.captureVertex(first, baseVertex, indexed),
+                // Eight vertices spread over the draw: per-vertex data (colors, visibility) varies across a mesh.
+                sampledVertices: Array.from({ length: 8 }, (_, k) => this.captureVertex(first + Math.floor((k * count) / 8), baseVertex, indexed)),
+                vsConstants: this.captureConstants("vs"), psConstants: this.captureConstants("ps"),
+                renderTargets: this.rtvs.map((v) => v && { texture: this.textureId(v.texture), format: v.format, width: v.texture.width, height: v.texture.height }),
+                depthView: this.dsv && { texture: this.textureId(this.dsv.texture), format: this.dsv.format },
+                vsResources: srv("vs"), psResources: srv("ps"),
+                depthStencil: this.depthStencil, blend: this.blend, raster: this.raster,
+            },
+        });
+    }
+
+    private noteTexture(t: TextureRes, event: string): void {
+        let e = this.textureEvents.get(t);
+        if (!e) this.textureEvents.set(t, e = {});
+        e[event] = (e[event] ?? 0) + 1;
+    }
+
+    /** What has written texture #id (harness: evalWorker): event -> count. */
+    textureHistory(id: number): Record<string, unknown> {
+        const tex = this.texturesById.get(id)?.deref();
+        if (!tex) return { error: `no live texture #${id}` };
+        return { format: tex.gpu.format, dxgi: tex.dxgi, size: `${tex.width}x${tex.height}`, mips: tex.mips, events: this.textureEvents.get(tex) ?? {} };
+    }
+
+    /**
+     * Read one subresource back from the GPU, rows packed tightly (width * texel bytes).
+     * Null for compressed and depth formats. Everything recorded so far is submitted first,
+     * so the bytes include every earlier draw and copy.
+     */
+    async readTextureData(tex: TextureRes, mip = 0, layer = 0): Promise<{ width: number; height: number; texel: number; bytes: Uint8Array } | null> {
+        if (tex.info.block || tex.info.depth) return null;
+        const texel = tex.info.bytes;
+        const width = Math.max(1, tex.width >> mip), height = Math.max(1, tex.height >> mip);
+        const rowBytes = Math.ceil((width * texel) / 256) * 256;
+        const staging = this.device.createBuffer({ size: rowBytes * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        this.flush();
+        const enc = this.device.createCommandEncoder();
+        enc.copyTextureToBuffer({ texture: tex.gpu, mipLevel: mip, origin: { x: 0, y: 0, z: layer } }, { buffer: staging, bytesPerRow: rowBytes }, { width, height });
+        this.device.queue.submit([enc.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);
+        const mapped = new Uint8Array(staging.getMappedRange());
+        const bytes = new Uint8Array(width * height * texel);
+        for (let y = 0; y < height; y++) bytes.set(mapped.subarray(y * rowBytes, y * rowBytes + width * texel), y * width * texel);
+        staging.unmap();
+        staging.destroy();
+        return { width, height, texel, bytes };
+    }
+
+    /** readTextureData by capture id (harness: evalWorker). */
+    async readTexture(id: number, mip = 0): Promise<{ width: number; height: number; format: string; bytes: Uint8Array } | { error: string }> {
+        const tex = this.texturesById.get(id)?.deref();
+        if (!tex) return { error: `no live texture #${id}` };
+        const data = await this.readTextureData(tex, mip);
+        if (!data) return { error: `texture #${id} is ${tex.gpu.format}; compressed and depth formats do not read back` };
+        return { width: data.width, height: data.height, format: tex.gpu.format, bytes: data.bytes };
+    }
+
+    setDrawScrub(min: number, max: number, target = 0, exclude = false): void {
+        this.scrubMin = min | 0;
+        this.scrubMax = max | 0;
+        this.scrubTarget = target >>> 0;
+        this.scrubExclude = exclude;
+    }
+
+    getDrawScrub() {
+        return {
+            backend: "d3d11", min: this.scrubMin, max: this.scrubMax, target: this.scrubTarget,
+            exclude: this.scrubExclude, lastFrameDraws: this.scrubLastFrameDraws, lastCut: this.scrubLastCut,
+        };
+    }
+
     // ---- copies and mips ----
 
     copyTexture(dst: TextureRes, src: TextureRes): void {
+        this.noteTexture(dst, `copyResource from #${this.textureId(src)}`);
         if (dst.gpu.format !== src.gpu.format) { this.warnOnce("copyfmt", "CopyResource between different formats skipped"); return; }
         this.endPass();
         const enc = this.ensureEncoder();
@@ -598,6 +778,39 @@ export class D3D11Renderer implements RenderActive {
             enc.copyTextureToTexture({ texture: src.gpu, mipLevel: m }, { texture: dst.gpu, mipLevel: m },
                 { width: Math.max(1, Math.min(dst.width, src.width) >> m), height: Math.max(1, Math.min(dst.height, src.height) >> m), depthOrArrayLayers: Math.min(dst.layers, src.layers) });
         }
+    }
+
+    /** CopySubresourceRegion for textures: `box` (in source texels) defaults to the whole source mip. */
+    copyTextureRegion(dst: TextureRes, dstMip: number, dstLayer: number, dx: number, dy: number,
+        src: TextureRes, srcMip: number, srcLayer: number, box: { x: number; y: number; w: number; h: number } | null): void {
+        this.noteTexture(dst, `copyRegion from #${this.textureId(src)} (${src.gpu.format})`);
+        if (dst.gpu.format !== src.gpu.format) { this.warnOnce("copyregionfmt", `CopySubresourceRegion ${src.gpu.format} -> ${dst.gpu.format} skipped`); return; }
+        if (dst.info.depth || src.info.depth) { this.warnOnce("copyregiondepth", "CopySubresourceRegion of a depth texture skipped"); return; }
+        if (dstMip >= dst.mips || srcMip >= src.mips || dstLayer >= dst.layers || srcLayer >= src.layers) return;
+        const sw = Math.max(1, src.width >> srcMip), sh = Math.max(1, src.height >> srcMip);
+        const dw = Math.max(1, dst.width >> dstMip), dh = Math.max(1, dst.height >> dstMip);
+        const r = box ?? { x: 0, y: 0, w: sw, h: sh };
+        // Clamp to both mips; a block-compressed copy keeps whole 4x4 blocks except at a mip edge.
+        let w = Math.min(r.w, sw - r.x, dw - dx), h = Math.min(r.h, sh - r.y, dh - dy);
+        if (w <= 0 || h <= 0) return;
+        if (src.info.block) {
+            if (r.x % 4 || r.y % 4 || dx % 4 || dy % 4) { this.warnOnce("copyregionblock", "CopySubresourceRegion off a 4x4 block boundary skipped"); return; }
+            const pad = (v: number, at: number, size: number) => (at + v === size ? v : v - (v % 4));
+            w = Math.min(pad(w, r.x, sw), pad(w, dx, dw));
+            h = Math.min(pad(h, r.y, sh), pad(h, dy, dh));
+            if (w <= 0 || h <= 0) return;
+        }
+        this.endPass();
+        this.ensureEncoder().copyTextureToTexture(
+            { texture: src.gpu, mipLevel: srcMip, origin: { x: r.x, y: r.y, z: srcLayer } },
+            { texture: dst.gpu, mipLevel: dstMip, origin: { x: dx, y: dy, z: dstLayer } },
+            { width: w, height: h, depthOrArrayLayers: 1 });
+    }
+
+    /** CopySubresourceRegion for buffers: bytes [srcStart, srcEnd) of src land at dstOffset. */
+    copyBufferRegion(dst: BufferRes, dstOffset: number, src: BufferRes, srcStart: number, srcEnd: number): void {
+        const end = Math.min(srcEnd, src.shadow.length), n = Math.min(end - srcStart, dst.shadow.length - dstOffset);
+        if (n > 0) this.updateBuffer(dst, src.shadow.slice(srcStart, srcStart + n), dstOffset, 0);
     }
 
     copyBuffer(dst: BufferRes, src: BufferRes): void {
@@ -638,6 +851,9 @@ export class D3D11Renderer implements RenderActive {
     // ---- present ----
 
     async present(backBuffer: TextureRes, syncInterval: number): Promise<void> {
+        frameCapture.onFrameEnd("d3d11");
+        this.scrubLastFrameDraws = this.scrubDrawIndex;
+        this.scrubDrawIndex = 0;
         await framePacer.waitForPresentInterval(syncInterval);
         framePacer.reserveFrameSlot();
         try {

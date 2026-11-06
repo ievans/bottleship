@@ -28,6 +28,8 @@ import type { BlendState, RasterState, DepthStencilState } from "../../backends/
 const S_OK = 0;
 const S_FALSE = 1;
 const E_NOINTERFACE = 0x80004002;
+/** D3D11_MAP: READ = 1, WRITE = 2, READ_WRITE = 3, WRITE_DISCARD = 4, WRITE_NO_OVERWRITE = 5. */
+const MAP_READ = 1, MAP_READ_WRITE = 3;
 const E_POINTER = 0x80004003;
 const E_NOTIMPL = 0x80004001;
 const E_INVALIDARG = 0x80070057;
@@ -101,6 +103,8 @@ export class D3D11Device {
 
     constructor(private readonly process: Process, readonly featureLevel: number, private readonly renderer: D3D11Renderer) {
         (globalThis as Record<string, unknown>).__d3d11Trace = this.record;
+        // The device itself, for harness probes that resolve guest pointers to resources.
+        (globalThis as Record<string, unknown>).__d3d11Device = this;
     }
 
     // ---- objects ----
@@ -397,6 +401,8 @@ export class D3D11Device {
             const [, resPtr, sub, mapType, , pMapped] = a;
             const o = this.objects.get(resPtr!);
             if (!o || !pMapped) return E_INVALIDARG;
+            const census = `Map:${o.res?.kind ?? "?"}:type${mapType}`;
+            this.record.counts[census] = (this.record.counts[census] ?? 0) + 1;
             if (!o.mapPtr) {
                 o.mapPtr = this.process.memory.alloc(Math.max(o.mapSize ?? 16, 16), "HEAP", "rw") >>> 0;
                 const buf = o.res?.kind === "buffer" ? o.res : null;
@@ -404,16 +410,30 @@ export class D3D11Device {
             }
             o.mapType = mapType;
             o.mapSub = sub;
-            Mem.writeUint32(pMapped!, o.mapPtr);
-            Mem.writeUint32(pMapped! + 4, o.rowPitch ?? o.mapSize ?? 0);
-            Mem.writeUint32(pMapped! + 8, o.mapSize ?? 0);
-            return S_OK;
+            const mapPtr = o.mapPtr;
+            const answer = (): number => {
+                Mem.writeUint32(pMapped!, mapPtr);
+                Mem.writeUint32(pMapped! + 4, o.rowPitch ?? o.mapSize ?? 0);
+                Mem.writeUint32(pMapped! + 8, o.mapSize ?? 0);
+                return S_OK;
+            };
+            // A READ or READ_WRITE map of a texture sees what the GPU holds: a staging copy of
+            // a render target (Rise of Nations builds its minimap this way) reads back here.
+            const tex = o.res?.kind === "texture" ? o.res : null;
+            if (tex && (mapType === MAP_READ || mapType === MAP_READ_WRITE) && (sub ?? 0) % tex.mips === 0) {
+                return this.renderer.readTextureData(tex, 0, Math.floor((sub ?? 0) / tex.mips)).then((data) => {
+                    if (data) Mem.writeBytes(mapPtr, data.bytes.subarray(0, o.mapSize ?? data.bytes.length));
+                    return answer();
+                });
+            }
+            return answer();
         },
         Unmap(a) {
             const o = this.objects.get(a[1]!);
             if (!o?.mapPtr || !o.res) return 0;
             const bytes = Mem.readBytes(o.mapPtr, o.mapSize ?? 0);
             if (!bytes) return 0;
+            if (o.mapType === MAP_READ) return 0; // nothing written: leave the GPU copy as it is
             if (o.res.kind === "buffer") this.renderer.updateBuffer(o.res, bytes, 0, o.mapType ?? 0);
             else if (o.res.kind === "texture") {
                 const mips = o.res.mips;
@@ -439,6 +459,20 @@ export class D3D11Device {
                 const rows = tex.info.block ? Math.ceil(r.h / 4) : r.h;
                 const bytes = Mem.readBytes(pSrc, rowPitch! * Math.max(1, rows));
                 if (bytes && r.w > 0 && r.h > 0) this.renderer.writeTexture(tex, mip, layer, bytes, rowPitch!, r);
+            }
+            return 0;
+        },
+        CopySubresourceRegion(a) {
+            const [, dstPtr, dstSub, dx, dy, , srcPtr, srcSub, pBox] = a;
+            const dst = this.objects.get(dstPtr!)?.res, src = this.objects.get(srcPtr!)?.res;
+            // D3D11_BOX: left, top, front, right, bottom, back.
+            const box = pBox ? { l: readU32(pBox), t: readU32(pBox + 4), r: readU32(pBox + 12), b: readU32(pBox + 16) } : null;
+            if (dst?.kind === "texture" && src?.kind === "texture") {
+                this.renderer.copyTextureRegion(dst, dstSub! % dst.mips, Math.floor(dstSub! / dst.mips), dx!, dy!,
+                    src, srcSub! % src.mips, Math.floor(srcSub! / src.mips),
+                    box && { x: box.l, y: box.t, w: box.r - box.l, h: box.b - box.t });
+            } else if (dst?.kind === "buffer" && src?.kind === "buffer") {
+                this.renderer.copyBufferRegion(dst, dx!, src, box ? box.l : 0, box ? box.r : src.size);
             }
             return 0;
         },

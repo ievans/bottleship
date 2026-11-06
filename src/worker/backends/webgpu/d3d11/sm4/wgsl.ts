@@ -323,7 +323,8 @@ class Emitter {
         for (const [i, d] of [d0!, d1!].entries()) {
             if (d.type === OperandType.Null) continue;
             const lanes = maskLanes(d.mask);
-            const pair = fn(this.source(a!, lanes, kind), this.source(b!, lanes, kind), c ? this.source(c, lanes, kind) : "");
+            // SINCOS has one source; UDIV/IMUL/UMUL two.
+            const pair = fn(this.source(a!, lanes, kind), b ? this.source(b, lanes, kind) : "", c ? this.source(c, lanes, kind) : "");
             this.write(d, pair[i]!, kind, false);
         }
     }
