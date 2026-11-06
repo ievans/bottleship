@@ -64,8 +64,8 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
         return 0;
     }
 
-    function strtol(strPtr: number, endPtr: number, base: number): number {
-        const str = host.readCString(strPtr, 256);
+    /** strtol's parse over an already-read string: the value and the index it stopped at. */
+    function parseLong(str: string, base: number): { value: number; end: number } {
         let radix = base | 0;
 
         let start = 0;
@@ -96,8 +96,19 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
         const numStr = str.slice(start, end);
         let value = numStr.length > 0 ? parseInt(numStr, radix) | 0 : 0;
         if (negative) value = -value;
+        return { value, end };
+    }
 
+    function strtol(strPtr: number, endPtr: number, base: number): number {
+        const { value, end } = parseLong(host.readCString(strPtr, 256), base);
         if (endPtr) Mem.writeUint32(endPtr, strPtr + end);
+        return value;
+    }
+
+    /** wcstol: strtol over UTF-16, so *endptr advances two bytes per character. */
+    function wcstol(strPtr: number, endPtr: number, base: number): number {
+        const { value, end } = parseLong(host.readWString(strPtr, 256), base);
+        if (endPtr) Mem.writeUint32(endPtr, strPtr + end * 2);
         return value;
     }
 
@@ -234,6 +245,7 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
 
     exports["_wtoi"] = (ctx, mem, args) => wtoi(args[0] ?? 0);
     exports["wcstoul"] = (ctx, mem, args) => wcstoul(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
+    exports["wcstol"] = (ctx, mem, args) => wcstol(args[0] ?? 0, args[1] ?? 0, args[2] ?? 10);
 
     exports["atoi"] = (ctx, mem, args) => atoi(args[0] ?? 0);
     exports["atol"] = (ctx, mem, args) => atol(args[0] ?? 0);

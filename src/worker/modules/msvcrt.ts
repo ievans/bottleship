@@ -242,6 +242,8 @@ export class Msvcrt implements IModule {
         exports["_malloc_dbg"] = (ctx, mem, args) => this.malloc(args[0] ?? 0);
         exports["_malloc"] = (ctx, mem, args) => this.malloc(args[0] ?? 0);
         exports["??2@YAPAXI@Z"] = (ctx, mem, args) => this.malloc(args[0] ?? 0);
+        // operator new[] — the same allocation as operator new; ??_V (delete[]) frees it.
+        exports["??_U@YAPAXI@Z"] = (ctx, mem, args) => this.malloc(args[0] ?? 0);
         exports["@$bnew$qui"] = (ctx, mem, args) => this.malloc(args[0] ?? 0);
         exports["free"] = (ctx, mem, args) => this.free(args[0] ?? 0);
         exports["_free_dbg"] = (ctx, mem, args) => this.free(args[0] ?? 0);
@@ -282,6 +284,7 @@ export class Msvcrt implements IModule {
         exports["_strlwr"] = (ctx, mem, args) => this.strlwr(args[0] ?? 0);
         exports["_strdup"] = (ctx, mem, args) => this.strdup(args[0] ?? 0);
         exports["_strdup_dbg"] = (ctx, mem, args) => this.strdup(args[0] ?? 0);
+        exports["_wcsdup"] = (ctx, mem, args) => this.wcsdup(args[0] ?? 0);
 
         exports["sprintf"] = (ctx, mem, args) => this.sprintf(args);
         exports["printf"] = (ctx, mem, args) => this.printf(args);
@@ -370,6 +373,12 @@ export class Msvcrt implements IModule {
         exports["_adjust_fdiv"] = () => 0;
         exports["_initterm"] = (ctx, mem, args) => this.initterm(args[0] ?? 0, args[1] ?? 0);
         exports["_ftol"] = () => this.ftol();
+        // VC7+ spellings of the same truncating conversion: ST0 in, EDX:EAX out, ST0 popped.
+        // _ftol2_sse only differs in using SSE2 internally when the CPU has it.
+        exports["_ftol2"] = () => this.ftol();
+        exports["_ftol2_sse"] = () => this.ftol();
+        // The undecorator behind type_info::name. There is none here; NULL is its failure result.
+        exports["__unDName"] = () => 0;
         exports["_atoi64"] = (ctx, mem, args) => this.atoi64(args[0] ?? 0);
         exports["_CItan"] = () => this.CItan();
         exports["_CIatan2"] = () => this.CIatan2();
@@ -394,6 +403,7 @@ export class Msvcrt implements IModule {
         exports["_open"] = (ctx, mem, args) => this.open(args[0] ?? 0, args[1] ?? 0);
         exports["_wopen"] = (ctx, mem, args) => this.open(args[0] ?? 0, args[1] ?? 0, true);
         exports["_sopen"] = (ctx, mem, args) => this.sopen(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0, args[3] ?? 0);
+        exports["_wsopen"] = (ctx, mem, args) => this.open(args[0] ?? 0, args[1] ?? 0, true);
         exports["_close"] = (ctx, mem, args) => this.close(args[0] ?? 0);
         exports["_chsize"] = (ctx, mem, args) => this.chsize(args[0] ?? 0, args[1] ?? 0);
         exports["_chsize_s"] = (ctx, mem, args) => this.chsizeS(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
@@ -437,6 +447,8 @@ export class Msvcrt implements IModule {
             free: (p) => this.free(p),
             setErrno: (e) => { this.setErrno(e); },
             vsnprintf: (dest, count, fmt, va) => this.vsnprintf(dest, count, fmt, va),
+            formatWide: (fmt, args, first) =>
+                this.formatWide(this.readWString(fmt, Msvcrt.MAX_WIDE_SCAN_CHARS), new ArrayVaListReader(args, first)),
         });
 
         // --- String functions (see crt-string.ts) ---
@@ -476,6 +488,8 @@ export class Msvcrt implements IModule {
         const pathFns = registerCrtPathExports(exports, {
             readCString: (p, max) => this.readCString(p, max),
             writeCString: (p, v) => this.writeCString(p, v),
+            readWString: (p, max) => this.readWString(p, max),
+            writeWString: (p, v) => this.writeWString(p, v),
             malloc: (n) => this.malloc(n),
             setErrno: (e) => this.setErrno(e),
             nextTempnamSeq: () => (this.tempnamCounter++ & 0xffff),
@@ -1837,6 +1851,15 @@ export class Msvcrt implements IModule {
         const outPtr = this.malloc(bytes.length);
         if (!outPtr) return 0;
         Mem.writeBytes(outPtr, bytes);
+        return outPtr >>> 0;
+    }
+
+    private wcsdup(ptr: number): number {
+        if (!ptr) return 0;
+        const value = this.readWString(ptr, Msvcrt.MAX_WIDE_SCAN_CHARS);
+        const outPtr = this.malloc((value.length + 1) * 2);
+        if (!outPtr) return 0;
+        this.writeWString(outPtr, value);
         return outPtr >>> 0;
     }
 
