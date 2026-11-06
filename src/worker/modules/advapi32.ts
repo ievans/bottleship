@@ -1948,8 +1948,9 @@ export class Advapi32 implements IModule {
             return { value: 1, stackCleanup: 12 }; // TRUE (call succeeded)
         };
 
-        // BOOL CryptAcquireContextA(PHCRYPTPROV, LPCSTR, LPCSTR, DWORD, DWORD)
-        this.exports["CryptAcquireContextA"] = (ctx, mem, args) => {
+        // BOOL CryptAcquireContextA/W(PHCRYPTPROV, LPCTSTR container, LPCTSTR provider, DWORD, DWORD)
+        // The two differ only in how the container and provider names are encoded.
+        const cryptAcquireContext = (wide: boolean): ThunkImplementation => (ctx, mem, args) => {
             const phProv = args[0] >>> 0;
             const pszContainer = args[1] >>> 0;
             const pszProvider = args[2] >>> 0;
@@ -1961,8 +1962,10 @@ export class Advapi32 implements IModule {
                 return { value: 0, stackCleanup: 20 };
             }
 
-            const container = pszContainer ? Marshaler.readString(mem, pszContainer) : "";
-            const provider = pszProvider ? Marshaler.readString(mem, pszProvider) : "";
+            const read = (ptr: number): string =>
+                !ptr ? "" : wide ? Marshaler.readWideString(mem, ptr) : Marshaler.readString(mem, ptr);
+            const container = read(pszContainer);
+            const provider = read(pszProvider);
             const handle = process.resourceProvider.registerKernelObject({
                 kind: "crypt_prov",
                 container,
@@ -1979,11 +1982,13 @@ export class Advapi32 implements IModule {
 
             Logger.verbose(
                 LogCategory.SYSTEM,
-                `CryptAcquireContextA(container="${container}", provider="${provider}", type=${dwProvType}, flags=0x${dwFlags.toString(16)}) -> 0x${handle.toString(16)}`
+                `CryptAcquireContext${wide ? "W" : "A"}(container="${container}", provider="${provider}", type=${dwProvType}, flags=0x${dwFlags.toString(16)}) -> 0x${handle.toString(16)}`
             );
             system.scheduler.setLastError(0);
             return { value: 1, stackCleanup: 20 };
         };
+        this.exports["CryptAcquireContextA"] = cryptAcquireContext(false);
+        this.exports["CryptAcquireContextW"] = cryptAcquireContext(true);
 
         // BOOL CryptReleaseContext(HCRYPTPROV, DWORD)
         this.exports["CryptReleaseContext"] = (ctx, mem, args) => {

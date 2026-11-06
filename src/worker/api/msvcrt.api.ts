@@ -228,6 +228,20 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_strtoui64", 3),
         makeFunc("_strtoi64", 3),
         makeFunc("strcpy_s", 3),
+        makeFunc("wcscpy_s", 3),
+        makeFunc("wcscat_s", 3),
+        makeFunc("wcsncpy_s", 4),
+        makeFunc("wcsncat_s", 4),
+        makeFunc("wcstol", 3),
+        makeFunc("_wcsdup", 1),
+        makeFunc("_wfullpath", 3),
+        makeFunc("_wmakepath_s", 6),
+        makeFunc("_wsplitpath_s", 9),
+        // int _wsopen(const wchar_t* filename, int oflag, int shflag [, int pmode])
+        makeFunc("_wsopen", 4),
+        makeFunc("??_U@YAPAXI@Z", 1),
+        // char* __unDName(char* out, const char* name, int maxLen, malloc_t, free_t, unsigned short flags)
+        makeFunc("__unDName", 6),
         makeFunc("strcat_s", 3),
         makeFunc("strtok_s", 3),
         makeFunc("vsprintf_s", 4),
@@ -254,6 +268,10 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_atoi64", 1),
         makeFunc("atol", 1),
         makeFunc("_ltoa", 3),
+        makeFunc("_ltow", 3),
+        makeFunc("_ltow_s", 4),
+        makeFunc("_wtof", 1),  // like atof: the handler pushes the double to ST0
+        makeFunc("_cputs", 1),
         makeFunc("_ultoa", 3),
         makeFunc("srand", 1),
         makeFunc("rand", 0),
@@ -268,6 +286,8 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_adjust_fdiv", 0),
         makeFunc("_initterm", 2),
         makeFunc("_ftol", 0),
+        makeFunc("_ftol2", 0),
+        makeFunc("_ftol2_sse", 0),
         makeFunc("_chkesp", 0),
         makeFunc("_rotr", 2),
         makeFunc("_CItan", 0),
@@ -540,6 +560,9 @@ export const msvcrtModule: ModuleDescriptor = {
         // String formatting
         makeFunc("strftime", 4),
         makeFunc("_snwprintf", 16),
+        // Variadic, so the trailing slots are the arguments the format may consume.
+        makeFunc("_snwprintf_s", 16),
+        makeFunc("swprintf_s", 16),
         makeFunc("swprintf", 16),
 
         // Console
