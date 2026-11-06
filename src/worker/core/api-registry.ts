@@ -6,6 +6,7 @@ import { shcoreModule } from "../api/shcore.api";
 import { kernelbaseModule } from "../api/kernelbase.api";
 import { lgvidModule } from "../api/lgvid.api";
 import { oledlgModule } from "../api/oledlg.api";
+import { avicap32Module } from "../api/avicap32.api";
 import { msiModule } from "../api/msi.api";
 import { xinput1_3Module } from "../api/xinput1_3.api";
 import { msvcp140Module } from "../api/msvcp140.api";
@@ -96,6 +97,7 @@ export class APIRegistry {
         this.registerModule(kernelbaseModule);
         this.registerModule(lgvidModule);
         this.registerModule(oledlgModule);
+        this.registerModule(avicap32Module);
         this.registerModule(msiModule);
         this.registerModule(xinput1_3Module);
         this.registerModule(msvcp140Module);
