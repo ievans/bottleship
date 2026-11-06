@@ -158,6 +158,25 @@ describe("steam_api — objects", () => {
         } finally { restore(); }
     });
 
+    test("a Workshop query completes: a real call handle, and an empty OK result", () => {
+        const process = installMockProcess();
+        try {
+            const module = new SteamApi();
+            module.initialize(process);
+            const query = call(module, "ISteamUGC002_CreateQueryUserUGCRequest", [], mem);
+            expect(query).not.toBe(0);
+            const handle = call(module, "ISteamUGC002_SendQueryUGCRequest", [query, 0], mem);
+            expect(handle).not.toBe(0);
+            const failed = 0x9000, result = 0x9100;
+            expect(call(module, "ISteamUtils007_IsAPICallCompleted", [handle, 0, failed], mem)).toBe(1);
+            expect(Mem.readUint32(failed)).toBe(0);
+            expect(call(module, "ISteamUtils007_GetAPICallResult", [handle, 0, result, 24, 3401, failed], mem)).toBe(1);
+            expect(Mem.readUint32(result)).toBe(query);      // m_handle
+            expect(Mem.readUint32(result + 8)).toBe(1);      // m_eResult = k_EResultOK
+            expect(Mem.readUint32(result + 12)).toBe(0);     // no results
+        } finally { restore(); }
+    });
+
     test("the user is logged on and owns the game", () => {
         const module = new SteamApi();
         module.initialize(null as any);

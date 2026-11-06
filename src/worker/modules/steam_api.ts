@@ -12,9 +12,14 @@
  *
  * There is no Steam client behind any of it. The objects describe a user who is logged on,
  * owns the game and has nothing else: no friends, no Workshop items, no cloud files, no
- * stats yet. Asynchronous requests return k_uAPICallInvalid, so no call result ever
- * arrives; every method without a behavior below returns zero (FALSE, NULL, an empty
+ * stats yet. Every method without a behavior below returns zero (FALSE, NULL, an empty
  * handle, a zeroed CSteamID).
+ *
+ * Asynchronous requests the game waits on (a Workshop query) get a real SteamAPICall_t and
+ * a completed, empty result. It is delivered the way the client does it: once the game
+ * registers its CCallResult for the handle, the next SteamAPI_RunCallbacks calls the
+ * object's Run(pvParam, bIOFailure, hSteamAPICall). That is vtable slot 0 on Windows — MSVC
+ * lays overloaded virtuals out in reverse declaration order.
  */
 
 import { IModule } from "../core/module";
@@ -28,6 +33,8 @@ import { fpuPush } from "../core/fpu-helper";
 import { FunctionDescriptor, InterfaceDescriptor, ModuleDescriptor } from "../api/types";
 import { createVTablesFromDescriptor, VTableInfo } from "../api/adapters/module-adapter";
 import { createComObject } from "./d3d9/shared-state";
+import { type GuestRoutine, runGuestRoutine } from "../core/thunking/guest-routine";
+import { writeGuestCode } from "../core/memory/guest-code";
 import { STEAM_INTERFACES, type SteamReturn } from "./steam/interfaces";
 
 /** Rise of Nations: Extended Edition's Steam app id. */
@@ -35,7 +42,10 @@ export const STEAM_APP_ID = 287450;
 /** An individual account in the public universe: universe 1, type 1, instance 1. */
 const STEAM_ID_HIGH = 0x01100001;
 const STEAM_ACCOUNT_ID = 0x00bb11e5;
-const UGC_QUERY_INVALID = 0xffffffff;
+/** EResult k_EResultOK. */
+const RESULT_OK = 1;
+/** SteamUGCQueryCompleted_t under the Windows callback packing (8): handle, eResult, returned, total, cached. */
+const UGC_QUERY_COMPLETED_SIZE = 24;
 
 /** Which interface each flat getter hands out. SteamGameServer has no table yet. */
 const GETTERS: Record<string, string> = {
@@ -92,6 +102,13 @@ export class SteamApi implements IModule {
     private readonly objects = new Map<string, number>();
     private readonly strings = new Map<string, number>();
     private readonly logged = new Set<string>();
+    private nextHandle = 1;
+    /** Completed asynchronous calls by handle, with the result struct each delivers. */
+    private readonly callResults = new Map<number, Uint8Array>();
+    /** Registered CCallResults whose result is ready: delivered on the next RunCallbacks. */
+    private readyCallbacks: Array<{ callback: number; call: number }> = [];
+    /** pop eax; pop ecx; push eax; mov eax,[ecx]; jmp [eax] — stdcall(this, ...) → thiscall vtable slot 0. */
+    private runTrampoline = 0;
 
     initialize(process: Process): void {
         this.process = process;
@@ -102,7 +119,7 @@ export class SteamApi implements IModule {
             return 1;
         };
         exports["SteamAPI_Shutdown"] = () => 0;
-        exports["SteamAPI_RunCallbacks"] = () => 0;
+        exports["SteamAPI_RunCallbacks"] = (ctx, mem) => this.runCallbacks(ctx, mem);
         exports["SteamGameServer_RunCallbacks"] = () => 0;
         exports["SteamGameServer_Shutdown"] = () => 0;
         exports["SteamAPI_SetMiniDumpComment"] = () => 0;
@@ -113,8 +130,16 @@ export class SteamApi implements IModule {
         // result to deliver.
         exports["SteamAPI_RegisterCallback"] = () => 0;
         exports["SteamAPI_UnregisterCallback"] = () => 0;
-        exports["SteamAPI_RegisterCallResult"] = () => 0;
-        exports["SteamAPI_UnregisterCallResult"] = () => 0;
+        exports["SteamAPI_RegisterCallResult"] = (_ctx, _mem, args) => {
+            const callback = (args[0] ?? 0) >>> 0, call = (args[1] ?? 0) >>> 0;
+            if (callback && this.callResults.has(call)) this.readyCallbacks.push({ callback, call });
+            return 0;
+        };
+        exports["SteamAPI_UnregisterCallResult"] = (_ctx, _mem, args) => {
+            const callback = (args[0] ?? 0) >>> 0, call = (args[1] ?? 0) >>> 0;
+            this.readyCallbacks = this.readyCallbacks.filter((r) => r.callback !== callback || r.call !== call);
+            return 0;
+        };
 
         for (const [getter, iface] of Object.entries(GETTERS)) exports[getter] = () => this.object(iface);
         exports["SteamGameServer"] = () => {
@@ -135,6 +160,44 @@ export class SteamApi implements IModule {
                 };
             });
         }
+    }
+
+    /** Deliver every ready call result through its CCallResult's Run(pvParam, bIOFailure, hCall). */
+    private runCallbacks(ctx: Parameters<ThunkImplementation>[0], mem: Uint8Array): ReturnType<ThunkImplementation> {
+        if (!this.readyCallbacks.length || !this.process) return 0;
+        const process = this.process;
+        if (!this.runTrampoline) {
+            const at = process.memory.alloc(16, "THUNK_CODE", "rx") >>> 0;
+            writeGuestCode(process.getCurrentMemory(), new Uint8Array([0x58, 0x59, 0x50, 0x8b, 0x01, 0xff, 0x20]), at);
+            this.runTrampoline = at;
+        }
+        const ready = this.readyCallbacks;
+        this.readyCallbacks = [];
+        const trampoline = this.runTrampoline;
+        const results = this.callResults;
+        const routine = (function* (): GuestRoutine {
+            for (const { callback, call } of ready) {
+                const payload = results.get(call);
+                if (!payload) continue;
+                results.delete(call);
+                const p = process.memory.alloc(payload.length, "HEAP", "rw") >>> 0;
+                Mem.writeBytes(p, payload);
+                try {
+                    yield { fn: trampoline, args: [callback, p, 0, call, 0], tag: "steam_api:CCallResult::Run" };
+                } finally {
+                    process.memory.free(p);
+                }
+            }
+            return 0;
+        })();
+        return runGuestRoutine(ctx, mem, routine, 0, "SteamAPI_RunCallbacks");
+    }
+
+    /** A completed asynchronous call: its handle, with `payload` as the result it delivers. */
+    private completedCall(payload: Uint8Array): number {
+        const call = this.nextHandle++;
+        this.callResults.set(call, payload);
+        return this.ret64(call, 0);
     }
 
     /** The one object a getter (or ISteamClient::GetISteam*) hands out for an interface. */
@@ -198,8 +261,20 @@ export class SteamApi implements IModule {
         "ISteamUtils007::GetIPCountry": () => this.string("US"),
         "ISteamUtils007::GetCurrentBatteryPower": () => 255,
         "ISteamUtils007::GetSteamUILanguage": () => this.string("english"),
-        // k_uAPICallInvalid never completes: report it failed rather than pending forever.
-        "ISteamUtils007::IsAPICallCompleted": (a) => { if (a[2]) Mem.writeUint32(a[2]!, 1); return 0; },
+        // IsAPICallCompleted(SteamAPICall_t, bool *pbFailed): every call we hand out has completed.
+        "ISteamUtils007::IsAPICallCompleted": (a) => {
+            const known = this.callResults.has(a[0]! >>> 0);
+            if (a[2]) Mem.writeUint32(a[2]!, known ? 0 : 1);
+            return known ? 1 : 0;
+        },
+        // GetAPICallResult(SteamAPICall_t, void *pCallback, int cubCallback, int iCallbackExpected, bool *pbFailed)
+        "ISteamUtils007::GetAPICallResult": (a) => {
+            const payload = this.callResults.get(a[0]! >>> 0);
+            if (a[5]) Mem.writeUint32(a[5]!, payload ? 0 : 1);
+            if (!payload || !a[2]) return 0;
+            Mem.writeBytes(a[2]!, payload.subarray(0, Math.min(payload.length, a[3]! >>> 0)));
+            return 1;
+        },
 
         "ISteamFriends014::GetPersonaName": () => this.string("Player"),
         "ISteamFriends014::GetPersonaState": () => 1,
@@ -214,9 +289,18 @@ export class SteamApi implements IModule {
         "ISteamUserStats011::RequestCurrentStats": () => 1,
         "ISteamUserStats011::StoreStats": () => 1,
 
-        // Query handles come back invalid, so the game never waits on a Workshop listing.
-        "ISteamUGC002::CreateQueryUserUGCRequest": () => this.ret64(UGC_QUERY_INVALID, UGC_QUERY_INVALID),
-        "ISteamUGC002::CreateQueryAllUGCRequest": () => this.ret64(UGC_QUERY_INVALID, UGC_QUERY_INVALID),
+        // Workshop queries succeed and find nothing.
+        "ISteamUGC002::CreateQueryUserUGCRequest": () => this.ret64(this.nextHandle++, 0),
+        "ISteamUGC002::CreateQueryAllUGCRequest": () => this.ret64(this.nextHandle++, 0),
+        "ISteamUGC002::ReleaseQueryUGCRequest": () => 1,
+        "ISteamUGC002::SendQueryUGCRequest": (a) => {
+            const payload = new Uint8Array(UGC_QUERY_COMPLETED_SIZE);
+            const v = new DataView(payload.buffer);
+            v.setUint32(0, a[0]! >>> 0, true);
+            v.setUint32(4, a[1]! >>> 0, true);
+            v.setUint32(8, RESULT_OK, true);
+            return this.completedCall(payload);
+        },
 
         "ISteamRemoteStorage012::GetQuota": (a) => {
             if (a[0]) Mem.writeUint32(a[0]!, 100 << 20);
