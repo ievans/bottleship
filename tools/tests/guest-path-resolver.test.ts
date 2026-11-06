@@ -14,6 +14,11 @@ describe("normalizeGuestPath", () => {
             "C:\\windows\\system\\ddraw.dll",
         );
     });
+    test("drops trailing dots and spaces from each component, as Win32 does", () => {
+        expect(normalizeGuestPath("C:\\Saves.\\gamelog.ini")).toBe("C:\\Saves\\gamelog.ini");
+        expect(normalizeGuestPath("C:\\My Dir \\a.txt. ")).toBe("C:\\My Dir\\a.txt");
+        expect(normalizeGuestPath("C:\\a\\.\\b\\..\\c")).toBe("C:\\a\\c");
+    });
 });
 
 describe("expandFileLookupPaths", () => {
