@@ -114,6 +114,51 @@ export function resolveInprocDllPath(clsidNormalized: string): string | null {
     return resolveInprocServerPath(clsidNormalized) ?? resolveRomFallbackPath(clsidNormalized);
 }
 
+/**
+ * Read HKCR\CLSID\{guid}\TreatAs default value: the CLSID that emulates this one
+ * (CoGetTreatAsClass). Windows follows it for both the server lookup and the CLSID handed
+ * to DllGetClassObject, e.g. a version-independent MSXML class served by a versioned DLL.
+ */
+export function resolveTreatAsClsid(clsidNormalized: string): string | null {
+    const store = System.getInstance().registry;
+    if (!store) return null;
+
+    const key = store.open("HKEY_CLASSES_ROOT", `CLSID\\{${normalizeGuid(clsidNormalized)}}\\TreatAs`);
+    if (!key) return null;
+
+    const val = store.getValue(key, "");
+    if (!val || val.type !== "REG_SZ") return null;
+
+    const target = normalizeGuid(String(val.data).trim());
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(target)) return null;
+    return target === normalizeGuid(clsidNormalized) ? null : target;
+}
+
+/** Guest copies of TreatAs target CLSIDs, written once and passed as DllGetClassObject's rclsid. */
+const treatAsClsidPtrs = new WeakMap<Process, Map<string, number>>();
+
+function applyTreatAs(process: Process, args: InprocCoCreateArgs): InprocCoCreateArgs {
+    const target = resolveTreatAsClsid(args.clsidNormalized);
+    if (!target) return args;
+
+    let ptrs = treatAsClsidPtrs.get(process);
+    if (!ptrs) {
+        ptrs = new Map();
+        treatAsClsidPtrs.set(process, ptrs);
+    }
+    let ptr = ptrs.get(target);
+    if (ptr === undefined) {
+        ptr = process.memory.alloc(16, "THUNK_DATA");
+        if (Mem.writeBytes(ptr, guidToBytes(target)) !== 16) {
+            process.memory.free(ptr);
+            return args;
+        }
+        ptrs.set(target, ptr);
+    }
+    Logger.log(LogCategory.COM, `inproc: TreatAs ${args.clsidNormalized} → ${target}`);
+    return { ...args, rclsid: ptr, clsidNormalized: target };
+}
+
 function readGuestVtblSlot(mem: Uint8Array, objPtr: number, slot: number): number {
     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
     const vtable = view.getUint32(objPtr, true) >>> 0;
@@ -387,8 +432,9 @@ export function tryInprocCoCreateInstance(
     process: Process,
     ctx: { esp: number; returnAddr?: number },
     mem: Uint8Array,
-    args: InprocCoCreateArgs,
+    requested: InprocCoCreateArgs,
 ): ThunkResult | Promise<ThunkResult | null> | null {
+    const args = applyTreatAs(process, requested);
     const dllPath = resolveInprocDllPath(args.clsidNormalized);
     if (!dllPath) return null;
 
