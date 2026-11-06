@@ -114,6 +114,12 @@ const DESC = {
     memLength: 0x340, memData: 0x348,
 } as const;
 
+/** Where a loader looks for `file`: under its search directory first, unless the path is absolute. */
+function searchPaths(directory: string, file: string): string[] {
+    if (/^([a-z]:)?[\\/]/i.test(file) || !directory) return [file];
+    return [directory.replace(/[\\/]*$/, "\\") + file, file];
+}
+
 const isWave = (b: Uint8Array): boolean =>
     b.length >= 12 && String.fromCharCode(b[0]!, b[1]!, b[2]!, b[3]!) === "RIFF" && String.fromCharCode(b[8]!, b[9]!, b[10]!, b[11]!) === "WAVE";
 const DESC_NAME_CHARS = 64;
@@ -717,7 +723,13 @@ export class DMusic implements IModule {
             return name ? DMUS_E_LOADER_FAILEDOPEN : DMUS_E_LOADER_OBJECTNOTFOUND;
         };
         e["IDirectMusicLoader8_SetObject"] = () => S_OK;
-        e["IDirectMusicLoader8_SetSearchDirectory"] = () => S_OK;
+        // HRESULT SetSearchDirectory(REFGUID rguidClass, WCHAR *pwszPath, BOOL fClear)
+        e["IDirectMusicLoader8_SetSearchDirectory"] = (_c, _m, a) => {
+            const loader = this.object<LoaderObject>(a[0]);
+            if (!loader || !a[2]) return E_POINTER;
+            loader.searchDirectory = readWide(a[2] >>> 0, DESC_FILENAME_CHARS);
+            return S_OK;
+        };
         e["IDirectMusicLoader8_ScanDirectory"] = () => S_FALSE;   // "no files found"
         e["IDirectMusicLoader8_CacheObject"] = () => S_OK;
         e["IDirectMusicLoader8_ReleaseObject"] = () => S_OK;
@@ -728,11 +740,17 @@ export class DMusic implements IModule {
         e["IDirectMusicLoader8_ReleaseObjectByUnknown"] = () => S_OK;
         // HRESULT LoadObjectFromFile(REFGUID rguidClassID, REFIID iidInterfaceID,
         //                            WCHAR *pwzFilePath, void **ppObject)
+        // A WAVE file loads as a wave segment; other file types are not read from disk here.
         e["IDirectMusicLoader8_LoadObjectFromFile"] = (_c, _m, a) => {
+            const loader = this.object<LoaderObject>(a[0]);
             const ppObject = a[4] >>> 0;
-            if (ppObject) Mem.writeUint32(ppObject, 0);
-            Logger.log(LogCategory.COM,
-                `[DMusic] LoadObjectFromFile("${readWide(a[3] >>> 0, DESC_FILENAME_CHARS)}") -> DMUS_E_LOADER_FAILEDOPEN`);
+            if (!loader || !ppObject || !a[3]) return E_POINTER;
+            Mem.writeUint32(ppObject, 0);
+            const file = readWide(a[3] >>> 0, DESC_FILENAME_CHARS);
+            const bytes = this.readSystemFile(searchPaths(loader.searchDirectory, file));
+            const sound = bytes && isWave(bytes) ? decodeWave(bytes) : null;
+            if (sound) return this.queryInterface(this.waveSegment(sound), guidAt(a[2]! >>> 0), ppObject);
+            Logger.log(LogCategory.COM, `[DMusic] LoadObjectFromFile("${file}") -> DMUS_E_LOADER_FAILEDOPEN${bytes ? " (not a WAVE)" : ""}`);
             return DMUS_E_LOADER_FAILEDOPEN;
         };
     }

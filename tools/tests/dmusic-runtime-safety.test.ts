@@ -5,7 +5,7 @@ import {SystemResourceProvider} from "../../src/worker/core/resources/system-res
 import {DMusic} from "../../src/worker/modules/dmusic";
 import {
     CLSID_DirectMusic, CLSID_DirectMusicPerformance, CLSID_DirectMusicSegment, CLSID_DirectMusicBand,
-    CLSID_DirectMusicStyle, CLSID_DirectMusicCollection, IID_IUnknown, IID_IPersistStream,
+    CLSID_DirectMusicStyle, CLSID_DirectMusicCollection, CLSID_DirectMusicLoader, IID_IUnknown, IID_IPersistStream,
     type DMusicObject, type PerformanceObject, type SegmentObject, type PortObject, type LoadableObject,
 } from "../../src/worker/modules/dmusic-objects";
 import {PerfSegment, Performance} from "../../src/worker/core/audio/directmusic/performance";
@@ -40,7 +40,7 @@ beforeEach(() => {
     internals = module as any;
     internals.process = process;
     module.vtables = new Proxy({}, {get: () => ({address: 0x1000})}) as any;
-    for (const method of ["registerObjectExports", "registerPerformanceExports", "registerPortExports", "registerSegmentStateExports", "registerAudioPathExports", "registerGraphExports"]) internals[method]();
+    for (const method of ["registerObjectExports", "registerPerformanceExports", "registerPortExports", "registerSegmentStateExports", "registerAudioPathExports", "registerGraphExports", "registerLoaderExports"]) internals[method]();
     new DataView(mem.buffer).setUint32(0x3000, 0x3100, true);
     new DataView(mem.buffer).setUint32(0x3100 + 3 * 4, 0x1300, true);
 });
@@ -265,6 +265,29 @@ describe("DirectMusic streams and COM lifetimes", () => {
         expect(Mem.readUint32(0x6a0)).toBe(graph);
         expect(call("IDirectMusicGraph_StampPMsg", [graph, 0x700])).toBe(0);
         expect(call("IDirectMusicGraph_GetTool", [graph, 0, 0x6a4]) >>> 0).toBe(0x88781161); // DMUS_E_NOT_FOUND
+    });
+
+    test("LoadObjectFromFile loads a WAVE file as a wave segment, looking under the search directory first", () => {
+        const wave = new Uint8Array(48), v = new DataView(wave.buffer);
+        wave.set(new TextEncoder().encode("RIFF"), 0); v.setUint32(4, 40, true);
+        wave.set(new TextEncoder().encode("WAVEfmt "), 8); v.setUint32(16, 16, true);
+        v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, 22050, true);
+        v.setUint32(28, 44100, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+        wave.set(new TextEncoder().encode("data"), 36); v.setUint32(40, 4, true);
+        const tried: string[][] = [];
+        internals.readSystemFile = (paths: string[]) => { tried.push(paths); return wave; };
+        const wide = (at: number, text: string) => { for (let i = 0; i <= text.length; i++) Mem.writeUint16(at + i * 2, i < text.length ? text.charCodeAt(i) : 0); return at; };
+        const {ptr: loader} = make<DMusicObject>(CLSID_DirectMusicLoader);
+        expect(call("IDirectMusicLoader8_SetSearchDirectory", [loader, 0x700, wide(0x800, ".\\sounds\\"), 0])).toBe(0);
+        Mem.writeBytes(0x900, new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46])); // IID_IUnknown
+        expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "tracks\\Hearth.wav"), 0x6b0])).toBe(0);
+        expect(tried).toEqual([[".\\sounds\\tracks\\Hearth.wav", "tracks\\Hearth.wav"]]);
+        const seg = rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as SegmentObject;
+        objects.push(seg);
+        expect(seg.segment?.waves.length).toBe(1);
+        expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "C:\\x.wav"), 0x6b0])).toBe(0);
+        expect(tried[1]).toEqual(["C:\\x.wav"]);
+        objects.push(rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as DMusicObject);
     });
 
     test("replacing or destroying a port releases its buffer and DirectSound references", () => {
