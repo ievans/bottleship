@@ -3738,7 +3738,8 @@ function normalizePath(path: string): string {
             stack.pop();
             continue;
         }
-        stack.push(part);
+        // Win32 drops trailing dots and spaces from each component: "Saves." is "Saves".
+        stack.push(part.replace(/[. ]+$/, "") || part);
     }
     return `${drive}:\\${stack.join("\\")}`;
 }
