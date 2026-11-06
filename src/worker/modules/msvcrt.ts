@@ -57,6 +57,7 @@ import { registerRttiExports, demangleTypeInfoName } from "./crt-rtti";
 import { registerUcrtExports } from "./crt-ucrt";
 import { invokeGuestVoidChain, readFunctionPointerTable } from "./crt-callback-chain";
 import { CrtEnvironment, readWideEnvironmentString } from "./crt-environment";
+import { classicCtypeFlags } from "./crt-ctype";
 
 /** Priming value for fgetsLoop — a generator's first next() discards its argument. */
 const EMPTY_BYTES = new Uint8Array(0);
@@ -2716,32 +2717,7 @@ export class Msvcrt implements IModule {
     }
 
     private computeCtypeFlags(ch: number): number {
-        const C_UPPER = 0x0001;
-        const C_LOWER = 0x0002;
-        const C_DIGIT = 0x0004;
-        const C_SPACE = 0x0008;
-        const C_PUNCT = 0x0010;
-        const C_CONTROL = 0x0020;
-        const C_BLANK = 0x0040;
-        const C_HEX = 0x0080;
-        const C_ALPHA = 0x0100;
-
-        let flags = 0;
-        if (ch >= 0x41 && ch <= 0x5a) {
-            flags |= C_UPPER | C_ALPHA;
-        } else if (ch >= 0x61 && ch <= 0x7a) {
-            flags |= C_LOWER | C_ALPHA;
-        }
-        if (ch >= 0x30 && ch <= 0x39) {
-            flags |= C_DIGIT | C_HEX;
-        }
-        if (ch === 0x20 || ch === 0x09) flags |= C_SPACE | C_BLANK;
-        if (ch === 0x0a || ch === 0x0d || ch === 0x0b || ch === 0x0c) flags |= C_SPACE;
-        if (ch < 0x20 || ch === 0x7f) flags |= C_CONTROL;
-        if (ch >= 0x21 && ch <= 0x7e && (flags & (C_ALPHA | C_DIGIT)) === 0) flags |= C_PUNCT;
-        if (ch >= 0x41 && ch <= 0x46) flags |= C_HEX;
-        if (ch >= 0x61 && ch <= 0x66) flags |= C_HEX;
-        return flags;
+        return classicCtypeFlags(ch);
     }
 
     private writeUint16(addr: number, value: number): void {
