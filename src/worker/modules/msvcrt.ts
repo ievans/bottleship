@@ -379,6 +379,11 @@ export class Msvcrt implements IModule {
         exports["_ftol2_sse"] = () => this.ftol();
         // The undecorator behind type_info::name. There is none here; NULL is its failure result.
         exports["__unDName"] = () => 0;
+        // int _cputs(const char*): there is no console; the text goes to the log.
+        exports["_cputs"] = (ctx, mem, args) => {
+            Logger.log(LogCategory.SYSTEM, `msvcrt._cputs: ${this.readCString(args[0] ?? 0, 1024)}`);
+            return 0;
+        };
         exports["_atoi64"] = (ctx, mem, args) => this.atoi64(args[0] ?? 0);
         exports["_CItan"] = () => this.CItan();
         exports["_CIatan2"] = () => this.CIatan2();
@@ -471,6 +476,8 @@ export class Msvcrt implements IModule {
             readCString: (p, max) => this.readCString(p, max),
             readWString: (p, max) => this.readWString(p, max),
             writeCString: (p, v) => this.writeCString(p, v),
+            writeWString: (p, v) => this.writeWString(p, v),
+            setErrno: (e) => { this.setErrno(e); },
             writeUint16: (addr, value) => this.writeUint16(addr, value),
             caseLowerTableAddr: () => this.caseLowerTableAddr,
             caseUpperTableAddr: () => this.caseUpperTableAddr,

@@ -20,6 +20,8 @@ export interface CrtConvHost {
     readCString(ptr: number, maxLen: number): string;
     readWString(ptr: number, maxChars: number): string;
     writeCString(ptr: number, value: string): void;
+    writeWString(ptr: number, value: string): void;
+    setErrno(code: number): void;
     writeUint16(addr: number, value: number): void;
     /** Live guest address of the tolower LUT (0 until allocated) — see Msvcrt.buildCaseTables. */
     caseLowerTableAddr(): number;
@@ -39,14 +41,35 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
         return atoi(ptr);
     }
 
-    function ltoa(value: number, buffer: number, radix: number): number {
-        if (!buffer) return 0;
+    /** _ltoa's digits: signed in base 10, the unsigned bit pattern in any other base. */
+    function ltoaText(value: number, radix: number): string {
         const base = radix > 1 ? radix : 10;
         const signed = (base === 10);
         const val = signed ? (value | 0) : (value >>> 0);
-        const text = (signed && val < 0) ? `-${Math.abs(val).toString(base)}` : val.toString(base);
-        host.writeCString(buffer, text);
+        return (signed && val < 0) ? `-${Math.abs(val).toString(base)}` : val.toString(base);
+    }
+
+    function ltoa(value: number, buffer: number, radix: number): number {
+        if (!buffer) return 0;
+        host.writeCString(buffer, ltoaText(value, radix));
         return buffer >>> 0;
+    }
+
+    function ltow(value: number, buffer: number, radix: number): number {
+        if (!buffer) return 0;
+        host.writeWString(buffer, ltoaText(value, radix));
+        return buffer >>> 0;
+    }
+
+    /** errno_t _ltow_s(long value, wchar_t* buffer, size_t sizeInWords, int radix) */
+    function ltowS(value: number, buffer: number, size: number, radix: number): number {
+        const EINVAL = 22, ERANGE = 34;
+        if (!buffer || size === 0) { host.setErrno(EINVAL); return EINVAL; }
+        if (radix < 2 || radix > 36) { host.writeWString(buffer, ""); host.setErrno(EINVAL); return EINVAL; }
+        const text = ltoaText(value, radix);
+        if (text.length + 1 > size) { host.writeWString(buffer, ""); host.setErrno(ERANGE); return ERANGE; }
+        host.writeWString(buffer, text);
+        return 0;
     }
 
     function ultoa(value: number, buffer: number, radix: number): number {
@@ -56,12 +79,15 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
         return buffer >>> 0;
     }
 
-    function atof(ptr: number): number {
-        const str = host.readCString(ptr, 256).trim();
-        const value = parseFloat(str);
-        const result = Number.isFinite(value) ? value : 0;
-        fpuPush(host.process.v86, result);
+    /** atof/_wtof: the double comes back in ST0. */
+    function pushParsedDouble(str: string): number {
+        const value = parseFloat(str.trim());
+        fpuPush(host.process.v86, Number.isFinite(value) ? value : 0);
         return 0;
+    }
+
+    function atof(ptr: number): number {
+        return pushParsedDouble(host.readCString(ptr, 256));
     }
 
     /** strtol's parse over an already-read string: the value and the index it stopped at. */
@@ -246,6 +272,9 @@ export function registerCrtConvExports(exports: Record<string, ThunkImplementati
     exports["_wtoi"] = (ctx, mem, args) => wtoi(args[0] ?? 0);
     exports["wcstoul"] = (ctx, mem, args) => wcstoul(args[0] ?? 0, args[1] ?? 0, args[2] ?? 0);
     exports["wcstol"] = (ctx, mem, args) => wcstol(args[0] ?? 0, args[1] ?? 0, args[2] ?? 10);
+    exports["_wtof"] = (ctx, mem, args) => pushParsedDouble(host.readWString(args[0] ?? 0, 256));
+    exports["_ltow"] = (ctx, mem, args) => ltow(args[0] ?? 0, args[1] ?? 0, args[2] ?? 10);
+    exports["_ltow_s"] = (ctx, mem, args) => ltowS(args[0] ?? 0, args[1] ?? 0, (args[2] ?? 0) >>> 0, (args[3] ?? 0) | 0);
 
     exports["atoi"] = (ctx, mem, args) => atoi(args[0] ?? 0);
     exports["atol"] = (ctx, mem, args) => atol(args[0] ?? 0);

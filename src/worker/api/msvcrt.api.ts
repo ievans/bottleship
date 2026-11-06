@@ -268,6 +268,10 @@ export const msvcrtModule: ModuleDescriptor = {
         makeFunc("_atoi64", 1),
         makeFunc("atol", 1),
         makeFunc("_ltoa", 3),
+        makeFunc("_ltow", 3),
+        makeFunc("_ltow_s", 4),
+        makeFunc("_wtof", 1),  // like atof: the handler pushes the double to ST0
+        makeFunc("_cputs", 1),
         makeFunc("_ultoa", 3),
         makeFunc("srand", 1),
         makeFunc("rand", 0),

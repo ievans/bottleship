@@ -91,6 +91,8 @@ describe("wide and secure CRT functions", () => {
             readCString: readC,
             readWString: readW,
             writeCString: () => {},
+            writeWString: writeW,
+            setErrno: (e) => { errno = e; },
             writeUint16: () => {},
             caseLowerTableAddr: () => 0,
             caseUpperTableAddr: () => 0,
@@ -171,6 +173,17 @@ describe("wide and secure CRT functions", () => {
         expect(signed(call("wcstol", s, end, 0))).toBe(-31);
         expect(Mem.readUint32(end)).toBe(s + 7 * 2);
         expect(call("wcstol", wstr("42"), 0, 10)).toBe(42);
+    });
+
+    test("_ltow_s writes the digits, and empties a buffer too small for them", () => {
+        const d = dest(8);
+        expect(call("_ltow_s", -1234, d, 8, 10)).toBe(0);
+        expect(readW(d)).toBe("-1234");
+        expect(call("_ltow_s", 0x10de, d, 8, 16)).toBe(0);
+        expect(readW(d)).toBe("10de");
+        expect(call("_ltow_s", 123456, d, 4, 10)).toBe(ERANGE);
+        expect(readW(d)).toBe("");
+        expect(call("_ltow_s", 1, d, 8, 1)).toBe(EINVAL);
     });
 
     test("_wfullpath resolves against the current directory, malloc'ing for NULL", () => {
