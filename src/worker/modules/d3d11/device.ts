@@ -34,6 +34,7 @@ const E_POINTER = 0x80004003;
 const E_NOTIMPL = 0x80004001;
 const E_FAIL = 0x80004005;
 const E_INVALIDARG = 0x80070057;
+const DXGI_ERROR_INVALID_CALL = 0x887a0001;
 const DXGI_ERROR_NOT_FOUND = 0x887a0002;
 const COM_MODULE = "d3d11_com";
 const RECENT_CALLS = 400;
@@ -99,6 +100,32 @@ const readStruct = (p: number, size: number): Uint8Array | null => (p ? Mem.read
  * and this device creates no multisampled textures, so the MS views read single-sample 2D.
  */
 const SRV_DIM: Record<number, GPUTextureViewDimension> = { 2: "1d", 3: "2d-array", 4: "2d", 5: "2d-array", 6: "2d", 7: "2d-array", 8: "3d", 9: "cube", 10: "cube-array" };
+
+/**
+ * Methods that hand back an interface pointer, and which argument (`this` is 0) receives it:
+ * an unimplemented one NULLs it so the caller never uses a stale pointer. Every other method
+ * is left alone; their trailing arguments are data buffers, flags or inputs.
+ */
+const OBJECT_OUT_ARG: Readonly<Record<string, number | "last">> = {
+    ...Object.fromEntries([
+        "CreateBlendState", "CreateBuffer", "CreateClassLinkage", "CreateComputeShader", "CreateCounter",
+        "CreateDeferredContext", "CreateDepthStencilState", "CreateDepthStencilView", "CreateDomainShader",
+        "CreateGeometryShader", "CreateGeometryShaderWithStreamOutput", "CreateHullShader", "CreateInputLayout",
+        "CreatePixelShader", "CreatePredicate", "CreateQuery", "CreateRasterizerState", "CreateRenderTargetView",
+        "CreateSamplerState", "CreateShaderResourceView", "CreateSoftwareAdapter", "CreateSurface", "CreateSwapChain",
+        "CreateTexture1D", "CreateTexture2D", "CreateTexture3D", "CreateUnorderedAccessView", "CreateVertexShader",
+        "EnumAdapters", "EnumAdapters1", "EnumOutputs", "GetAdapter", "GetBuffer", "GetContainingOutput", "GetDevice",
+        "GetFullscreenState", "GetImmediateContext", "GetParent", "GetResource", "OpenSharedResource",
+    ].map((name) => [name, "last" as const])),
+    GetPredication: 1, // (ppPredicate, pPredicateValue)
+};
+
+export function objectOutArg(name: string, argCount: number): number | null {
+    const at = OBJECT_OUT_ARG[name];
+    if (at === undefined) return null;
+    const index = at === "last" ? argCount - 1 : at;
+    return index >= 1 && index < argCount ? index : null;
+}
 
 export class D3D11Device {
     private readonly vtables = new Map<string, number>();
@@ -216,7 +243,8 @@ export class D3D11Device {
                     this.unimplemented.add(key);
                     Logger.warn(LogCategory.D3D9, `[D3D11] ${key} is not implemented (E_NOTIMPL)`);
                 }
-                if (/^(Create|Get|Enum|Open)/.test(name) && argCount > 1 && args[argCount - 1]) Mem.writeUint32(args[argCount - 1]! >>> 0, 0);
+                const out = objectOutArg(name, argCount);
+                if (out !== null && args[out]) Mem.writeUint32(args[out]! >>> 0, 0);
             }
             let result: number | Promise<number>;
             try {
@@ -244,6 +272,8 @@ export class D3D11Device {
             if (!ppv) return E_POINTER;
             const own = obj && (iid === IID.IUnknown || IID[obj.iface as keyof typeof IID] === iid
                 || (obj.iface.startsWith("ID3D11") && obj.iface !== "ID3D11Device" && iid === IID.ID3D11DeviceChild)
+                || (obj.iface.startsWith("IDXGI") && iid === IID.IDXGIObject)
+                || (obj.iface === "IDXGISwapChain" && iid === IID.IDXGIDeviceSubObject)
                 || obj.iids?.some((name) => IID[name] === iid));
             const target = own ? self! : obj?.aliases.get(iid);
             if (target === undefined) {
@@ -447,7 +477,7 @@ export class D3D11Device {
             if (v) this.renderer.clearDepthStencil(v, a[2]!, f32(a[3]!), a[4]! & 0xff);
             return 0;
         },
-        ClearState() { this.renderer.setShader("vs", null); this.renderer.setShader("ps", null); this.renderer.setShader("gs", null); return 0; },
+        ClearState() { this.renderer.clearState(); return 0; },
 
         // ---- context: resource updates ----
         Map(a) {
@@ -601,7 +631,14 @@ export class D3D11Device {
             this.renderer.presentsExclusiveFullscreen = !windowed;
             return this.give(a[3]!, chain);
         },
-        GetBuffer(a) { return this.out(a[3]!, this.objects.get(a[0]!)?.backBuffer ?? 0); },
+        // One back buffer backs the chain, so only buffer 0 can be handed out (all a DISCARD
+        // chain allows); aliasing it for a later index would hand out the wrong resource.
+        GetBuffer(a) {
+            const backBuffer = this.objects.get(a[0]!)?.backBuffer;
+            if (!a[3]) return E_POINTER;
+            if (a[1] !== 0 || !backBuffer) { Mem.writeUint32(a[3]!, 0); return DXGI_ERROR_INVALID_CALL; }
+            return this.out(a[3]!, backBuffer);
+        },
         ResizeBuffers(a) {
             const o = this.objects.get(a[0]!);
             if (!o?.desc) return E_INVALIDARG;

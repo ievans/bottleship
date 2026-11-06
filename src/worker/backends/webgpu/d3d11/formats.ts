@@ -21,28 +21,35 @@ const bc = (format: GPUTextureFormat, bytes: number): TextureFormatInfo =>
 const depth = (format: GPUTextureFormat, bytes: number, stencil: boolean): TextureFormatInfo =>
     ({ format, bytes, block: false, depth: true, stencil });
 
+/** Formats WebGPU has only behind an optional device feature: each resolves only when the device enabled it. */
+export interface FormatFeatures {
+    /** rgba16unorm and friends. */
+    norm16?: boolean;
+    /** depth32float-stencil8, the only faithful home for the D32_FLOAT_S8X24 family. */
+    depth32Stencil8?: boolean;
+}
+
 /** The depth format a typeless/depth/shader-view DXGI format resolves to when bound as depth. */
-function depthFamily(f: number): TextureFormatInfo | null {
+function depthFamily(f: number, features: FormatFeatures): TextureFormatInfo | null {
     switch (f) {
         case 39: case 40: case 41: return depth("depth32float", 4, false);       // R32_TYPELESS, D32_FLOAT, R32_FLOAT
         case 44: case 45: case 46: case 47: return depth("depth24plus-stencil8", 4, true); // R24G8 family
-        case 19: case 20: case 21: case 22: return depth("depth24plus-stencil8", 8, true); // R32G8X24 family
+        case 19: case 20: case 21: case 22: // R32G8X24 family
+            return features.depth32Stencil8 ? depth("depth32float-stencil8", 8, true) : null;
         case 53: case 55: case 56: return depth("depth16unorm", 2, false);       // R16_TYPELESS, D16_UNORM, R16_UNORM
         default: return null;
     }
 }
 
-export function isDepthFamily(format: number): boolean {
-    return depthFamily(format) !== null && [40, 45, 20, 55, 39, 44, 19, 53].includes(format);
+/** A format a depth-stencil resource can be created with (typeless or D*), when this device has it. */
+export function isDepthFamily(format: number, features: FormatFeatures = {}): boolean {
+    return [40, 45, 20, 55, 39, 44, 19, 53].includes(format) && depthFamily(format, features) !== null;
 }
 
-/**
- * Resolve a resource's DXGI format; `asDepth` when the resource is bound DEPTH_STENCIL.
- * The 16-bit normalized formats exist in WebGPU only with an optional device feature, so
- * they resolve only when `norm16` says the device enabled it.
- */
-export function textureFormat(f: number, asDepth: boolean, norm16 = false): TextureFormatInfo | null {
-    if (asDepth) return depthFamily(f);
+/** Resolve a resource's DXGI format; `asDepth` when the resource is bound DEPTH_STENCIL. */
+export function textureFormat(f: number, asDepth: boolean, features: FormatFeatures = {}): TextureFormatInfo | null {
+    const norm16 = !!features.norm16;
+    if (asDepth) return depthFamily(f, features);
     switch (f) {
         case 1: case 2: return color("rgba32float", 16);
         case 3: return color("rgba32uint", 16);
@@ -87,8 +94,8 @@ export function textureFormat(f: number, asDepth: boolean, norm16 = false): Text
         case 81: return bc("bc4-r-snorm", 8);
         case 82: case 83: return bc("bc5-rg-unorm", 16);
         case 84: return bc("bc5-rg-snorm", 16);
-        case 87: case 88: case 90: return color("bgra8unorm", 4, ["bgra8unorm-srgb"]);
-        case 91: case 93: return color("bgra8unorm-srgb", 4, ["bgra8unorm"]);
+        case 87: case 88: case 90: case 92: return color("bgra8unorm", 4, ["bgra8unorm-srgb"]);
+        case 91: case 93: return color("bgra8unorm-srgb", 4, ["bgra8unorm"]); // B8G8R8A8/B8G8R8X8_UNORM_SRGB
         default: return null;
     }
 }

@@ -139,6 +139,7 @@ export const IID = {
     ID3D11Query: "d6c00747-87b7-425e-b84d-44d108560afd",
     ID3D11Predicate: "9eb576dd-9f77-4d86-81aa-8bab5fe490e2",
     IDXGIObject: "aec22fb8-76f3-4639-9be0-28eb43a67a2e",
+    IDXGIDeviceSubObject: "3d3e0379-f9de-4d58-bb6c-18d62992f1a6",
     IDXGIDevice: "54ec77fa-1377-44e6-8c32-88fd5f44c84c",
     IDXGIDevice1: "77db970f-6276-48ba-ba28-070143b4392c",
     IDXGIAdapter: "2411e7e1-12ac-4ccf-bd14-9798e8534dc0",

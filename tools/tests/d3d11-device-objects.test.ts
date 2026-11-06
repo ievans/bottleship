@@ -7,6 +7,7 @@ import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { resetComMemory } from "../../src/worker/core/com/com-memory";
 
 const S_OK = 0, E_INVALIDARG = 0x80070057, E_NOTIMPL = 0x80004001, E_NOINTERFACE = 0x80004002;
+const DXGI_ERROR_INVALID_CALL = 0x887a0001;
 
 function texture(width: number, height: number, mips = 1): TextureRes {
     return {
@@ -112,6 +113,38 @@ describe("D3D11Device objects", () => {
         expect(u32(0x600)).toBe(0);
     });
 
+    test("an unimplemented method leaves arguments that are not object out-pointers alone", () => {
+        const minLod = (device as any).handler("ID3D11DeviceContext", "GetResourceMinLOD", 2);
+        dv().setUint32(0x600, 0xdead, true);
+        minLod({}, mem, [0x9000, 0x600]); // pResource is an input
+        expect(u32(0x600)).toBe(0xdead);
+
+        const predication = (device as any).handler("ID3D11DeviceContext", "GetPredication", 3);
+        dv().setUint32(0x610, 0xdead, true); dv().setUint32(0x614, 0xbeef, true);
+        expect(predication({}, mem, [0x9000, 0x610, 0x614])).toBe(E_NOTIMPL);
+        expect(u32(0x610)).toBe(0);      // ppPredicate
+        expect(u32(0x614)).toBe(0xbeef); // pPredicateValue
+    });
+
+    test("every DXGI object answers for IDXGIObject", () => {
+        device.init();
+        for (const obj of [(device as any).adapter, (device as any).factory, (device as any).output, (device as any).create("IDXGISwapChain")]) {
+            expect(call("QueryInterface", [obj, guid(0x400, IID.IDXGIObject), 0x420])).toBe(S_OK);
+            expect(u32(0x420)).toBe(obj);
+        }
+    });
+
+    test("GetBuffer hands out buffer 0 and refuses any other index", () => {
+        const tex = createTex();
+        const chain = (device as any).create("IDXGISwapChain");
+        (objects().get(chain) as any).backBuffer = tex;
+        dv().setUint32(0x800, 0xdead, true);
+        expect(call("GetBuffer", [chain, 1, 0, 0x800], "IDXGISwapChain")).toBe(DXGI_ERROR_INVALID_CALL);
+        expect(u32(0x800)).toBe(0);
+        expect(call("GetBuffer", [chain, 0, 0, 0x800], "IDXGISwapChain")).toBe(S_OK);
+        expect(u32(0x800)).toBe(tex);
+    });
+
     test("Map lays out each mip by its own size, and Unmap writes that mip", () => {
         const tex = createTex();
         const writes: unknown[][] = [];
@@ -124,11 +157,15 @@ describe("D3D11Device objects", () => {
     });
 });
 
+function renderer(features: string[] = []): D3D11Renderer {
+    Object.assign(globalThis, { GPUBufferUsage: { VERTEX: 1, INDEX: 2, UNIFORM: 4, COPY_DST: 8 } });
+    const gpu = { createBuffer: () => ({}), createSampler: () => ({}), features: new Set<string>(features) };
+    return new D3D11Renderer({ getDevice: () => gpu } as any);
+}
+
 describe("D3D11Renderer.formatSupport", () => {
     test("reports what the renderer can create", () => {
-        Object.assign(globalThis, { GPUBufferUsage: { VERTEX: 1, INDEX: 2, UNIFORM: 4, COPY_DST: 8 } });
-        const gpu = { createBuffer: () => ({}), createSampler: () => ({}), features: new Set<string>() };
-        const r = new D3D11Renderer({ getDevice: () => gpu } as any);
+        const r = renderer();
         const TEXTURE2D = 0x20, RENDER_TARGET = 0x4000, DEPTH_STENCIL = 0x10000, IA_INDEX = 0x4, IA_VERTEX = 0x2;
         expect(r.formatSupport(28) & (TEXTURE2D | RENDER_TARGET)).toBe(TEXTURE2D | RENDER_TARGET);   // R8G8B8A8_UNORM
         // R16G16B16A16_UNORM: no texture without the optional WebGPU feature, but still a vertex format.
@@ -136,5 +173,35 @@ describe("D3D11Renderer.formatSupport", () => {
         expect(r.formatSupport(11) & IA_VERTEX).toBe(IA_VERTEX);
         expect(r.formatSupport(40) & DEPTH_STENCIL).toBe(DEPTH_STENCIL);                             // D32_FLOAT
         expect(r.formatSupport(57) & IA_INDEX).toBe(IA_INDEX);                                       // R16_UINT
+        expect(r.formatSupport(92) & TEXTURE2D).toBe(TEXTURE2D);                                     // B8G8R8X8_TYPELESS
+    });
+
+    test("D32_FLOAT_S8X24 exists only where the device has depth32float-stencil8", () => {
+        const DEPTH_STENCIL = 0x10000;
+        expect(renderer().formatSupport(20)).toBe(0);
+        expect(renderer(["depth32float-stencil8"]).formatSupport(20) & DEPTH_STENCIL).toBe(DEPTH_STENCIL);
+    });
+});
+
+describe("D3D11Renderer.clearState", () => {
+    test("drops every binding and restores the default states", () => {
+        const r = renderer() as any;
+        const fresh = { blend: r.blend, raster: r.raster, depthStencil: r.depthStencil };
+        const view = { kind: "view" }, buf = { kind: "buffer" };
+        r.setShader("vs", { kind: "shader" }); r.setShader("ps", { kind: "shader" });
+        r.setInputLayout({}); r.setTopology(5);
+        r.setVertexBuffer(0, buf, 16, 0); r.setIndexBuffer(buf, 57, 0);
+        r.setConstantBuffer("ps", 1, buf); r.setShaderResource("ps", 0, view); r.setSampler("vs", 0, {});
+        r.setRenderTargets([view], view);
+        r.setBlend({ ...fresh.blend }, { r: 0, g: 0, b: 0, a: 0 }); r.setRaster({ ...fresh.raster }); r.setDepthStencil({ ...fresh.depthStencil }, 7);
+        r.setViewport({ x: 0, y: 0, w: 8, h: 8, minDepth: 0, maxDepth: 1 }); r.setScissor({ x: 0, y: 0, w: 8, h: 8 });
+
+        r.clearState();
+        expect([r.vs, r.ps, r.gs, r.layout, r.ib, r.dsv, r.viewport, r.scissor]).toEqual([null, null, null, null, null, null, null, null]);
+        expect(r.topology).toBe(0);
+        expect([r.vbs, r.rtvs, r.cbs.ps, r.srvs.ps, r.samplers.vs]).toEqual([[], [], [], [], []]);
+        expect([r.blend, r.raster, r.depthStencil]).toEqual([fresh.blend, fresh.raster, fresh.depthStencil]);
+        expect(r.blendFactor).toEqual({ r: 1, g: 1, b: 1, a: 1 });
+        expect(r.stencilRef).toBe(0);
     });
 });
