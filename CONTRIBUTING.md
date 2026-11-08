@@ -116,6 +116,26 @@ ring, the unimplemented-stub registry, and recent page faults.
 - Include what you did to verify the change actually works (which game/flow you drove, not
   just that it typechecks).
 - Green quality gate is required.
+- Title the PR as a [Conventional Commit](https://www.conventionalcommits.org/), such as
+  `fix(dmusic): StopEx stops only that audio path`. PRs are squash-merged with the title as the
+  commit message, and the `PR title` check enforces the format.
+
+## Releases
+
+Releases follow [semver](https://semver.org/) and are cut by
+[release-please](https://github.com/googleapis/release-please) from the commit messages on `main`:
+
+- `fix:` makes the next release a patch, and `feat:` a minor. While the version is below 1.0, a
+  breaking change (`feat!:`, or a `BREAKING CHANGE:` footer) is also a minor.
+- Other types (`docs:`, `test:`, `refactor:`, `chore:` and so on) are released with the next
+  `fix:` or `feat:` and stay out of the changelog.
+
+After each push to `main` passes CI, release-please opens or updates a `chore(main): release X.Y.Z`
+PR with the version bump and the new `CHANGELOG.md` section. Edit that PR to add highlights or
+release notes. Merging it tags `vX.Y.Z`, creates the GitHub release and publishes the multi-arch
+server image as `ghcr.io/ievans/bottleship:X.Y.Z` (and `:latest`).
+
+The first release counts the commits since 0.7 (`bootstrap-sha` in `release-please-config.json`).
 
 By contributing you agree your contributions are licensed under the project's
 [`LICENSE`](LICENSE).

@@ -8,7 +8,8 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Least privilege: only publish-wasm writes to the repo, and only its own job gets that.
+# Least privilege: only publish-wasm, release and publish-image write, and each gets only the
+# permissions its own job needs.
 permissions:
   contents: read
 
@@ -147,6 +148,77 @@ jobs:
             --title "$TAG" \
             --notes "Wasm outputs matching tools/build-wasm/wasm.lock.json at $GITHUB_SHA." \
             --prerelease
+
+  # Keeps a release PR open that collects the Conventional Commits on main (CONTRIBUTING.md,
+  # "Releases"); merging it tags vX.Y.Z and creates the GitHub release. It runs after
+  # publish-wasm, so a release is only cut from a commit that passed the gate and whose wasm
+  # release exists for the image build to download.
+  release:
+    name: Release
+    needs: publish-wasm
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      version: ${{ steps.release.outputs.version }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5
+
+  # A tag pushed with GITHUB_TOKEN starts no other workflow, so the image is built here rather
+  # than on a `release` event.
+  publish-image:
+    name: Publish image
+    needs: release
+    if: needs.release.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # The release's commit, not necessarily this run's: when a newer push cancels the run that
+      # merged the release PR, the next run creates the release for that earlier commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ needs.release.outputs.sha }}
+          # Same submodule contract as the gate job above.
+          submodules: true
+          persist-credentials: false
+          fetch-depth: 0
+
+      # arm64 is cross-built under emulation; the Dockerfile keeps the frontend build native.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:${{ needs.release.outputs.version }}
+            ghcr.io/${{ github.repository }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.release.outputs.version }}
+            org.opencontainers.image.revision=${{ needs.release.outputs.sha }}
+          # Keeps GHCR free of the "unknown/unknown" attestation manifests.
+          provenance: false
+          cache-from: type=gha,scope=image
+          cache-to: type=gha,mode=max,scope=image
 
   dedup-scan:
     name: Dedup / dead-export scan (advisory)
