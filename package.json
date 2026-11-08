@@ -1,9 +1,11 @@
 {
   "name": "bottleship",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "private": true,
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "prepare": "git config core.hooksPath .githooks 2>/dev/null || true",
     "prebuild": "bun run build:wasm && bun run generate-reference-argcounts && bun run generate-indexes",

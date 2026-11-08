@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.8.0](https://github.com/ievans/bottleship/compare/v0.7.0...v0.8.0) (2026-11-08)
+
+
+### Features
+
+* add MSVCP110 (VC++2012 C++ stdlib) HLE module ([#42](https://github.com/ievans/bottleship/issues/42)) ([7dffcae](https://github.com/ievans/bottleship/commit/7dffcaeb8135b5f9b00c85b95cfb9511747eb44b))
+* add MSVCR110 (VC++2012 CRT) HLE module ([#41](https://github.com/ievans/bottleship/issues/41)) ([45ebd87](https://github.com/ievans/bottleship/commit/45ebd878b630c37a7b02d807df020633bb9360e3))
+* add steam_api.dll HLE module ([#43](https://github.com/ievans/bottleship/issues/43)) ([4630496](https://github.com/ievans/bottleship/commit/46304969c9211acabff9de76774df3d516d715e0))
+* add twitchsdk_32_release.dll stub module ([#44](https://github.com/ievans/bottleship/issues/44)) ([9658f32](https://github.com/ievans/bottleship/commit/9658f3219a1ab3407ba0336bdd5e1fb6c9a810fd))
+* **com:** follow HKCR\CLSID\{x}\TreatAs in in-process CoCreateInstance ([#59](https://github.com/ievans/bottleship/issues/59)) ([d8a33c2](https://github.com/ievans/bottleship/commit/d8a33c234ede0631797a80e684d9a20e563ff353)), closes [#10](https://github.com/ievans/bottleship/issues/10)
+* **d3d11:** a WebGPU Direct3D 11 device with an SM4-to-WGSL translator ([#66](https://github.com/ievans/bottleship/issues/66)) ([56773dd](https://github.com/ievans/bottleship/commit/56773dd464db2fc4b073ef75acddcfcf583d9423))
+* **dmusic:** wave segments, mixed on their audio path's buffer ([#72](https://github.com/ievans/bottleship/issues/72)) ([75f2573](https://github.com/ievans/bottleship/commit/75f25739feefd471b62e46b46e175a7163584a8d))
+* **msvcrt, advapi32:** the wide and secure CRT calls d3dcompiler_46 and d3dgl import ([#62](https://github.com/ievans/bottleship/issues/62)) ([d2bd436](https://github.com/ievans/bottleship/commit/d2bd4368820fc6b857f7dcad8d1cb6a030d883b0))
+* **msvcrt:** fgetws ([#69](https://github.com/ievans/bottleship/issues/69)) ([13f14d2](https://github.com/ievans/bottleship/commit/13f14d25a1c39c8896863820c657954ee0e1bf6f))
+* **steam_api:** SDK 1.30 interface objects and call results for an offline user ([#65](https://github.com/ievans/bottleship/issues/65)) ([91f237d](https://github.com/ievans/bottleship/commit/91f237d186c920d70f9e0b171a20c3c252a6ed74))
+* **urlmon:** file URL monikers, bind contexts and BindToStorage ([#58](https://github.com/ievans/bottleship/issues/58)) ([c1f7e7c](https://github.com/ievans/bottleship/commit/c1f7e7c1a47dab31fb9a07b1d2610eb6ea91bba4)), closes [#10](https://github.com/ievans/bottleship/issues/10)
+
+
+### Bug Fixes
+
+* bound WGB cache growth and restore D3D9 depth clears ([3e11673](https://github.com/ievans/bottleship/commit/3e11673616d312e664942831c05fa70f7d83799e))
+* **d3d11:** NaN and infinite shader constants compile; an invalid pipeline no longer blacks out the frame ([#74](https://github.com/ievans/bottleship/issues/74)) ([23248a0](https://github.com/ievans/bottleship/commit/23248a0994a5f8b3a593abd6a5102ac4ae54852e))
+* **dmusic:** InitAudio returns its DirectSound; audio paths have a buffer and a tool graph ([#71](https://github.com/ievans/bottleship/issues/71)) ([10df4d8](https://github.com/ievans/bottleship/commit/10df4d80055def674c3fcbd0f9011c57cd0693c8))
+* **dmusic:** StopEx on an audio path stops only that path; audio paths honor SetVolume ([#75](https://github.com/ievans/bottleship/issues/75)) ([2266fbb](https://github.com/ievans/bottleship/commit/2266fbb8e01e5d7147a67934a82cdabeae642888))
+* **gdi32:** declare GetGlyphOutlineA/W and GetKerningPairsA/W ([#63](https://github.com/ievans/bottleship/issues/63)) ([d45ee64](https://github.com/ievans/bottleship/commit/d45ee644125dbf1a16ca4d77bf9aef1bff1225b8))
+* **kernel32:** a zero-byte HeapAlloc returns a block, not NULL ([#61](https://github.com/ievans/bottleship/issues/61)) ([551652b](https://github.com/ievans/bottleship/commit/551652b98b8cb1eee3f3c1164634b79a338adf92))
+* **mss32:** decode MS ADPCM with msacm32's block decoder ([#73](https://github.com/ievans/bottleship/issues/73)) ([45e9837](https://github.com/ievans/bottleship/commit/45e9837172ee6b2e79a3a58b16ce4d1e21780567))
+* **msvcp110:** a real classic locale for code that inlines use_facet ([#67](https://github.com/ievans/bottleship/issues/67)) ([6049877](https://github.com/ievans/bottleship/commit/604987748364aa7a06072f88b16f5fe6cc7d32db))
+* **msvcp110:** basic_ostream ctor pops its hidden vbase flag; declare _Fiopen ([#56](https://github.com/ievans/bottleship/issues/56)) ([546641b](https://github.com/ievans/bottleship/commit/546641b6558334d1dc5db05128ac850f68d24fb8))
+* **oledlg, avicap32:** declare the imports that kept unicows.dll from loading ([#57](https://github.com/ievans/bottleship/issues/57)) ([0b3c171](https://github.com/ievans/bottleship/commit/0b3c171bf44980f9c24a95d5fdd5e72496644f00))
+* **runtime:** restore resource loading and x87 precision for Empires ([7b25393](https://github.com/ievans/bottleship/commit/7b25393ee4e8653da2c94eb3e030b5f0d9084059))
+* **steam_api:** ISteamMatchmaking vtable covers slot 20, fixing an OOB read ([#53](https://github.com/ievans/bottleship/issues/53)) ([0399d4d](https://github.com/ievans/bottleship/commit/0399d4de173581f08a6fa77f0d53d890680c7b7c))
+* **steam_api:** SteamMatchmaking() returns a real object instead of NULL ([#52](https://github.com/ievans/bottleship/issues/52)) ([b2d6953](https://github.com/ievans/bottleship/commit/b2d69539fe0ab1e3c1225b9f5fdc57136d34d05f))
+* **user32:** windows created by class name keep their class; FindWindow ignores case ([#70](https://github.com/ievans/bottleship/issues/70)) ([8da92bc](https://github.com/ievans/bottleship/commit/8da92bcf2080590ca2884b45519ff4dffd3fe33c))
+* **vfs:** drop trailing dots and spaces from path components ([#68](https://github.com/ievans/bottleship/issues/68)) ([21e184f](https://github.com/ievans/bottleship/commit/21e184f5f866b02ef8fa0f4907321d141e087b80))
+* **vfs:** SetEndOfFile keeps writes still buffered below the new end ([#64](https://github.com/ievans/bottleship/issues/64)) ([8eca9be](https://github.com/ievans/bottleship/commit/8eca9be0b0a40b2fb037ce1d3aa3880d050455cb))
+
 ## 0.7 — 2026-10-08
 
 This release covers changes merged into `main` since October 5, 2026. Compatibility
