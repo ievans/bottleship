@@ -1,17 +1,20 @@
 # Keeps the SHA-pinned actions and the lockfiles current. The cooldown delays adopting a
-# release so a malicious version has time to be yanked before it reaches a PR.
+# release so a malicious version has time to be yanked before it reaches a PR. The `chore(deps)`
+# prefix keeps their PR titles Conventional Commits (CONTRIBUTING.md, "Releases").
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
+    commit-message: { prefix: chore(deps) }
     groups:
       actions: { patterns: ["*"] }
   - package-ecosystem: bun
     directory: /
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
+    commit-message: { prefix: chore(deps) }
   - package-ecosystem: cargo
     directories:
       - /tools/build-unpack-streaming
@@ -19,3 +22,10 @@ updates:
       - /tools/aot/opt/compiler
     schedule: { interval: weekly }
     cooldown: { default-days: 7 }
+    commit-message: { prefix: chore(deps) }
+  # The digest-pinned base images in Dockerfile and Dockerfile.dev.
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly }
+    cooldown: { default-days: 7 }
+    commit-message: { prefix: chore(deps) }

@@ -70,6 +70,10 @@ bun tools/make-stand.ts my-stand.json      # → <out>/{server.ts,docker-compose
 The generated `dist/games-catalog.json` lists exactly the games in the config, and only their
 box art ships — useful for a private stand that should not expose the public library.
 
+To run a release instead, use the image CI publishes from the `Dockerfile` for each one,
+`ghcr.io/ievans/bottleship:<version>` for amd64 and arm64. It serves the full build, with the
+bundles mounted at `/apps`.
+
 A catalog entry can also set `"preload": true` (stand config: per game, or once for all of them):
 the bundle is downloaded to OPFS before the game starts instead of being streamed on demand.
 Streaming wins on a fast local origin — a big game boots after fetching only what the boot path
