@@ -1,5 +1,4 @@
 import { Logger, LogCategory } from "../logger";
-import { zeroDirtyPages } from "./zero-dirty";
 import {
     MEM_HEAP_BASE,
     MEM_HEAP_SIZE,
@@ -617,8 +616,7 @@ export class AddressSpace {
     fill(address: number, size: number, value: number = 0): boolean {
         if (!this.validateRange(address, size, "w")) return false;
         const mem = this.getMemory();
-        if (value === 0) zeroDirtyPages(mem, address, address + size);
-        else mem.fill(value, address, address + size);
+        mem.fill(value, address, address + size);
         return true;
     }
 
