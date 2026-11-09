@@ -62,7 +62,6 @@ import { registerD3D9ConformanceCommands } from "./cmds/d3d9-conformance";
 import { registerShaderCommands } from "./cmds/shader";
 import { registerEffectCommands, registerD3dxTextureCommands } from "./cmds/effects";
 import { registerRenderBoundaryCommands } from "./cmds/render-boundary";
-import { registerLanCommands } from "./cmds/lan";
 
 let installed = false;
 
@@ -121,7 +120,6 @@ export function installHarnessCommands(): void {
     registerEffectCommands(harnessService);
     registerD3dxTextureCommands(harnessService);
     registerRenderBoundaryCommands(harnessService);
-    registerLanCommands(harnessService);
 }
 
 // Install on import so a bare `import './harness/commands'` is sufficient.
