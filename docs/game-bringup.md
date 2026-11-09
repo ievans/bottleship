@@ -21,8 +21,6 @@ this repository: anything for upstream is sent separately, later.
   the bring-up loop and the bar for a PR.
 - The `/bringup` skill (`.claude/skills/bringup/`): the harness checklist.
 - [The automation harness](harness.md): `report()`, `stubs()`, `shot`, `BS_TAB`.
-- [Multiplayer](multiplayer.md): the relay, `tools/lan-peer.ts`, and how Empire Earth's lobby was
-  worked out. This is the template for the networking half.
 - [Compatibility](compatibility.md), [Importing games](bundles.md), [GOG import](gog-import.md):
   how bundles are built and what has been tested.
 - `tools/harness/regression/empire-earth-single-player.harness.ts`: the shape your regression scripts should take.
@@ -47,7 +45,6 @@ export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
 export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
 export BS_WGB_ROOTS=<folder holding your bundles>
 
-bun run dev:lan &    # the multiplayer relay
 bun tools/harness.ts up
 ```
 
@@ -112,8 +109,7 @@ correctly, with the numbers behind each.
 
 ## Phase 3: Multiplayer
 
-1. **Discovery and lobby.** Get hosting and joining working against a `tools/lan-peer.ts` peer, as
-   in the Empire Earth section of [Multiplayer](multiplayer.md). Record the wire format you observe
+1. **Discovery and lobby.** Get hosting and joining working, and record the wire format you observe
    there.
 2. **Launch.** Get a match started, and note how the game behaves with the relay's latency. The
    relay carries UDP over a WebSocket, so nothing is lost but anything can arrive late, which

@@ -6,7 +6,7 @@
 #   docker compose -f docker-compose.dev.yml up -d --build
 #   docker compose -f docker-compose.dev.yml exec claude claude
 #
-# Open http://localhost:5174 ; multiplayer: two tabs with ?game=dev&lan=<room>.
+# Open http://localhost:5174
 # Vite runs with HMR off (a reload restarts the guest), so reload the tab after Claude edits.
 services:
   dev:
