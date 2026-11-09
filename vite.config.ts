@@ -258,8 +258,7 @@ export default defineConfig({
     host: true,
     // Vite refuses Host headers it does not know; set for a dev server reached by name.
     ...process.env.BS_ALLOWED_HOSTS ? { allowedHosts: process.env.BS_ALLOWED_HOSTS.split(",") } : {},
-    // BS_VITE_PORT runs a second dev stack beside the first, as with BS_SIDECAR_PORT.
-    port: Number(process.env.BS_VITE_PORT ?? 5174),
+    port: 5174,
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
