@@ -20,6 +20,10 @@ export interface MSSSample {
     playbackRate: number; // multiplier for WAV
     playbackRateHz?: number; // current rate in Hz (API getter returns this)
     loopCount: number;
+    /** AIL_set_sample_loop_block region, in bytes of the sample's own data; undefined =
+     *  the whole sample. A negative end is "to the end", as in Miles. */
+    loopStartBytes?: number;
+    loopEndBytes?: number;
     /** PCM data length in bytes (WAV data chunk only); used for len/done in guest struct */
     pcmBytes?: number;
     isPlaying: boolean;
@@ -176,4 +180,8 @@ export interface MSSTimer {
     period: number;
     active: boolean;
     timerId?: number;
+    /** A tick is queued or running on the timer-pump thread; further ticks coalesce. */
+    inFlight?: boolean;
+    /** onReturn of the current start's pump ticks; identifies them in the pump queue. */
+    pumpOnReturn?: () => void;
 }

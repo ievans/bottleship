@@ -11,6 +11,7 @@
 
 import { harnessService } from "./service";
 import { registerStateCommands } from "./cmds/state";
+import { registerNetworkCommands } from "./cmds/network";
 import { registerDInputCommands } from "./cmds/dinput";
 import { registerInputCommands } from "./cmds/input";
 import { registerTimeCommands } from "./cmds/time";
@@ -62,7 +63,7 @@ import { registerD3D9ConformanceCommands } from "./cmds/d3d9-conformance";
 import { registerShaderCommands } from "./cmds/shader";
 import { registerEffectCommands, registerD3dxTextureCommands } from "./cmds/effects";
 import { registerRenderBoundaryCommands } from "./cmds/render-boundary";
-import { registerLanCommands } from "./cmds/lan";
+import { registerFootprintCommands } from "./cmds/footprint";
 
 let installed = false;
 
@@ -71,6 +72,7 @@ export function installHarnessCommands(): void {
     if (installed) return;
     installed = true;
     registerStateCommands(harnessService);
+    registerNetworkCommands(harnessService);
     registerDInputCommands(harnessService);
     registerInputCommands(harnessService);
     registerTimeCommands(harnessService);
@@ -121,7 +123,7 @@ export function installHarnessCommands(): void {
     registerEffectCommands(harnessService);
     registerD3dxTextureCommands(harnessService);
     registerRenderBoundaryCommands(harnessService);
-    registerLanCommands(harnessService);
+    registerFootprintCommands(harnessService);
 }
 
 // Install on import so a bare `import './harness/commands'` is sufficient.

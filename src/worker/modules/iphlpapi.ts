@@ -1,127 +1,154 @@
-import { IModule } from "../core/module";
-import { Process } from "../core/process";
-import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
-import { Mem } from "../core/memory/mem-accessor";
-import { lanActive, lanStack } from "../net/lan";
+import type { IModule } from "../core/module";
+import type { Process } from "../core/process";
+import type { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
+import {getVirtualNetworkTopology,getVirtualInterfacePrefixes,prefixMask,type VirtualNetworkTopology,type VirtualUnicastAddress} from "../net/virtual-topology";
+import {lanNetwork,type LanNetwork} from "../net/lan-network";
+import {Mem} from "../core/memory/mem-accessor";
+import {isValidUserAddress} from "../core/memory/address-guard";
+import {System} from "../core/system";
+import {raiseGuestAccessViolation} from "../core/thunking/guest-fault";
 
-const ERROR_SUCCESS = 0;
-const ERROR_BUFFER_OVERFLOW = 111;
-const ERROR_NO_DATA = 232;
-const MIB_IF_TYPE_ETHERNET = 6;
+export const IP_ADAPTER_INFO_SIZE=640;
+export const IP_ADAPTER_ADDRESSES_SIZE=376;
+export const IP_ADAPTER_UNICAST_SIZE=48;
+export const IP_ADAPTER_PREFIX_SIZE=24;
 
-// IP_ADDR_STRING (iptypes.h): Next(4) + IpAddress(char[16]) + IpMask(char[16]) + Context(4) = 40.
-const IP_ADDR_STRING_SIZE = 40;
-const IP_ADDR_STRING_IPADDR_OFF = 4;
-const IP_ADDR_STRING_IPMASK_OFF = 20;
-const IP_ADDR_STRING_CONTEXT_OFF = 36;
+class AdapterBuffer {
+    private bytes=new Uint8Array(2048);
+    private length=0;
+    constructor(readonly base:number){}
+    reserve(size:number,alignment=4):number{
+        const offset=Math.ceil(this.length/alignment)*alignment,end=offset+size;
+        if(end>this.bytes.length){const grown=new Uint8Array(Math.max(end,this.bytes.length*2));grown.set(this.bytes);this.bytes=grown;}
+        this.length=end;return offset;
+    }
+    uint32(offset:number,value:number):void{new DataView(this.bytes.buffer).setUint32(offset,value>>>0,true);}
+    uint64(offset:number,value:bigint):void{new DataView(this.bytes.buffer).setBigUint64(offset,value,true);}
+    pointer(offset:number,target:number):void{this.uint32(offset,this.base+target);}
+    data(offset:number,data:Uint8Array):void{this.bytes.set(data,offset);}
+    ascii(text:string):number{const data=new TextEncoder().encode(text+"\0"),offset=this.reserve(data.length,1);this.data(offset,data);return offset;}
+    wide(text:string):number{const offset=this.reserve((text.length+1)*2,2),view=new DataView(this.bytes.buffer);for(let i=0;i<text.length;i++)view.setUint16(offset+i*2,text.charCodeAt(i),true);return offset;}
+    sockaddr(address:VirtualUnicastAddress):number{
+        const offset=this.reserve(address.family===2?16:28);
+        this.bytes[offset]=address.family;
+        this.data(offset+(address.family===2?4:8),address.address);
+        if(address.family===23)this.uint32(offset+24,address.scopeId);
+        return offset;
+    }
+    finish():Uint8Array{return this.bytes.slice(0,this.length);}
+}
+const asciiField=(bytes:Uint8Array,offset:number,length:number,text:string):void=>{
+    bytes.set(new TextEncoder().encode(text).subarray(0,length-1),offset);
+};
 
-// IP_ADAPTER_INFO (iptypes.h), x86 layout — one entry, no Next (single virtual adapter).
-const ADAPTER_NAME_OFF = 8, ADAPTER_NAME_LEN = 260;
-const DESCRIPTION_OFF = 268, DESCRIPTION_LEN = 132;
-const ADDRESS_LENGTH_OFF = 400;
-const ADDRESS_OFF = 404; // BYTE[8]
-const INDEX_OFF = 412;
-const TYPE_OFF = 416;
-const DHCP_ENABLED_OFF = 420;
-const CURRENT_IP_ADDRESS_OFF = 424;
-const IP_ADDRESS_LIST_OFF = 428;
-const GATEWAY_LIST_OFF = IP_ADDRESS_LIST_OFF + IP_ADDR_STRING_SIZE; // 468
-const DHCP_SERVER_OFF = GATEWAY_LIST_OFF + IP_ADDR_STRING_SIZE; // 508
-const HAVE_WINS_OFF = DHCP_SERVER_OFF + IP_ADDR_STRING_SIZE; // 548
-const PRIMARY_WINS_OFF = HAVE_WINS_OFF + 4; // 552
-const SECONDARY_WINS_OFF = PRIMARY_WINS_OFF + IP_ADDR_STRING_SIZE; // 592
-const LEASE_OBTAINED_OFF = SECONDARY_WINS_OFF + IP_ADDR_STRING_SIZE; // 632
-const LEASE_EXPIRES_OFF = LEASE_OBTAINED_OFF + 4; // 636
-const IP_ADAPTER_INFO_SIZE = LEASE_EXPIRES_OFF + 4; // 640
-
-function ipToDotted(ip: number): string {
-    return `${(ip >>> 24) & 0xff}.${(ip >>> 16) & 0xff}.${(ip >>> 8) & 0xff}.${ip & 0xff}`;
+/** The classic IPv4 API excludes loopback and uses fixed embedded IP_ADDR_STRINGs. */
+export function encodeAdaptersInfo(topology:VirtualNetworkTopology,base:number):Uint8Array{
+    const adapters=topology.interfaces.filter(adapter=>!adapter.loopback&&adapter.addresses.some(address=>address.family===2));
+    const bytes=new Uint8Array(adapters.length*IP_ADAPTER_INFO_SIZE),view=new DataView(bytes.buffer);
+    for(const [index,adapter]of adapters.entries()){
+        const offset=index*IP_ADAPTER_INFO_SIZE,address=adapter.addresses.find(address=>address.family===2)!;
+        if(index+1<adapters.length)view.setUint32(offset,base+offset+IP_ADAPTER_INFO_SIZE,true);
+        asciiField(bytes,offset+8,260,adapter.name);asciiField(bytes,offset+268,132,adapter.description);
+        view.setUint32(offset+400,adapter.physicalAddress.length,true);bytes.set(adapter.physicalAddress.subarray(0,8),offset+404);
+        view.setUint32(offset+412,adapter.index,true);view.setUint32(offset+416,adapter.type,true);
+        asciiField(bytes,offset+432,16,Array.from(address.address).join("."));
+        asciiField(bytes,offset+448,16,Array.from(prefixMask(4,address.prefixLength)).join("."));
+        for(const list of [468,508,552,592]){asciiField(bytes,offset+list+4,16,"0.0.0.0");asciiField(bytes,offset+list+20,16,"0.0.0.0");}
+    }
+    return bytes;
 }
 
-function writeAnsiField(mem: Uint8Array, addr: number, maxLen: number, text: string): void {
-    const bytes = new TextEncoder().encode(text);
-    const n = Math.min(bytes.length, maxLen - 1);
-    mem.set(bytes.subarray(0, n), addr);
-    mem[addr + n] = 0;
+/** x86 Vista-SP1+ IP_ADAPTER_ADDRESSES layout, measured against current native Windows. */
+export function encodeAdaptersAddresses(topology:VirtualNetworkTopology,base:number,family:number,flags:number):Uint8Array{
+    const output=new AdapterBuffer(base),adapters=topology.interfaces;
+    const rows=adapters.map(()=>output.reserve(IP_ADAPTER_ADDRESSES_SIZE,8));
+    for(const [index,adapter]of adapters.entries()){
+        const row=rows[index];
+        output.uint32(row,IP_ADAPTER_ADDRESSES_SIZE);output.uint32(row+4,adapter.index);
+        if(index+1<rows.length)output.pointer(row+8,rows[index+1]);
+        output.pointer(row+12,output.ascii(adapter.name));
+        output.pointer(row+32,output.wide(""));
+        output.pointer(row+36,output.wide(adapter.description));
+        if(!(flags&0x20))output.pointer(row+40,output.wide(adapter.description));
+        output.data(row+44,adapter.physicalAddress.subarray(0,8));output.uint32(row+52,adapter.physicalAddress.length);
+        const ipv4=adapter.addresses.some(address=>address.family===2),ipv6=adapter.addresses.some(address=>address.family===23);
+        output.uint32(row+56,(adapter.multicast?0:0x10)|(ipv4?0x80:0)|(ipv6?0x100:0));
+        output.uint32(row+60,adapter.mtu);output.uint32(row+64,adapter.type);output.uint32(row+68,adapter.up?1:2);
+        output.uint32(row+72,ipv6?adapter.index:0);
+        output.uint32(row+168,adapter.loopback?75:25);output.uint32(row+172,adapter.loopback?75:25);
+        output.uint64(row+176,(BigInt(adapter.type)<<48n)|(BigInt(adapter.index)<<24n));
+        output.uint32(row+192,1);output.uint32(row+212,1);
+        const addresses=adapter.addresses.filter(address=>!family||address.family===family);
+        if(!(flags&1)){
+            let previous:number|undefined;
+            for(const address of addresses){
+                const entry=output.reserve(IP_ADAPTER_UNICAST_SIZE,8),sockaddr=output.sockaddr(address);
+                if(previous===undefined)output.pointer(row+16,entry);else output.pointer(previous+8,entry);
+                output.uint32(entry,IP_ADAPTER_UNICAST_SIZE);output.pointer(entry+12,sockaddr);output.uint32(entry+16,address.family===2?16:28);
+                output.uint32(entry+20,1);output.uint32(entry+24,1);output.uint32(entry+28,4);
+                output.uint32(entry+32,0xffffffff);output.uint32(entry+36,0xffffffff);output.uint32(entry+40,0xffffffff);
+                output.data(entry+44,Uint8Array.of(address.prefixLength));previous=entry;
+            }
+        }
+        if(flags&0x10){
+            let previous:number|undefined;
+            for(const address of getVirtualInterfacePrefixes(adapter).filter(address=>!family||address.family===family)){
+                const entry=output.reserve(IP_ADAPTER_PREFIX_SIZE,8),sockaddr=output.sockaddr(address);
+                if(previous===undefined)output.pointer(row+140,entry);else output.pointer(previous+8,entry);
+                output.uint32(entry,IP_ADAPTER_PREFIX_SIZE);output.pointer(entry+12,sockaddr);output.uint32(entry+16,address.family===2?16:28);
+                output.uint32(entry+20,address.prefixLength);previous=entry;
+            }
+        }
+    }
+    return output.finish();
 }
 
-function writeU32(mem: Uint8Array, addr: number, value: number): void {
-    mem[addr] = value & 0xff;
-    mem[addr + 1] = (value >>> 8) & 0xff;
-    mem[addr + 2] = (value >>> 16) & 0xff;
-    mem[addr + 3] = (value >>> 24) & 0xff;
+const ZERO_BLOCK=new Uint8Array(65536);
+/** Longest readable/writable prefix; permission changes inside a coarse region remain visible. */
+function accessiblePrefix(mem:Uint8Array,address:number,length:number,perms:"r"|"rw"):number{
+    let low=0,high=length;
+    while(low<high){const middle=Math.ceil((low+high)/2);if(isValidUserAddress(mem,address,middle,perms))low=middle;else high=middle-1;}
+    return low;
 }
-
-function writeIpAddrString(mem: Uint8Array, addr: number, ipDotted: string, maskDotted: string, context: number): void {
-    writeU32(mem, addr, 0); // Next
-    writeAnsiField(mem, addr + IP_ADDR_STRING_IPADDR_OFF, 16, ipDotted);
-    writeAnsiField(mem, addr + IP_ADDR_STRING_IPMASK_OFF, 16, maskDotted);
-    writeU32(mem, addr + IP_ADDR_STRING_CONTEXT_OFF, context);
+/** Native IP Helper zeroes the whole supplied capacity, with a fault after its accessible prefix. */
+function clearAdapterOutput(mem:Uint8Array,address:number,length:number):number|undefined{
+    let done=0;
+    while(done<length){
+        const size=Math.min(ZERO_BLOCK.length,length-done),pointer=address+done;
+        if(!isValidUserAddress(mem,pointer,size,"rw")){
+            const prefix=accessiblePrefix(mem,pointer,size,"rw");
+            if(prefix)Mem.writeBytes(pointer,ZERO_BLOCK.subarray(0,prefix));
+            return pointer+prefix;
+        }
+        Mem.writeBytes(pointer,ZERO_BLOCK.subarray(0,size));done+=size;
+    }
+    return undefined;
 }
-
-/** Our virtual LAN's assumed gateway: the relay (never handed out to a peer — see lan.ts). */
-const LAN_GATEWAY_DOTTED = "192.168.77.1";
-const LAN_NETMASK_DOTTED = "255.255.255.0";
-
-/** One synthetic IP_ADAPTER_INFO describing the virtual-LAN adapter at `ip` (host-order uint32). */
-function writeVirtualAdapter(mem: Uint8Array, addr: number, ip: number): void {
-    writeU32(mem, addr, 0); // Next — single adapter, end of list
-    writeU32(mem, addr + 4, 0); // ComboIndex
-    writeAnsiField(mem, addr + ADAPTER_NAME_OFF, ADAPTER_NAME_LEN, "BottleShipLan");
-    writeAnsiField(mem, addr + DESCRIPTION_OFF, DESCRIPTION_LEN, "BottleShip Virtual LAN Adapter");
-    writeU32(mem, addr + ADDRESS_LENGTH_OFF, 6);
-    // A deterministic locally-administered MAC derived from our virtual IP, so each room
-    // peer reports a distinct, stable address rather than an all-zero one.
-    const macLocal = [0x02, 0xbb, (ip >>> 24) & 0xff, (ip >>> 16) & 0xff, (ip >>> 8) & 0xff, ip & 0xff];
-    mem.set(macLocal, addr + ADDRESS_OFF);
-    mem[addr + ADDRESS_OFF + 6] = 0;
-    mem[addr + ADDRESS_OFF + 7] = 0;
-    writeU32(mem, addr + INDEX_OFF, 1);
-    writeU32(mem, addr + TYPE_OFF, MIB_IF_TYPE_ETHERNET);
-    writeU32(mem, addr + DHCP_ENABLED_OFF, 0); // static address, not DHCP
-    writeU32(mem, addr + CURRENT_IP_ADDRESS_OFF, 0);
-    writeIpAddrString(mem, addr + IP_ADDRESS_LIST_OFF, ipToDotted(ip), LAN_NETMASK_DOTTED, 1);
-    writeIpAddrString(mem, addr + GATEWAY_LIST_OFF, LAN_GATEWAY_DOTTED, "255.255.255.255", 0);
-    writeIpAddrString(mem, addr + DHCP_SERVER_OFF, "0.0.0.0", "255.255.255.255", 0);
-    writeU32(mem, addr + HAVE_WINS_OFF, 0);
-    writeIpAddrString(mem, addr + PRIMARY_WINS_OFF, "0.0.0.0", "255.255.255.255", 0);
-    writeIpAddrString(mem, addr + SECONDARY_WINS_OFF, "0.0.0.0", "255.255.255.255", 0);
-    writeU32(mem, addr + LEASE_OBTAINED_OFF, 0);
-    writeU32(mem, addr + LEASE_EXPIRES_OFF, 0);
-}
-
 export class Iphlpapi implements IModule {
-    name = "iphlpapi";
-    exports: Record<string, ThunkImplementation> = {};
-
-    initialize(_process: Process): void {
-        // DWORD GetAdaptersInfo(PIP_ADAPTER_INFO pAdapterInfo, PULONG pOutBufLen)
-        //
-        // Offline (no `?lan=` room): ERROR_NO_DATA, as before — there is no network.
-        // In a room: report one synthetic adapter for the virtual 192.168.77.x LAN, so a
-        // title that gates "do I have a network adapter" before offering multiplayer (as
-        // Empire Earth's TCP Protocol.dll appears to) sees one once a room is actually
-        // joined. Generic — benefits every title that calls this, not a per-game branch.
-        this.exports["GetAdaptersInfo"] = (_ctx, mem, args) => {
-            const pAdapterInfo = args[0] >>> 0;
-            const pOutBufLen = args[1] >>> 0;
-
-            if (!lanActive() || lanStack.ip === null) {
-                return { value: ERROR_NO_DATA, stackCleanup: 8 };
+    name="iphlpapi";
+    exports:Record<string,ThunkImplementation>={};
+    constructor(private readonly network:LanNetwork=lanNetwork){}
+    initialize(_process:Process):void{
+        const query=(modern:boolean):ThunkImplementation=>(ctx,mem,args)=>{
+            const family=modern?args[0]>>>0:2,flags=modern?args[1]>>>0:0;
+            const output=args[modern?3:0]>>>0,sizePointer=args[modern?4:1]>>>0,cleanup=modern?20:8;
+            if((modern&&![0,2,23].includes(family))||!sizePointer)return {value:87,stackCleanup:cleanup};
+            if(!isValidUserAddress(mem,sizePointer,4,"r"))
+                return raiseGuestAccessViolation(ctx,mem,sizePointer+accessiblePrefix(mem,sizePointer,4,"r"),"r",cleanup);
+            const capacity=Mem.readUint32(sizePointer)!;
+            const topology=getVirtualNetworkTopology(this.network);
+            const bytes=modern?encodeAdaptersAddresses(topology,output,family,flags):encodeAdaptersInfo(topology,output);
+            if(!output||capacity<bytes.length){
+                if(!isValidUserAddress(mem,sizePointer,4,"rw"))
+                    return raiseGuestAccessViolation(ctx,mem,sizePointer+accessiblePrefix(mem,sizePointer,4,"rw"),"w",cleanup);
+                Mem.writeUint32(sizePointer,bytes.length);System.getInstance().scheduler.setLastError(0);
+                return {value:111,stackCleanup:cleanup};
             }
-
-            const available = Mem.readUint32(pOutBufLen);
-            if (available === null) {
-                return { value: ERROR_NO_DATA, stackCleanup: 8 };
-            }
-            if (available < IP_ADAPTER_INFO_SIZE || !pAdapterInfo) {
-                Mem.writeUint32(pOutBufLen, IP_ADAPTER_INFO_SIZE);
-                return { value: ERROR_BUFFER_OVERFLOW, stackCleanup: 8 };
-            }
-
-            writeVirtualAdapter(mem, pAdapterInfo, lanStack.ip);
-            Mem.writeUint32(pOutBufLen, IP_ADAPTER_INFO_SIZE);
-            return { value: ERROR_SUCCESS, stackCleanup: 8 };
+            const fault=clearAdapterOutput(mem,output,capacity);
+            if(fault!==undefined)return raiseGuestAccessViolation(ctx,mem,fault,"w",cleanup);
+            Mem.writeBytes(output,bytes);System.getInstance().scheduler.setLastError(0);
+            return {value:0,stackCleanup:cleanup};
         };
+        this.exports.GetAdaptersInfo=query(false);this.exports.GetAdaptersAddresses=query(true);
     }
 }

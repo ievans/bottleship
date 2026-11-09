@@ -1,5 +1,5 @@
 
-import { ThunkDispatcher } from './thunking/thunk-dispatcher';
+import { ThunkDispatcher, type DeferredWrite } from './thunking/thunk-dispatcher';
 import { toPlainGuestMemory } from './memory/guest-memory';
 import { PELoader } from './pe-loader';
 import { SystemResourceProvider } from './resources/system-resource-provider';
@@ -19,8 +19,9 @@ import {
 } from './guest-cpu-identity';
 import { ModuleRegistry } from './module-registry';
 import { memoryEventBuffer, MemoryEventType } from './memory/memory-event-buffer';
-import { ensureGuestPagesCommitted } from './memory/guest-page-commit';
+import { ensureGuestPagesCommitted, notifyGuestMemoryReset } from './memory/guest-page-commit';
 import { invalidateGuestCode } from './memory/guest-code';
+import { isGuestMemoryTracked, markGuestPagesDirty, zeroGuestRange } from './memory/guest-page-dirty';
 import type { PageTableManager } from './memory/page-table-manager';
 import { SEH_SCRATCH_TOTAL_SIZE } from './thunking/seh-layout';
 import { AllocTable } from './memory/alloc-table';
@@ -48,6 +49,13 @@ const BUCKET_KINDS: RegionKind[] = ['HEAP', 'HEAP_HIGH', 'SURFACE', 'THUNK_CODE'
  *  are never registered individually (see alloc), so every membership test has to name both. */
 function isHeapBucket(kind: RegionKind | undefined): boolean {
     return kind === 'HEAP' || kind === 'HEAP_HIGH';
+}
+
+/** Zero a bump handout: always below the high-water mark (a previous tenant wrote it); above
+ *  it only where the dirty-page map knows of a writer. Untracked memory trusts virgin bytes,
+ *  exactly as before the map existed. */
+function zeroOrTrustVirgin(mem: Uint8Array, address: number, size: number, belowHighWater: boolean): void {
+    if (belowHighWater || isGuestMemoryTracked(mem)) zeroGuestRange(mem, address, size);
 }
 
 /** Win32 VA allocation granularity — the alignment every image base is stated in. */
@@ -329,6 +337,9 @@ export class MemoryManager {
         if (isHeapBucket(usedBucketKind) || usedBucketKind === 'SURFACE') {
             ensureGuestPagesCommitted(addr, aligned);
         }
+        // Handed out: from here the owner may write it. Every path above returned zeroed
+        // memory (allocateInBucket), and that is what VirtualAlloc's commit relies on.
+        markGuestPagesDirty(addr, aligned);
 
         maybeInvalidateExecutableRange(finalKind, finalPerms, addr, aligned);
 
@@ -390,6 +401,12 @@ export class MemoryManager {
         this.recordAllocation(addr, aligned);
         this.allocs.setBucket(addr, bucketKind);
         ensureGuestPagesCommitted(addr, aligned);
+        // Fresh-commit contract, like every other handout: a re-carve below a retreated
+        // slabTop lands on a previous tenant's bytes. Only its dirty pages are written, so
+        // a never-used high range stays non-resident (the heap slab no longer zero-fills
+        // the arena itself; it relies on this).
+        zeroGuestRange(this.getMemory(), addr, aligned);
+        markGuestPagesDirty(addr, aligned);
         this.logLargeEvent('alloc', addr, aligned);
         return addr;
     }
@@ -489,6 +506,8 @@ export class MemoryManager {
         if (bucketKind === 'HEAP' || bucketKind === 'SURFACE') {
             ensureGuestPagesCommitted(addr, aligned);
         }
+        // Fixed-address handouts keep their bytes (no zeroing here); they are the caller's.
+        markGuestPagesDirty(addr, aligned);
         maybeInvalidateExecutableRange(finalKind, finalPerms, addr, aligned);
         return addr;
     }
@@ -717,6 +736,7 @@ export class MemoryManager {
     }
 
     reset(): void {
+        notifyGuestMemoryReset(this);
         this.allocs.clear();
         this.freeBlocks.clear();
         this.largeFreeBlocks.clear();
@@ -777,7 +797,7 @@ export class MemoryManager {
             if (preWaste >= 16) this.releaseLargeBlock(bucketKind, block.addr, preWaste);
             if (tailSize >= 16) this.releaseLargeBlock(bucketKind, tailStart, tailSize);
             // Fresh-commit contract: VirtualAlloc'd pages always read zero.
-            this.addressSpace.fill(alignedAddr, size, 0);
+            zeroGuestRange(this.getMemory(), alignedAddr, size);
             return alignedAddr;
         }
         return 0;
@@ -833,7 +853,7 @@ export class MemoryManager {
         // have given (a very common pattern) otherwise sees our stale reuse as
         // garbage. Zeroing matches that observable fresh-memory contract and is
         // safe: correct code never relies on reused-dirty.
-        this.addressSpace.fill(alignedAddr, size, 0);
+        zeroGuestRange(this.getMemory(), alignedAddr, size);
         return alignedAddr;
     }
 
@@ -939,9 +959,11 @@ export class MemoryManager {
         // a later bump can re-hand-out that now-dirty range below the high-water mark — those
         // must be re-zeroed so every fresh bump allocation reads as zero, matching hardware.
         // (Free-list reuse is zeroed at its own return site above for the same reason.)
-        if (address < bucket.everMax) {
-            this.addressSpace.fill(address, size, 0);
-        }
+        // Above the high-water mark the bytes are "virgin" by this allocator's account; the
+        // dirty-page map (when tracking) also knows about writers that are not this bucket's
+        // bump — a PE image once mapped in HEAP's middle, a slab carve, Process.reset's
+        // leftovers — and zeroes just those pages. Untracked memory keeps the old trust.
+        zeroOrTrustVirgin(this.getMemory(), address, size, address < bucket.everMax);
         if (bucket.next > bucket.everMax) bucket.everMax = bucket.next;
 
         return address;
@@ -997,6 +1019,12 @@ export class Process {
     // this so they self-invalidate after an in-place reset — the Process object
     // identity stays the same across reset(), so identity alone can't detect it.
     resetGeneration: number = 0;
+    private readonly resetListeners = new Set<() => void>();
+
+    onReset(listener: () => void): () => void {
+        this.resetListeners.add(listener);
+        return () => this.resetListeners.delete(listener);
+    }
 
     constructor(
         private getMemory: () => Uint8Array,
@@ -1083,6 +1111,34 @@ export class Process {
         return toPlainGuestMemory(this.getMemory());
     }
 
+    /**
+     * Publish an asynchronous device completion between guest execution turns.
+     * The caller owns only addresses and copied values, never a borrowed RAM view.
+     * Reset invalidates the entire completion before it can signal an event/APC.
+     */
+    enqueueCompletion(writes: readonly DeferredWrite[], afterPublish: (published: boolean) => void, isCurrent?: () => boolean): void {
+        const generation = this.resetGeneration;
+        const copied = writes.map(write => ({ ...write }));
+        queueMicrotask(() => {
+            if (generation !== this.resetGeneration || (isCurrent && !isCurrent())) return;
+            const valid = copied.every(write =>
+                Number.isInteger(write.address) && write.address > 0 &&
+                Number.isInteger(write.value) && [1, 2, 4, 8].includes(write.size) &&
+                this.addressSpace.validateRange(write.address, write.size, 'w'));
+            if (!valid) { afterPublish(false); return; }
+            let published = true;
+            for (const write of copied) {
+                const bytes = new Uint8Array(write.size);
+                let value = BigInt.asUintN(write.size * 8, BigInt(write.value));
+                for (let index = 0; index < bytes.length; index++, value >>= 8n) bytes[index] = Number(value & 255n);
+                // AddressSpace owns its fresh memory getter; Mem's global binding may
+                // currently belong to a different Process in a host-side test/pump.
+                if (this.addressSpace.write(write.address, bytes) !== bytes.length) { published = false; break; }
+            }
+            afterPublish(published);
+        });
+    }
+
     allocateMemory(size: number): number {
         return this.memory.alloc(size);
     }
@@ -1121,6 +1177,8 @@ export class Process {
      * Reset process state - clear memory, dispatcher state, and restore default environment
      */
     async reset(): Promise<void> {
+        this.resetGeneration++;
+        for (const listener of [...this.resetListeners]) listener();
         this.dispatcher.callbackManager?.cancelDirectCalls();
         // --- Zero out memory regions ---
         const mem = this.getMemory();
@@ -1140,9 +1198,10 @@ export class Process {
                 if (start >= totalMemory) continue;
                 const end = Math.min(region.base + region.size, totalMemory);
                 const size = end - start;
-                if (size > 0) {
-                    this.addressSpace.fill(start, size, 0);
-                }
+                // Only pages something may have written: on the first boot of a fresh
+                // memory this is a few MB, not the ~1.4 GB of layout buckets a blanket
+                // fill would make resident (guest-page-dirty.ts).
+                if (size > 0) zeroGuestRange(mem, start, size);
             }
         }
 
@@ -1156,7 +1215,6 @@ export class Process {
         this.thunkMemoryManager.reset();
         // Thunk stubs are regenerated below — bump the generation so address-keyed
         // caches (kernel32 GetProcAddress) drop stale pre-reset stub addresses.
-        this.resetGeneration++;
         this.moduleRegistry.reset();
         this.loader.resetCaches();
 

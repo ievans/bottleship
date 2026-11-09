@@ -25,6 +25,7 @@ import {
     CTRL_3D_CONE_ORI_X, CTRL_3D_CONE_ORI_Y, CTRL_3D_CONE_ORI_Z,
     CTRL_3D_CONE_OUTVOL, CTRL_3D_FLAGS,
     CTRL_3D_ROLLOFF, CTRL_3D_MIN_GAIN, CTRL_3D_MAX_GAIN,
+    CTRL_LOOP_START_FRAME, CTRL_LOOP_END_FRAME,
     FLAG3D_HAS_3D, FLAG3D_SOURCE_ROLLOFF,
     LCTRL_POS_X, LCTRL_POS_Y, LCTRL_POS_Z,
     LCTRL_VEL_X, LCTRL_VEL_Y, LCTRL_VEL_Z,
@@ -81,7 +82,7 @@ const LIMIT_K = 1 - LIMIT_T;
 // audio-engine.ts verifies the echo and logs loudly on a mismatch or timeout,
 // because a cache hit that silently skips this whole file is worse than a version
 // bump you forgot: the failure otherwise looks identical to "nothing is wrong".
-const WORKLET_MODULE_VERSION = 11;
+const WORKLET_MODULE_VERSION = 12;
 
 // Discontinuity detector threshold: |s[n]−s[n−1]| above this between adjacent
 // output samples counts as a click/splice candidate.
@@ -522,6 +523,14 @@ class BottleShipAudioProcessor extends AudioWorkletProcessor {
       const totalFrames = Math.floor(effectiveBytes / blockAlign);
       if (totalFrames === 0) continue;
 
+      // Loop block (Miles AIL_set_sample_loop_block): a looping pass wraps from loopEnd
+      // back to loopStart; the final pass plays on to the end of the data.
+      const loopEndCtrl = isCircular ? 0 : Atomics.load(ctrl, CTRL_LOOP_END_FRAME);
+      const loopEnd = loopEndCtrl > 0 && loopEndCtrl < totalFrames ? loopEndCtrl : totalFrames;
+      const loopStartCtrl = isCircular ? 0 : Atomics.load(ctrl, CTRL_LOOP_START_FRAME);
+      const loopStart = loopStartCtrl > 0 && loopStartCtrl < loopEnd ? loopStartCtrl : 0;
+      const loopLen = loopEnd - loopStart;
+
       // Rate: frequency / sampleRate gives playback speed
       let rate = (frequency / sampleRate);
       if (rate <= 0) continue;
@@ -616,9 +625,10 @@ class BottleShipAudioProcessor extends AudioWorkletProcessor {
 
       const isStreaming = (flags & FLAG_STREAMING) !== 0;
       // The write-cursor hold below is for one-shot streams (video audio) that must END at
-      // the last written byte. A LOOPING buffer never holds: NT5's Grace mixer computes the
-      // play position from the primary's DAC position and mixes the ring unconditionally —
-      // an under-written lap replays its last content. Holding a looping stream would let
+      // the last written byte. A LOOPING buffer never holds: per the DirectSound streaming
+      // buffer docs (IDirectSoundBuffer::Play with DSBPLAY_LOOPING) the play cursor keeps
+      // wrapping whether or not the app refilled the ring — an under-written lap replays
+      // its last content (also what real Windows does audibly when a pump stalls). Holding a looping stream would let
       // the app's own pump decide whether the play cursor advances, and a pump that sizes
       // each Lock from the cursor delta then deadlocks the moment it goes quiet.
       const streamingHold = isStreaming && loopMode !== -1;
@@ -652,12 +662,16 @@ class BottleShipAudioProcessor extends AudioWorkletProcessor {
       const writeCursorFrame = isStreaming ? Math.floor(writeCursorBytes / blockAlign) : 0;
 
       // A looping dsound buffer whose guest stopped refilling it keeps mixing the stale
-      // ring — that is what the real software mixer does. Its position math derives
-      // entirely from the primary buffer's cursor and it records nothing about how far
-      // the app has written (nt5 dsound CGrace::GetBytePosition), so there is no
-      // drained-queue silence to imitate and no legitimate pump cadence to misjudge.
+      // ring — that is the documented looping behavior: DirectSound tracks only the play
+      // and write cursors and has no notion of how far the app has written, so there is
+      // no drained-queue silence to imitate and no legitimate pump cadence to misjudge.
 
       for (let i = 0; i < frames; i++) {
+        while (loopEnd < totalFrames && pos >= loopEnd
+               && (loopMode === -1 || (loopMode > 1 && loopsCompleted + 1 < loopMode))) {
+          if (loopMode > 1) loopsCompleted++;
+          pos -= loopLen;
+        }
         // Handle end-of-data
         while (pos >= totalFrames) {
           if (isCircular && (loopMode === -1 || isStreaming)) {
@@ -665,11 +679,11 @@ class BottleShipAudioProcessor extends AudioWorkletProcessor {
             pos -= totalFrames;
           } else if (loopMode === -1) {
             // Loop forever (only -1 means infinite)
-            pos -= totalFrames;
+            pos -= loopLen;
           } else if (loopMode > 1) {
             loopsCompleted++;
             if (loopsCompleted < loopMode) {
-              pos -= totalFrames;
+              pos -= totalFrames - loopStart;
             } else {
               // Done — played loopMode times
               Atomics.store(ctrl, CTRL_STATE, 0);

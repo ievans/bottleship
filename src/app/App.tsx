@@ -17,11 +17,11 @@ import { AudioEngine, AudioPlayEncodedPayload, AudioPlayPayload, AudioUpdatePayl
 import { getLogClient, sendLogToServer, writeDebugFile, writeDebugFileBase64, rotateLogFile, logArtifactPath } from "../utils/log-client";
 import { bundleLogName } from "../utils/bundle-url";
 import { sessionFromLocation } from "../harness/session";
-import { lanRelayUrl, newLanRoom } from "../net/lan-url";
 import { installHarnessFacade } from "../harness/facade";
 import { getCachedGamepadMeta, initGamepadCache, readLiveGamepad, rescanGamepads } from "../gamepad-cache";
 import GameSelectScreen, { isDemoEntry, type GameEntry } from "../library/GameSelectScreen";
 import SettingsDrawer from "../settings/SettingsDrawer";
+import { loadNetworkConfig, networkInviteUrl, NETWORK_SETTINGS_KEY, type NetworkConfig, type NetworkStatus } from "../network-config";
 import DevPanel from "./DevPanel";
 import ExitOverlay from "./ExitOverlay";
 import MessageBoxModal, { type MessageBoxRequest } from "../debug/MessageBoxModal";
@@ -384,45 +384,18 @@ export default function App() {
   }, [messageBox]);
   const [isPaused, setIsPaused] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // Multiplayer room (?lan=<room>): mirrors the URL param set at boot (App.tsx's
-  // lanRelayUrl() read), but lets the player create/leave a room live, without a reload —
-  // "set_lan" is already safe to send mid-session (emulator.worker.ts just forwards to
-  // configureLan(), which no-ops if the url is unchanged).
-  const [lanRoom, setLanRoom] = useState<string | null>(
-    () => new URLSearchParams(window.location.search).get("lan"),
-  );
-  const [lanPanelOpen, setLanPanelOpen] = useState(false);
-  const [lanCopied, setLanCopied] = useState(false);
-  const lanInviteUrl = useMemo(() => {
-    if (!lanRoom) return null;
-    const u = new URL(window.location.href);
-    u.searchParams.set("lan", lanRoom);
-    return u.toString();
-  }, [lanRoom]);
-  const joinLanRoom = useCallback((room: string) => {
-    const u = new URL(window.location.href);
-    u.searchParams.set("lan", room);
-    window.history.replaceState(null, "", u.toString());
-    setLanRoom(room);
-    setLanCopied(false);
-    globalWorker?.postMessage({ type: "set_lan", url: lanRelayUrl(u) });
-  }, []);
-  const leaveLanRoom = useCallback(() => {
-    const u = new URL(window.location.href);
-    u.searchParams.delete("lan");
-    window.history.replaceState(null, "", u.toString());
-    setLanRoom(null);
-    setLanCopied(false);
-    globalWorker?.postMessage({ type: "set_lan", url: null });
-  }, []);
-  const openLanPanel = useCallback(() => {
-    if (!lanRoom) {
-      const room = newLanRoom();
-      joinLanRoom(room);
-    }
-    setLanPanelOpen((open) => !open);
-  }, [lanRoom, joinLanRoom]);
   const [uiSettings, setUiSettings] = useState<UiSettings>(() => loadUiSettings());
+  const [network, setNetwork] = useState<NetworkConfig | null>(() => loadNetworkConfig());
+  const networkRef = useRef(network);
+  const [networkStatus, setNetworkStatus] = useState<NetworkStatus>({ state: "offline" });
+  const handleNetworkChange = useCallback((config: NetworkConfig | null) => {
+    networkRef.current = config;
+    window.history.replaceState(null, "", networkInviteUrl(window.location.href, config));
+    setNetwork(config);
+    setNetworkStatus({ state: config ? "connecting" : "offline" });
+    try { localStorage.setItem(NETWORK_SETTINGS_KEY, JSON.stringify(config)); } catch { /* Storage may be unavailable. */ }
+    globalWorker?.postMessage({ type: "set_network", network: config });
+  }, []);
   const [quality, setQuality] = useState<QualityConfig>(() => loadQuality());
   const qualityRef = useRef<QualityConfig>(quality);
   // Quality keys the ACTIVE graphics backend told us (via the set_quality ack) it does
@@ -875,8 +848,9 @@ export default function App() {
   }, []);
   const handleResetSettings = useCallback(() => {
     setUiSettings({ ...DEFAULT_UI_SETTINGS });
+    handleNetworkChange(null);
     setQuality({ ...DEFAULT_QUALITY });
-  }, []);
+  }, [handleNetworkChange]);
 
   // Persist the full quality object + keep the ref current (for the load-"done" re-send) and
   // push it to the worker whenever it changes or the worker becomes ready.
@@ -1057,10 +1031,7 @@ export default function App() {
       // dumps it emits, and those must name the session's own directory — an agent sent
       // to logs/debug/ while its PNG went to logs/alpha/debug/ reads a sibling's evidence.
       globalWorker.postMessage({ type: "set_session", session: sessionFromLocation(window.location.search) });
-
-      // Multiplayer: ?lan=<room> joins that virtual-LAN room on this origin's relay.
-      const lanUrl = lanRelayUrl(window.location);
-      if (lanUrl) globalWorker.postMessage({ type: "set_lan", url: lanUrl });
+      globalWorker.postMessage({ type: "set_network", network: networkRef.current });
 
       // A self re-exec asked us to reload (see the "reexec" message). Hand the worker the
       // launcher's command line BEFORE any bundle load — it replaces the manifest's `args`
@@ -1320,6 +1291,10 @@ export default function App() {
 
     // 3. Setup Worker Message Handling
     worker.onmessage = (event: MessageEvent) => {
+      if (event.data?.type === "network_state") {
+        setNetworkStatus(event.data.status as NetworkStatus);
+        return;
+      }
       if (event.data?.type === 'child_session') {
         audioEngine?.stopAll();
         setExitInfo(null); exitInfoRef.current = null;
@@ -3007,6 +2982,9 @@ export default function App() {
       overriddenQualityKeys={overriddenQualityKeys}
       uiSettings={uiSettings}
       onUiChange={handleUiChange}
+      network={network}
+      networkStatus={networkStatus}
+      onNetworkChange={handleNetworkChange}
       statsOverlay={statsOverlayEnabled}
       onToggleStatsOverlay={handleToggleStatsOverlay}
       logStreaming={loggingEnabled}
@@ -3222,7 +3200,7 @@ export default function App() {
 
   return (
     <div
-      className={cx(s, "app", uiSettings.lockFullscreenAspect ? "app--fullscreen-aspect-lock" : "app--fullscreen-aspect-free", uiSettings.integerScaling && "app--fullscreen-integer", immersive && "app--immersive")}
+      className={cx(s, "app", uiSettings.lockFullscreenAspect ? "app--fullscreen-aspect-lock" : "app--fullscreen-aspect-free", uiSettings.integerScaling && "app--fullscreen-integer", immersive && "app--immersive", workerStatus === "ready" && showTouchControls && "app--touch")}
       style={
         {
           ["--fullscreen-aspect-w" as string]: String(fullscreenAspect.w),
@@ -3278,13 +3256,6 @@ export default function App() {
             )}
           </button>
           <button
-            className={cx(s, "emu-topbar-btn", lanRoom && "emu-btn-active")}
-            onClick={openLanPanel}
-            title={lanRoom ? "Multiplayer room (joined)" : "Start or join a multiplayer room"}
-          >
-            🌐
-          </button>
-          <button
             className={cx(s, "emu-topbar-btn", devPanelOpen && "emu-btn-active")}
             onClick={toggleDevPanel}
             title="Developer tools"
@@ -3293,47 +3264,6 @@ export default function App() {
           </button>
         </div>
       </header>
-
-      {lanPanelOpen && (
-        <div
-          style={{
-            position: "absolute", top: 44, right: 8, zIndex: 50,
-            background: "#1e1e1e", color: "#eee", border: "1px solid #444",
-            borderRadius: 6, padding: 12, width: 320, fontSize: 13,
-            boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
-          }}
-        >
-          <div style={{ fontWeight: 600, marginBottom: 6 }}>Multiplayer room</div>
-          {lanRoom ? (
-            <>
-              <div style={{ opacity: 0.8, marginBottom: 8 }}>
-                Share this link with another player — opening it joins the same virtual LAN.
-                Rooms are open to anyone with the link.
-              </div>
-              <input
-                readOnly value={lanInviteUrl ?? ""} onFocus={(e) => e.currentTarget.select()}
-                style={{ width: "100%", boxSizing: "border-box", marginBottom: 8, padding: 4 }}
-              />
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  className={s["emu-topbar-btn"]}
-                  onClick={() => {
-                    navigator.clipboard?.writeText(lanInviteUrl ?? "").then(() => {
-                      setLanCopied(true);
-                      setTimeout(() => setLanCopied(false), 1500);
-                    });
-                  }}
-                >
-                  {lanCopied ? "Copied!" : "Copy link"}
-                </button>
-                <button className={s["emu-topbar-btn"]} onClick={leaveLanRoom}>Leave room</button>
-              </div>
-            </>
-          ) : (
-            <div style={{ opacity: 0.8 }}>Creating a room…</div>
-          )}
-        </div>
-      )}
 
       {displayGame!.id !== "dev" && displayGame!.gogUrl && isDemoEntry(displayGame!) && !hasImportedBundle && (
         <div className={cx(s, "gog-upgrade", isFullscreen && "gog-upgrade--hidden")}>
@@ -3380,7 +3310,16 @@ export default function App() {
       )}
 
       {/* Canvas */}
-      <section className={s["app__panel"]} ref={panelRef}>
+      <section
+        className={s["app__panel"]}
+        ref={panelRef}
+        // The guest aspect, for CSS that has to know where the picture ends without a
+        // measurement (the portrait HUD sits just under it).
+        style={{
+          ["--guest-aw" as string]: String(guestResolution.width),
+          ["--guest-ah" as string]: String(guestResolution.height),
+        }}
+      >
         {workerStatus !== "ready" && !loadingProgress && displayGame!.coverUrl && (
           <div className={s["emu-cover-placeholder"]} style={{ backgroundImage: `url(${displayGame!.coverUrl})` }} />
         )}
@@ -3399,12 +3338,20 @@ export default function App() {
             getPointerScale={guestPerCss}
             sensitivity={uiSettings.touchSensitivity}
             idleFade={uiSettings.touchIdleFade}
+            edgeToEdge={immersive}
             onHostAction={handleHostAction}
           />
         )}
         {workerStatus === "ready" && <InputStatusOverlay status={inputStatus} />}
         {workerStatus === "ready" && showTouchHud && (
-          <TouchHud onHostAction={handleHostAction} />
+          <TouchHud
+            onHostAction={handleHostAction}
+            scheme={activeLayout.presetId}
+            onScheme={activeLayout.choosePreset}
+            moveKeys={activeLayout.moveKeys}
+            onMoveKeys={activeLayout.chooseMoveKeys}
+            edgeToEdge={immersive}
+          />
         )}
         {workerStatus === "ready" && (
           <TouchFirstRunHint

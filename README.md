@@ -7,7 +7,7 @@ server round-trip. It loads a game's PE executable directly and reimplements Win
 itself (Win32, COM, DirectDraw / Direct3D 3–9, DirectSound) on top of WebGPU, WebAudio
 and OPFS.
 
-[Play online](https://bottleship.pages.dev) · [Release 0.7](https://github.com/jenissimo/bottleship/releases/tag/v0.7.0) · [Compatibility](docs/compatibility.md) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
+[Play online](https://bottleship.happydog.games) · [Release 0.7](https://github.com/jenissimo/bottleship/releases/tag/v0.7.0) · [Compatibility](docs/compatibility.md) · [Documentation](#documentation) · [Contributing](CONTRIBUTING.md)
 
 <!-- TODO: hero.gif — a short montage (Max Payne / NFS Underground / StarCraft / Unreal) -->
 
@@ -32,7 +32,7 @@ Tomb Raider II…) — you can drop the offline installer straight in. Because o
 freeware** are legally redistributable, the online library lets you play those instantly;
 everything else, you bring your own legally-owned copy.
 
-[Open the game library →](https://bottleship.pages.dev)
+[Open the game library →](https://bottleship.happydog.games)
 
 ## Why
 
@@ -81,6 +81,13 @@ bun run dev
 Open <http://localhost:5174>.
 
 [Development & self-hosting guide →](docs/development.md)
+
+Multiplayer uses an optional [LAN relay](docs/multiplayer.md) with WebSocket and
+HTTP polling. Virtual DirectPlay remains the default. Experimental native
+DirectPlay 8 hosting requires an explicit provider policy and a configured UDP
+listener; its current backend targets a Host with one remote Peer. See the
+[native Host setup and conformance guide](tools/lan-conformance/directplay8-com-host.md)
+for the supported scope and verification workflow.
 
 ## Import your own games
 
@@ -136,6 +143,7 @@ BottleShip is free and open source. If it brought a game back to life for you, y
 - [Bringing up a game](docs/game-bringup.md)
 - [Release notes](docs/releases/0.7.md) · [Versioning](docs/releases/README.md)
 - [Automation harness](docs/harness.md) — driving and observing games
+- [Multiplayer](docs/multiplayer.md) — virtual LAN, server setup and API coverage
 - [Child processes](docs/headless-child-processes.md) — execution, display routing and diagnostics
 - [Performance measurements](docs/performance.md) — workload and correctness contracts
 - [Contributing with coding agents](docs/contributing-with-ai.md)

@@ -1,0 +1,12 @@
+BottleShip LAN Rust gateway
+
+Native UDP/TCP gateway adapters for the bottleship-lan relay. They carry the
+virtual LAN datagram layout of bottleship-lan-core, which is based on
+https://github.com/cszackrison/bottleship
+(src/worker/net/lan-network.ts and src/worker/net/netplay-wire.ts),
+licensed under the Apache License, Version 2.0.
+
+Copyright BottleShip contributors and cszackrison/bottleship contributors.
+
+The gateway itself is a new implementation.
+See LICENSE for the Apache License, Version 2.0.

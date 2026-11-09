@@ -20,6 +20,10 @@ silently otherwise), opens the bare emulator page, and waits until everything is
 
 In the browser console the same capability is on `window.__BS__.harness`.
 
+The default profile is `~/.bottleship-cdp-profile`, shared by every checkout and worktree so
+OPFS holds one copy of each game instead of one per worktree. Only one Chrome can use a
+profile at a time; give a parallel browser its own profile and port.
+
 `BS_CHROME_PROFILE` selects the Chrome profile directory on a cold launch. Put it on
 a drive with ample free space: OPFS lives inside the profile, and browser eviction
 under disk pressure can remove saves together with cached bundles. `BS_CDP_PORT`
@@ -55,23 +59,29 @@ so any timing you read while two are running is noise — `harness trace` refuse
 second guest tab is open. Each tab also costs a full emulator (its own worker, SAB and VRAM), so
 memory, not CPU, sets the ceiling; 2-3 concurrent bring-ups is the sane range on a normal desktop.
 
-### Separate worktrees
+## Remote devices (iPhone, iPad, any browser without CDP)
 
-`BS_TAB` sessions share one dev server, so they all run the same code. To run different code side by
-side, give each worktree its own stack, and start its relay if you need multiplayer:
+`tools/remote-bridge.ts` lets the same CLI drive a page on a device that has no Chrome DevTools
+Protocol. The bridge impersonates a CDP endpoint; the page (dev builds only, opted in with
+`?bridge=<token>`) connects back through the dev server's `/__bridge` proxy and evaluates what the
+CLI sends. Every verb that runs in the page works unchanged; what needs real CDP (worker targets,
+`stack`, tracing, trusted input, compositor screenshots) fails with an explicit error.
 
 ```bash
-export BS_TAB=alpha
-export BS_VITE_PORT=5184 LAN_PORT=5185
-export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
-export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
-
-bun run dev:lan &                  # optional: the /lan relay
-bun tools/harness.ts up
+VITE_SSL=1 bun run dev                     # a LAN IP is a secure context only over HTTPS
+bun tools/remote-bridge.ts --lan           # prints the device URL and a QR code
+BS_CDP_PORT=9444 BS_TAB=iphone bun tools/harness.ts eval "navigator.userAgent"
 ```
 
-`bun tools/lan-peer.ts` reaches that relay with `--relay ws://localhost:5184`. Rooms are per stack,
-so two stacks can use the same room name without meeting.
+The device must be on the same network; Safari warns about the self-signed certificate once.
+`--tunnel` publishes the dev server through a cloudflared quick tunnel instead (start Vite with
+`BS_TUNNEL=1`) — only viable with a fast uplink, since the device downloads every module and
+bundle from this machine. Page console output, window errors and the worker log stream are
+appended to `logs/remote/` and survive the page being killed. The page holds a screen wake lock
+(re-acquired on the first tap after each reload); set Auto-Lock to Never for long runs.
+
+Dev-only knobs for bisecting device failures: `VITE_BS_RAM_MB=<n>` sizes guest RAM without
+repacking a bundle; `VITE_BS_JIT_OFF=1` boots with the JIT disabled.
 
 ## Driving a game
 
@@ -168,6 +178,10 @@ far too much log output to grep. So the harness gives you structured views inste
   module-labelled guest call stack, the recent WinAPI call ring (the last thunks that ran), the
   **unimplemented-stub registry**, recent page faults, and thread states. This is the first
   thing to pull for *any* non-standard situation (froze / vanished / black frame / wild EIP).
+- **Guest IPC lifecycle.** `processIpcState()` reports the existing guest's PID,
+  generation, liveness, pending requests and child routes, plus guest/service handler
+  counts. It remains usable after exit and does not initialize IPC. Use it when
+  verifying a second PE boot in the same Worker or stale lobby endpoints.
 - **Stub registry.** The usual reason a game "gracefully vanishes" is that it called an export
   or vtable slot with no implementation, got a garbage return, and took an "unsupported → exit"
   branch. The stub registry names exactly which unimplemented call it was and who called it.
@@ -210,6 +224,43 @@ far too much log output to grep. So the harness gives you structured views inste
   purpose — the same path a real loss takes — and returns `before` / `during` / `after`
   snapshots; `during` is sampled from inside the invalidation fan-out, which is the only
   instant at which "did we tell the guest?" is answerable.
+
+## Memory footprint
+
+`footprint()` (CLI: `bun tools/harness.ts footprint`; console: `await window.__BS__.harness.footprint()`)
+adds up what the emulator itself holds. It exists for devices where no OS counter is readable
+from the page — iOS kills the WebContent process at a per-process footprint limit (about 2 GB
+on current iPhones) that counts written (dirty) and compressed pages, not reserved ones.
+
+- `wasm`: size of the v86 linear memory and of the guest RAM window inside it. Reserved and
+  committed by the engine, not necessarily touched.
+- `guestDirty`: guest pages that may hold non-zero bytes (`dirtyMB`), from the page map the
+  lazy zeroing uses (`src/worker/core/memory/guest-page-dirty.ts`), plus how many bytes zeroing
+  sites asked for and actually wrote. `dirtyMB` approximates the guest RAM we and the guest have
+  made resident. `footprint({verify:true})` reads every page marked clean and reports any that
+  hold bytes (`violations`, `samples`). Any violation is a bug: a writer the map does not see.
+  Verify reads all of guest RAM, so run it on desktop only.
+- `pageTable`: PTE census over guest RAM (present RW / RO / not present).
+- `allocator`: MemoryManager live and peak bytes, and per bucket the span handed out, the
+  slab arena and the free lists.
+- `sab`: SharedArrayBuffers created at the noted sites (bundle I/O, child-process I/O, audio
+  rings). The page facade adds the page realm's own census under `page`.
+- `gpu`: estimated bytes of live GPUBuffers and GPUTextures on this worker's devices, with the
+  largest buffers listed. Sizes come from the descriptors, so driver padding is not included.
+  `ddrawRings` shows the legacy D3D/DDraw geometry rings, which start small and double on
+  demand: current sizes per ring and how often they grew. On an iPhone 15 Pro this GPU memory
+  counted against the tab's limit (889 MB of fixed rings got Hitman killed, the same build with
+  small rings survived), so an unexpectedly large `bufferMB` is worth chasing.
+- `jsCaches` (bundle block cache), `jsHeap` (where the realm exposes it), `jit`: live JIT
+  module slots, modules and wasm bytes emitted so far, and `liveWasmEstimateMB` (mean module
+  size times live slots; wasm bytes, the compiled machine code is larger).
+
+`estimateMB` sums guest dirty pages, SABs and JS caches. Use it to compare runs, not as an OS
+number. On desktop the ground truth is the renderer's private working set:
+`bun tools/harness/diagnostics/footprint-measure.ts <wgb> [label] [5,15,30] [--fp]` starts
+a fresh renderer, opens the bundle and samples it over CDP `SystemInfo.getProcessInfo` at the
+given delays after the guest starts (Windows). Private bytes (commit) include the whole wasm
+reservation and say nothing about touched pages.
 
 ## Checked-in scripts & the regression batch
 

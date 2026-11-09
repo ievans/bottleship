@@ -9,6 +9,8 @@ import {
 } from "./cpu/emulator-config";
 import { QualityConfig, DEFAULT_QUALITY, mergeQuality } from "./quality-config";
 import { asBufferSource } from "../../dom-buffer";
+import { normalizeNetworkConfig, type NetworkConfig } from "../../network-config";
+import type { ExeRegistryRedirect } from "@bottleship/formats/sdb";
 
 // OS Version constants
 export const VER_PLATFORM_WIN32_WINDOWS = 0x1;
@@ -277,6 +279,13 @@ export class EmulatorConfig {
     // OS Version configuration
     public osVersion = { ...DEFAULT_OS_VERSION };
     public graphicsAdapter: GraphicsAdapterConfig | null = null;
+    /** Session preference, inherited by child processes and retained across game loads. */
+    public network: NetworkConfig | null = null;
+
+    setNetwork(value: unknown): NetworkConfig | null {
+        this.network = normalizeNetworkConfig(value);
+        return this.network;
+    }
 
     // Screen resolution configuration
     public screenResolution = { ...DEFAULT_SCREEN_RESOLUTION };
@@ -354,6 +363,12 @@ export class EmulatorConfig {
     // Glide and ddraw wrappers) only run at all under this. Same rule syntax as
     // disabledDlls. Opt-in per bundle while the default order is still HLE-first.
     public appDirDlls: string[] = [];
+
+    // The game's own VirtualRegistry shims, each bound to the exe its database entry names.
+    // Every process selects its own set by image name when it starts (the owner for the boot
+    // image, a child for its own image, which it inherits this list to choose from):
+    // RegistryStore.setRedirectsForImage.
+    public registryRedirects: ExeRegistryRedirect[] = [];
 
     // VFS paths to delete from CoW overlay on every boot
     public deleteOnBoot: string[] = [];
@@ -632,6 +647,22 @@ export class EmulatorConfig {
             );
         }
 
+        if (config.registryRedirects && config.registryRedirects.length > 0) {
+            const rules = config.registryRedirects;
+            this.registryRedirects = rules.filter((r) =>
+                typeof r?.exe === "string" && r.exe.length > 0 && typeof r.from === "string" && typeof r.to === "string");
+            if (this.registryRedirects.length < rules.length) {
+                Logger.warn(
+                    LogCategory.SYSTEM,
+                    `EmulatorConfig: ${rules.length - this.registryRedirects.length} registryRedirects entr(y/ies) without exe/from/to ignored`
+                );
+            }
+            Logger.log(
+                LogCategory.SYSTEM,
+                `EmulatorConfig: registryRedirects loaded: ${this.registryRedirects.map((r) => `${r.exe}: ${r.from} -> ${r.to}`).join(", ")}`
+            );
+        }
+
         // Apply deleteOnBoot list
         if (config.deleteOnBoot && config.deleteOnBoot.length > 0) {
             this.deleteOnBoot = config.deleteOnBoot
@@ -708,6 +739,7 @@ export class EmulatorConfig {
         this.fpuStrict = false;
         this.disabledDlls = [];
         this.appDirDlls = [];
+        this.registryRedirects = [];
         this.deleteOnBoot = [];
         this.writeFiles = [];
         this.createDirs = [];

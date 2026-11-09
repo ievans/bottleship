@@ -15,6 +15,7 @@ import { hypercallDataManager } from '../../core/cpu/hypercall-data';
 import { installHook, uninstallHook, getHooksOfType, getNextHookInChain, hasHooksOfType, pushActiveHook, popActiveHook, currentActiveHook, WH_KEYBOARD, WH_GETMESSAGE, WH_CBT, HC_ACTION, HC_NOREMOVE } from './hooks';
 import { isSentinelWndProc } from './dialog';
 import { applyDefaultSetText, handleSystemControlMessage, isContentChangingMessage } from './dialog-control-messages';
+import type { Message } from '../../runtime/windowing/message-queue';
 import { getDefDlgProcAddress, getDefWindowProcAddress } from './system-classes';
 import { tryRichEditStreamMessage } from './rich-edit-stream';
 import { eraseControlOverlayRect, repaintDialogAfterContentChange } from './dialog-paint';
@@ -54,7 +55,7 @@ const WM_GETTEXT_MSG = 0x000D;
 const WM_GETTEXTLENGTH_MSG = 0x000E;
 const USER_TIMER_MINIMUM = 10;
 
-type TimerMessage = { hwnd: number; message: number; wParam: number; lParam: number };
+type TimerMessage = { hwnd: number; message: number; wParam: number; lParam: number; generatedTimer?: boolean; timerEpoch?: number };
 let noteFastPathTimerDelivery: ((msg: TimerMessage, removed: boolean) => void) | null = null;
 
 /**
@@ -182,6 +183,39 @@ export function sendDisplayChange(
     }
     wm.postDisplayChange(width, height, bpp);
     return null;
+}
+
+/**
+ * The WM_SETCURSOR Windows SENDS from inside GetMessage/PeekMessage when the message it
+ * removes is a mouse move: one retrieval runs the window's cursor handler and hands out
+ * the move. The caller has already written the MSG; the thunk returns `value` once the
+ * window has answered. Null when there is nothing for the guest to run.
+ */
+function sendRetrievalSetCursor(
+    ctx: X86Context,
+    mem: Uint8Array,
+    msg: { hwnd: number; sentSetCursor?: { wParam: number; lParam: number } },
+    stackCleanup: number,
+    value: number,
+    tag: string,
+    finish: () => number | null = () => value,
+): ThunkResult | null {
+    const sc = msg.sentSetCursor;
+    if (!sc) return null;
+    const win = windows.get(msg.hwnd);
+    if (win?.isSystemControl && !win.wndProcSubclassed) {
+        const plan = defWindowProcSetCursor(msg.hwnd, sc.wParam, sc.lParam);
+        if (typeof plan === 'number') return null;
+        const forwarded = invokeWindowMessageSync(
+            ctx, mem, plan.forwardTo, WM_SETCURSOR_MSG, sc.wParam, sc.lParam, stackCleanup, tag,
+            (parentResult) => { plan.onParentResult(parentResult >>> 0); return finish(); },
+        );
+        if (!forwarded) plan.onParentResult(0);
+        return forwarded;
+    }
+    return invokeWindowMessageSync(
+        ctx, mem, msg.hwnd, WM_SETCURSOR_MSG, sc.wParam, sc.lParam, stackCleanup, tag, finish,
+    );
 }
 
 /**
@@ -338,6 +372,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
 
     interface TimerState {
         wheelTimerId: number;
+        epoch: number;
         hWnd: number;
         timerId: number;
         timerFunc: number;
@@ -393,6 +428,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
     const timers: Map<string, TimerState> = new Map();
     const timerKey = (hWnd: number, id: number) => `${hWnd >>> 0}:${id >>> 0}`;
     let nextTimerId = 1;
+    let nextTimerEpoch = 1;
 
     function cancelTimerState(state: TimerState): void {
         System.getInstance().scheduler?.timerWheel.cancel(state.wheelTimerId);
@@ -420,10 +456,10 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         );
     }
 
-    function restartRemovedTimer(msg: { hwnd: number; message: number; wParam: number; lParam: number }): void {
-        if (msg.message !== WM_TIMER) return;
+    function restartRemovedTimer(msg: TimerMessage): void {
+        if (msg.message !== WM_TIMER || !msg.generatedTimer) return;
         const state = timers.get(timerKey(msg.hwnd, msg.wParam));
-        if (!state || state.timerFunc !== (msg.lParam >>> 0)) return;
+        if (!state || state.epoch !== msg.timerEpoch || state.timerFunc !== (msg.lParam >>> 0)) return;
         armTimerState(state);
     }
 
@@ -500,7 +536,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         }
 
         for (let i = 0; i < toPost; i++) {
-            system.windowManager.postMessage(state.hWnd, WM_TIMER, state.timerId, state.timerFunc, 0, 0, state.threadId);
+            system.windowManager.postMessage(state.hWnd, WM_TIMER, state.timerId, state.timerFunc, 0, 0, state.threadId, undefined, 0, true, state.epoch);
             timerDiag.posted++;
         }
         if (toPost > 0) {
@@ -646,7 +682,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
      * ignored and the message cannot be discarded — but the hook receives a POINTER
      * to the MSG (lParam) and may rewrite its fields in place (MFC, shells, macro
      * recorders, accessibility tools use it for exactly this). Contract (per
-     * USER32 xxxCallHook / input.c): nCode = HC_ACTION when removing (PM_REMOVE) or
+     * the GetMsgProc callback docs; Wine user32/input.c): nCode = HC_ACTION when removing (PM_REMOVE) or
      * HC_NOREMOVE on a PM_NOREMOVE peek; wParam = the remove flag; lParam = &MSG.
      *
      * The caller must have already written `m` to guest `lpMsg` (so the hook sees
@@ -726,6 +762,24 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const r = applyGetMessageHook(frameId, msg, remove, threadId, lpMsg, finishValue, label, callbackManager, freshMem);
         if (typeof r === 'number') return null; // hook declined to queue; caller delivers normally
         return { value: 0, suspendedForCallback: true, callbackId: r.callbackId, stackCleanup };
+    }
+
+    function dispatchMoveSetCursor(
+        ctx: X86Context, mem: Uint8Array, msg: Message, threadId: number,
+        lpMsg: number, stackCleanup: number, value: number, label: string,
+    ): ThunkResult | null {
+        const system = System.getInstance();
+        const callbackManager = system.process?.dispatcher?.callbackManager;
+        const finish = (): number | null => {
+            if (!callbackManager) return value;
+            const frameId = callbackManager.getActiveSuspendedFrameId();
+            const freshMem = (): Uint8Array | null => system.process?.getCurrentMemory() ?? null;
+            const result = applyGetMessageHook(frameId, msg, true, threadId, lpMsg,
+                delivered => delivered?.message === WM_QUIT ? 0 : value,
+                `${label}:WH_GETMESSAGE`, callbackManager, freshMem);
+            return typeof result === 'number' ? result : null;
+        };
+        return sendRetrievalSetCursor(ctx, mem, msg, stackCleanup, value, label, finish);
     }
 
     /**
@@ -825,7 +879,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         view.setUint32(lpMsg + 4, WM_QUIT, true);   // message = WM_QUIT
         view.setUint32(lpMsg + 8, exitCode, true);   // wParam = exit code
         view.setUint32(lpMsg + 12, 0, true);         // lParam = 0
-        view.setUint32(lpMsg + 16, TimeService.getInstance().nowMs() | 0, true); // time
+        view.setUint32(lpMsg + 16, TimeService.getInstance().guestTickMs() | 0, true); // time
         view.setInt32(lpMsg + 20, 0, true);          // pt.x
         view.setInt32(lpMsg + 24, 0, true);          // pt.y
     }
@@ -854,6 +908,12 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
             });
             Logger.verboseLazy(LogCategory.USER32, () =>
                 `GetMessageW(sync): msg=0x${msg.message.toString(16)} hwnd=0x${msg.hwnd.toString(16)} -> ${retVal} thread=${currentThreadId}`);
+            if (msg.sentSetCursor) {
+                noteRetrievedExtraInfo(currentThreadId, msg);
+                writeMsgToMemory(mem, lpMsg, msg);
+                const sent = dispatchMoveSetCursor(ctx, mem, msg, currentThreadId, lpMsg, 16, retVal, 'GetMessage:WM_SETCURSOR');
+                if (sent) return sent;
+            }
             if (isKeyboardHookMessage(msg.message)) {
                 // GetMessage blocking semantics vs discard-to-empty: delivering
                 // WM_NULL would be wrong, but a hook that discards is expected to
@@ -901,7 +961,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
             // causes crashes when null messages are processed (e.g. some galaxy.dll builds).
             let waitMsg: { hwnd: number; message: number; wParam: number; lParam: number; time: number; ptX?: number; ptY?: number; extraInfo?: number };
             for (;;) {
-                waitMsg = await system.windowManager.waitForMessage(currentThreadId);
+                waitMsg = await system.windowManager.waitForMessage(currentThreadId, wMsgFilterMin, wMsgFilterMax);
 
                 // If paused, block return to v86 until unpaused.
                 while (system.isPaused) {
@@ -948,7 +1008,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
 
             const keyHookPending = isKeyboardHookMessage(waitMsg.message) && keyboardHooksFor(currentThreadId).length > 0;
             const getMsgHookPending = getMessageHooksFor(currentThreadId).length > 0;
-            if (keyHookPending || getMsgHookPending) {
+            if ((keyHookPending || getMsgHookPending) && !(waitMsg as Message).sentSetCursor) {
                 // Async wake path can't suspend for a guest callback (thunk context
                 // already transformed). Rare for WH_KEYBOARD: MFC-style pumps only call
                 // GetMessage after PeekMessage(PM_NOREMOVE) said a message exists, which
@@ -969,6 +1029,19 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
                 `GetMessageW(async): msg=0x${waitMsg.message.toString(16)} hwnd=0x${waitMsg.hwnd.toString(16)} -> ${retVal} thread=${currentThreadId}`);
 
             writeMsgToMemory(freshMem, lpMsg, waitMsg);
+            const pendingMove = waitMsg as Message;
+            if (pendingMove.sentSetCursor) {
+                return {
+                    value: retVal, stackCleanup: 16,
+                    startCallbackChain: ({ esp, returnAddr, mem }: { esp: number; returnAddr: number; mem: Uint8Array }) => {
+                        const callbackCtx = { ...ctx, esp, returnAddr };
+                        const sent = dispatchMoveSetCursor(callbackCtx, mem, pendingMove, currentThreadId, lpMsg, 16, retVal, 'GetMessage:WM_SETCURSOR');
+                        if (sent?.suspendedForCallback) return true;
+                        return dispatchGetMessageHook(callbackCtx, pendingMove, true, currentThreadId, lpMsg, 16,
+                            delivered => delivered?.message === WM_QUIT ? 0 : retVal, 'GetMessage:WH_GETMESSAGE') !== null;
+                    },
+                };
+            }
             return { value: retVal, stackCleanup: 16 };
         };
 
@@ -1190,6 +1263,13 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
             LogCategory.USER32,
             () => `PeekMessageW: thread=${threadId} found msg=0x${msg.message.toString(16)} hwnd=0x${msg.hwnd.toString(16)} wParam=0x${msg.wParam.toString(16)} lParam=0x${msg.lParam.toString(16)}`
         );
+
+        if (msg.sentSetCursor) {
+            noteRetrievedExtraInfo(callerThreadId, msg);
+            writeMsgToMemory(mem, lpMsg, msg);
+            const sent = dispatchMoveSetCursor(ctx, mem, msg, callerThreadId, lpMsg, 20, 1, 'PeekMessage:WM_SETCURSOR');
+            if (sent) return sent;
+        }
 
         if (isKeyboardHookMessage(msg.message)) {
             const suspended = dispatchKeyboardHookChain(
@@ -1548,6 +1628,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
 
         const timerState: TimerState = {
             wheelTimerId: 0,
+            epoch: nextTimerEpoch++,
             hWnd,
             timerId,
             timerFunc: lpTimerFunc >>> 0,
@@ -1560,7 +1641,10 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         // old wheel entry first so we don't leak an orphaned one.
         const key = timerKey(hWnd, timerId);
         const existing = timers.get(key);
-        if (existing) cancelTimerState(existing);
+        if (existing) {
+            cancelTimerState(existing);
+            System.getInstance().windowManager.cancelPendingTimer(hWnd, timerId);
+        }
 
         timers.set(key, timerState);
         armTimerState(timerState);
@@ -1575,6 +1659,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const timerState = timers.get(key);
         if (timerState) {
             cancelTimerState(timerState);
+            System.getInstance().windowManager.cancelPendingTimer(hWnd, uIDEvent);
             if (timerState.pendingTicks > 0) {
                 timerDiag.pendingDropped += timerState.pendingTicks;
                 timerState.pendingTicks = 0;
@@ -1757,7 +1842,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const lParam = args[3];
         Logger.log(LogCategory.USER32, `PostMessageW(hwnd=0x${hWnd.toString(16)}, msg=0x${msg.toString(16)}, wParam=0x${wParam.toString(16)}, lParam=0x${lParam.toString(16)})`);
         const system = System.getInstance();
-        system.windowManager.postMessage(hWnd, msg, wParam, lParam);
+        system.windowManager.postMessage(hWnd, msg, wParam, lParam, 0, 0, 0, undefined, 0, false);
         // Wake any threads blocked in GetMessage/WaitMessage
         system.scheduler.wakeMessageWaiters();
         return 1; // TRUE
@@ -1772,7 +1857,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const system = System.getInstance();
         Logger.verbose(LogCategory.USER32, `PostThreadMessageA(tid=${threadId}, msg=0x${msg.toString(16)}, wParam=0x${wParam.toString(16)}, lParam=0x${lParam.toString(16)})`);
         // Tag message with target thread ID so only that thread's GetMessage dequeues it
-        system.windowManager.postMessage(0, msg, wParam, lParam, 0, 0, threadId);
+        system.windowManager.postMessage(0, msg, wParam, lParam, 0, 0, threadId, undefined, 0, false);
         if (threadId !== 0) {
             system.scheduler.wakeMessageWaiters(threadId);
         } else {

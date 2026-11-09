@@ -8,6 +8,8 @@
  * so it MUST NOT import any DOM/Node/worker-specific APIs.
  */
 
+import { noteSharedBuffer } from "../utils/shared-buffer-census";
+
 // ─── Control block field indices (Int32Array element offsets) ─────────────────
 
 /** Byte offset of current playback position (worklet writes) */
@@ -94,6 +96,11 @@ export const CTRL_3D_MAX_GAIN = 34;
 export const FLAG3D_HAS_3D = 1;
 /** CTRL_3D_FLAGS bit 1: use CTRL_3D_ROLLOFF instead of the listener's rolloff */
 export const FLAG3D_SOURCE_ROLLOFF = 2;
+
+/** Loop region start, in frames of the data (non-circular looping sources only) */
+export const CTRL_LOOP_START_FRAME = 35;
+/** Loop region end, in frames; 0 = the end of the data */
+export const CTRL_LOOP_END_FRAME = 36;
 
 /** Int32 entries in the control block */
 export const CTRL_SLOTS = 64;
@@ -298,7 +305,7 @@ export function createAudioRingBuffer(
     format: AudioRingFormat,
     circular: boolean,
 ): SharedArrayBuffer {
-    const sab = new SharedArrayBuffer(CTRL_BLOCK_BYTES + bufferBytes);
+    const sab = noteSharedBuffer("audio-ring", new SharedArrayBuffer(CTRL_BLOCK_BYTES + bufferBytes));
     const ctrl = new Int32Array(sab, 0, CTRL_SLOTS);
     const blockAlign = format.channels * (format.bitsPerSample >> 3);
 
@@ -339,6 +346,8 @@ export function createAudioRingBuffer(
     Atomics.store(ctrl, CTRL_3D_ROLLOFF, floatToI32(1.0));
     Atomics.store(ctrl, CTRL_3D_MIN_GAIN, floatToI32(0.0));
     Atomics.store(ctrl, CTRL_3D_MAX_GAIN, floatToI32(1.0));
+    Atomics.store(ctrl, CTRL_LOOP_START_FRAME, 0);
+    Atomics.store(ctrl, CTRL_LOOP_END_FRAME, 0);
 
     return sab;
 }

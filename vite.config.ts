@@ -25,8 +25,11 @@ const BUILD_SHA = (
 // cert). Opt into a self-signed HTTPS dev/preview server with VITE_SSL=1.
 const useSsl = !!process.env.VITE_SSL;
 
-// Multiplayer relay (deploy/lan-dev.ts), proxied so the page reaches it on its own origin.
-const lanProxy = { "/lan": { target: `ws://127.0.0.1:${process.env.LAN_PORT ?? 5175}`, ws: true } };
+// Remote harness bridge (tools/remote-bridge.ts): the page reaches the bridge through this
+// dev server so a cloudflared tunnel needs ONE public origin. BS_TUNNEL=1 admits the
+// tunnel's Host header, which Vite otherwise refuses (DNS-rebinding guard).
+const bridgePort = Number(process.env.BS_BRIDGE_PORT ?? 9444);
+const tunnelHosts = process.env.BS_TUNNEL ? [".trycloudflare.com"] : [];
 
 const coopCoepHeaders = {
   "Cross-Origin-Opener-Policy": "same-origin",
@@ -213,12 +216,17 @@ function serveWgbFromDisk(): Plugin {
 // only ever wasted minutes/gigabytes on `vite build`. Copy everything else, skip apps/.
 // (BYO games and agent/make-wgb loads stream off disk via serveWgbFromDisk — never in public/.)
 function copyPublicDirExceptApps(): Plugin {
+  let resolvedOutDir: string | undefined;
   return {
     name: "copy-public-dir-except-apps",
     apply: "build",
+    configResolved(config) {
+      resolvedOutDir = path.resolve(config.root, config.build.outDir);
+    },
     closeBundle() {
       const publicDir = path.resolve(__dirname, "public");
-      const outDir = path.resolve(__dirname, "dist");
+      const outDir = resolvedOutDir;
+      if (!outDir) throw new Error("Resolved build.outDir required");
       if (!fs.existsSync(publicDir)) return;
       fs.mkdirSync(outDir, { recursive: true });
       for (const entry of fs.readdirSync(publicDir, { withFileTypes: true })) {
@@ -258,14 +266,18 @@ export default defineConfig({
   },
   server: {
     host: true,
-    // Vite refuses Host headers it does not know; set for a dev server reached by name.
-    ...process.env.BS_ALLOWED_HOSTS ? { allowedHosts: process.env.BS_ALLOWED_HOSTS.split(",") } : {},
-    // BS_VITE_PORT runs a second dev stack beside the first, as with BS_SIDECAR_PORT.
-    port: Number(process.env.BS_VITE_PORT ?? 5174),
+    // BS_DEV_PORT runs a second dev stack beside the default one (e.g. a device build while
+    // a desktop harness owns :5174). tools/remote-bridge.ts reads the same variable.
+    port: Number(process.env.BS_DEV_PORT ?? 5174),
     strictPort: true,
     ...useSsl ? { https: true } : {},
     hmr: false,
-    proxy: lanProxy,
+    // Vite refuses Host headers it does not know; BS_ALLOWED_HOSTS names a dev server reached by name.
+    ...(process.env.BS_ALLOWED_HOSTS || tunnelHosts.length)
+      ? { allowedHosts: [...(process.env.BS_ALLOWED_HOSTS?.split(",") ?? []), ...tunnelHosts] } : {},
+    proxy: {
+      "/__bridge": { target: `ws://localhost:${bridgePort}`, ws: true },
+    },
     watch: {
       // Chokidar registers one fs.watch handle PER FILE and its defaults ignore only
       // .git/node_modules/the cache dir. These trees hold no importable module and tens of
@@ -282,7 +294,6 @@ export default defineConfig({
   },
   preview: {
     host: true,
-    proxy: lanProxy,
     ...useSsl ? { https: true } : {},
     headers: coopCoepHeaders
   },

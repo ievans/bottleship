@@ -55,6 +55,14 @@
  *                         ships a wrapper/proxy DLL — an ASI loader, a Glide or ddraw
  *                         shim — which otherwise never executes. Example:
  *                         --app-dir-dlls "ddraw"
+ *   --sdb <relpath>       Shim database (.sdb) in the game directory that the game's
+ *                         installer registers with sdbinst, repeatable. Its VirtualRegistry
+ *                         ADDREDIRECT rules become manifest registryRedirects, each bound to
+ *                         the exe whose entry declares it (Steam's Mafia needs one:
+ *                         --sdb mafia.sdb). A .sdb in the folder does nothing on Windows until
+ *                         it is installed, so without the flag make-wgb only reports it.
+ *                         Entries are matched by exe name; wildcard (MATCHING_FILE-only)
+ *                         entries, other shims and other commands are reported and skipped.
  *   --working-dir <path>  Guest cwd at boot when it is NOT the entrypoint's folder —
  *                         an engine module a launcher starts inherits the LAUNCHER's
  *                         directory and resolves its data paths against it. Example:
@@ -73,6 +81,12 @@
  *                        The worker recreates them at boot (mkdir -p) so the game's own
  *                        fopen("wb") into e.g. user\rosters succeeds. Backslash or forward
  *                        slash both work. Example: --create-dirs "user\rosters,user\save\photos"
+ *   --copy <src=dst>     Also store game-dir file <src> under <dst> (both relative to
+ *                        game-dir, `/` or `\`), repeatable. For a file the installer's
+ *                        SCRIPT creates by copying one it shipped, which therefore is in
+ *                        no cabinet: InstallScript picking a language pack, a default
+ *                        config cloned from a template. The copy must not already exist.
+ *                        Example: --copy "Setup\Locale\language-English.zip=Setup\Locale.zip"
  *   --touch-layout <v>   On-screen touch controls for this title: either a preset id
  *                        (pointer | pointer-rmb | wasd-look | dpad-buttons | pad) or a
  *                        path to a .json ControlLayout exported from the layout editor.
@@ -97,6 +111,7 @@ import { orderFilesByProfile, parseIoProfile } from "@bottleship/formats/wgb/io-
 import { ZipStoreWriter } from './internal/zip-store-writer';
 import { isValidGameId, deriveGameId, KNOWN_GAME_ID_SCHEMES } from '@bottleship/formats/wgb/container-id';
 import { parseRegFile, mergeRegSeeds, type RegSeed } from '@bottleship/formats/reg';
+import { parseSdb, validateRedirects, virtualRegistryRedirects, type ExeRegistryRedirect } from '@bottleship/formats/sdb';
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -249,6 +264,35 @@ const explicitCreateDirs = (get('--create-dirs') ?? '')
 
 const createDirs = [...new Set([...explicitCreateDirs, ...emptyDirs])].sort();
 
+// Files an installer SCRIPT makes by copying one it shipped (a selected language pack, a
+// config cloned from a template). They are in no cabinet, so an extraction never has them,
+// and the game that reads the copy finds nothing. Stored as their own entries — on disk
+// after a real install they are independent files the game may later rewrite.
+const romKeyByLower = new Map([...romFiles.keys()].map((k) => [k.toLowerCase(), k]));
+const toRomName = (p: string) => `rom/${p.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')}`;
+for (const pair of getAll('--copy')) {
+    const eq = pair.indexOf('=');
+    const src = eq > 0 ? toRomName(pair.slice(0, eq)) : '';
+    const dst = eq > 0 ? toRomName(pair.slice(eq + 1)) : '';
+    if (!src || dst === 'rom/' || src.split('/').includes('..') || dst.split('/').includes('..')) {
+        console.error(`Error: --copy expects SRC=DST relative to the game directory, got "${pair}"`);
+        process.exit(1);
+    }
+    const srcKey = romKeyByLower.get(src.toLowerCase());
+    if (!srcKey) {
+        console.error(`Error: --copy ${pair}: source ${src.slice(4)} is not a file in the game directory`);
+        process.exit(1);
+    }
+    // Guest paths are case-insensitive: a second entry differing only in case would shadow one.
+    if (romKeyByLower.has(dst.toLowerCase())) {
+        console.error(`Error: --copy ${pair}: ${dst.slice(4)} already exists in the bundle`);
+        process.exit(1);
+    }
+    romFiles.set(dst, romFiles.get(srcKey)!);
+    romKeyByLower.set(dst.toLowerCase(), dst);
+    console.log(`  copy:       ${srcKey.slice(4)} -> ${dst.slice(4)}`);
+}
+
 // Where the CD-ROM drive (D:\) points. A retail install still expects its disc — GTA III
 // hunts for a DRIVE_CDROM whose AUDIO\HEAD.WAV opens — so a bundle packed from an install
 // must say which guest path stands in for the disc, usually the install root itself.
@@ -262,6 +306,55 @@ const appDirDlls = (get('--app-dir-dlls') ?? '')
     .split(/[,;]/)
     .map((d) => d.trim())
     .filter((d) => d.length > 0);
+
+// A re-release can ship a compatibility database instead of patching the binary. On Windows it
+// takes effect only once installed (sdbinst, run by the installer); a .sdb lying in the game
+// folder does nothing. So only the databases named with --sdb are applied; any other is reported.
+const sdbArgs = getAll('--sdb');
+const sdbEntries = [...romFiles.keys()].filter((p) => /\.sdb$/i.test(p));
+const selectedSdb = new Map<string, string>();
+for (const rel of sdbArgs) {
+    const wanted = `rom/${rel.replace(/\\/g, '/').replace(/^\/+/, '')}`.toLowerCase();
+    const zipName = [...romFiles.keys()].find((p) => p.toLowerCase() === wanted);
+    if (!zipName) {
+        console.error(`Error: --sdb ${rel}: no such file in the game directory`);
+        process.exit(1);
+    }
+    selectedSdb.set(zipName, romFiles.get(zipName)!);
+}
+for (const zipName of sdbEntries) {
+    if (selectedSdb.has(zipName)) continue;
+    console.log(`  shim db:    ${zipName} found, not applied (Windows applies a game's own shim database only ` +
+        `once its installer registers it with sdbinst). If it does, pass --sdb "${zipName.slice('rom/'.length)}"`);
+}
+const shippedExes = new Set([...romFiles.keys()].filter((p) => /\.exe$/i.test(p)).map((p) => basename(p).toLowerCase()));
+const sdbRules: ExeRegistryRedirect[] = [];
+for (const [zipName, full] of selectedSdb) {
+    let exes;
+    try {
+        exes = parseSdb(readFileSync(full));
+    } catch (err) {
+        console.error(`Error: --sdb ${zipName.slice('rom/'.length)} is not a readable shim database (${err})`);
+        process.exit(1);
+    }
+    for (const exe of exes) {
+        if (!/[*?]/.test(exe.name) && !shippedExes.has(exe.name.toLowerCase())) {
+            console.warn(`Warning: ${zipName}: entry ${exe.name} names an exe the game does not ship; skipped`);
+        }
+    }
+    const named = exes.filter((e) => /[*?]/.test(e.name) || shippedExes.has(e.name.toLowerCase()));
+    sdbRules.push(...virtualRegistryRedirects(named, (reason) => console.warn(`Warning: ${zipName}: ${reason}`)));
+}
+// Each process applies its own exe's rules, so they must hold together per exe.
+const registryRedirects: ExeRegistryRedirect[] = [];
+for (const exe of new Set(sdbRules.map((r) => r.exe.toLowerCase()))) {
+    const { accepted, rejected } = validateRedirects(sdbRules.filter((r) => r.exe.toLowerCase() === exe));
+    for (const { rule, reason } of rejected) console.warn(`Warning: ${rule.exe}: registry ${rule.from} -> ${rule.to} rejected: ${reason}`);
+    for (const { rule } of accepted) {
+        registryRedirects.push(rule);
+        console.log(`  shim:       ${rule.exe}: registry ${rule.from} -> ${rule.to}`);
+    }
+}
 if (emptyDirs.size > 0) {
     console.log(`  empty dirs: auto-detected ${emptyDirs.size} (added to createDirs): ${[...emptyDirs].sort().join(', ')}`);
 }
@@ -319,6 +412,7 @@ const manifest: Record<string, unknown> = {
         ...(get('--lcid') ? { lcid: parseInt(get('--lcid')!, 16) } : {}),
         ...(createDirs.length > 0 ? { createDirs } : {}),
         ...(appDirDlls.length > 0 ? { appDirDlls } : {}),
+        ...(registryRedirects.length > 0 ? { registryRedirects } : {}),
         ...(cdPath ? { cdPath } : {}),
         ...(cdLabel ? { cdLabel } : {}),
         ...(touch ? { touch } : {}),

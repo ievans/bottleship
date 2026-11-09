@@ -48,7 +48,7 @@ import { registerMsvcrtTimeLocaleExports } from "./msvcrt-time-locale";
 import { MsvcrtTimezoneState } from "./msvcrt-timezone";
 import { readWindowsTimezoneSnapshot } from "../runtime/windows-timezone";
 import { crtFileCharBytes, decodeCrtFileChar, encodeCrtFileChar } from "./crt-file-codec";
-import { registerCrtConvExports } from "./crt-conv";
+import { registerCrtConvExports, resetCrtConvStatics } from "./crt-conv";
 import { registerCrtPathExports } from "./crt-path";
 import { registerCrtSeh3Exports } from "./crt-seh3";
 import { registerCrtVc8Exports } from "./crt-vc8";
@@ -901,6 +901,7 @@ export class Msvcrt implements IModule {
         // — including the CRT's static time scratch, which lives in other modules.
         resetCrtTimeStatics();
         resetVc9TimeStatics();
+        resetCrtConvStatics();
         this.timezoneState = null;
         this.errnoAddr = 0;
         this.pctypeVarAddr = 0;
