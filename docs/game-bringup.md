@@ -40,6 +40,7 @@ bun install
 
 # Slot 1 shown; add 10 to each port for slot 2, and so on.
 export BS_TAB=<name>
+export BS_DEV_PORT=5184
 export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
 export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
 export BS_WGB_ROOTS=<folder holding your bundles>

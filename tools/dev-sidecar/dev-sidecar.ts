@@ -407,7 +407,7 @@ function archiveStats() {
  * Who may READ a response body cross-origin, and who may open the WebSocket at all. `*` would
  * hand the first away; see wsOriginAllowed for why the second matters more.
  */
-const DEV_PORTS = [5174, ...(process.env.BS_VITE_PORT ? [Number(process.env.BS_VITE_PORT)] : [])];
+const DEV_PORTS = [5174, ...(process.env.BS_DEV_PORT ? [Number(process.env.BS_DEV_PORT)] : [])];
 const DEV_ORIGINS = new Set(DEV_PORTS.flatMap((p) =>
   ["http", "https"].flatMap((s) => [`${s}://localhost:${p}`, `${s}://127.0.0.1:${p}`]),
 ));
