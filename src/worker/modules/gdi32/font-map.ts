@@ -11,7 +11,9 @@ const WINDOWS_FONTS: ReadonlyArray<readonly [face: string, bundled: string]> = [
     ['Helvetica',            'Liberation Sans'],
     ['MS Sans Serif',        'Liberation Sans'],
     ['Microsoft Sans Serif', 'Liberation Sans'],
-    // NT5 resolves the dialog-manager alias to Microsoft Sans Serif. Keeping the
+    // "Using MS Shell Dlg and MS Shell Dlg 2" (Win32 docs): the dialog aliases are
+    // font substitutes, MS Shell Dlg for Microsoft Sans Serif (MS Shell Dlg 2 is
+    // documented as Tahoma; we keep both on Sans Serif metrics). Keeping the
     // alias unresolved lets Canvas choose a platform UI font (often Segoe UI),
     // whose heavier stems and wider metrics do not match classic Win32 dialogs.
     ['MS Shell Dlg',         'Microsoft Sans Serif'],
