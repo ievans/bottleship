@@ -22,7 +22,6 @@
 import { Logger, LogCategory } from '../logger';
 import { setWriteMapBase } from './address-space';
 import { invalidateGuestCode } from './guest-code';
-import { zeroDirtyPages } from './zero-dirty';
 import { MEM_THUNK_CODE_BASE, MEM_THUNK_CODE_SIZE, MEM_PAGETABLE_BASE, MEM_PAGETABLE_SIZE, MEM_GUARD_BASE, MEM_GUARD_SIZE } from '../cpu/emulator-config';
 
 // Page table constants
@@ -230,7 +229,7 @@ export class PageTableManager {
         // held guest code before it was decommitted, and full_clear_tlb does not drop
         // compiled blocks, so this JS write needs the §3.1 invalidation like any other.
         invalidateGuestCode(baseAddr, sizeBytes);
-        zeroDirtyPages(mem, baseAddr, baseAddr + sizeBytes);
+        mem.fill(0, baseAddr, baseAddr + sizeBytes);
 
         Logger.verbose(LogCategory.SYSTEM,
             `[PageTableManager] Committed ${endPage - startPage} pages at 0x${baseAddr.toString(16)}`);
