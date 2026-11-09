@@ -13,6 +13,8 @@ import { msiModule } from "../api/msi.api";
 import { xinput1_3Module } from "../api/xinput1_3.api";
 import { msvcp140Module } from "../api/msvcp140.api";
 import { bcryptModule } from "../api/bcrypt.api";
+import { dpnetModule } from '../api/dpnet.api';
+import { dpnlobbyModule } from '../api/dpnlobby.api';
 import { d3dim700Module } from "../api/d3dim700.api";
 import { twitchsdkModule } from "../api/twitchsdk_32_release.api";
 import { steamApiModule } from "../api/steam_api.api";
@@ -106,6 +108,8 @@ export class APIRegistry {
         this.registerModule(xinput1_3Module);
         this.registerModule(msvcp140Module);
         this.registerModule(bcryptModule);
+        this.registerModule(dpnetModule);
+        this.registerModule(dpnlobbyModule);
         this.registerModule(d3dim700Module);
         this.registerModule(twitchsdkModule);
         this.registerModule(steamApiModule);

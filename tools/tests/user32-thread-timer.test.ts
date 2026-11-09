@@ -29,7 +29,7 @@ test("SetTimer(NULL) posts WM_TIMER to the creating thread only", () => {
     withStubs(7, (fire, posts, wakes) => {
         const id = exports.SetTimer({} as any, memory, [0, 0, 10, 0x2000]);
         fire();
-        expect(posts).toEqual([[0, 0x113, id, 0x2000, 0, 0, 7]]);
+        expect(posts).toEqual([[0, 0x113, id, 0x2000, 0, 0, 7, undefined, 0, true, 1]]);
         expect(wakes).toEqual([7]);
         exports.KillTimer({} as any, memory, [0, id]);
     });
