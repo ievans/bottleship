@@ -3,8 +3,6 @@
  * Keep behavior deterministic and fail unsupported networking paths safely.
  */
 
-import { lanStack, lanActive, lanClearEvent } from "../net/lan";
-import { createLanExports, overlayLan, wrapSocketCreate } from "../net/lan-exports";
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
 import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
@@ -12,7 +10,7 @@ import {
     makeWsaStartup,
     makeWsaCleanup,
     wsaStartupCount,
-    sharedWsaSockets,
+    WsaSocketTable,
     makeSocketExports,
     inetAddr,
     createDnsStubs,
@@ -22,7 +20,6 @@ import {
     makeFdIsSet,
     WSAEFAULT,
     WSAENOTSOCK,
-    makeWsaThreadError,
 } from "./wsa-stub-shared";
 
 const SOCKET_ERROR = -1;
@@ -30,10 +27,10 @@ const SOCKET_ERROR = -1;
 export class Wsock32 implements IModule {
     name = "wsock32";
     exports: Record<string, ThunkImplementation> = {};
-    private socketTable = sharedWsaSockets;
+    private socketTable = new WsaSocketTable();
 
     initialize(process: Process): void {
-        const wsaError = makeWsaThreadError();
+        let wsaLastError = 0;
 
         const ok = () => 0;
         const htons = (_ctx: unknown, _mem: unknown, args: number[]) => {
@@ -49,12 +46,14 @@ export class Wsock32 implements IModule {
                 ((value >>> 24) & 0xff)
             ) >>> 0;
         };
-        const getLastError = () => wsaError.get();
+        const getLastError = () => wsaLastError >>> 0;
         const setLastError = (_ctx: unknown, _mem: unknown, args: number[]) => {
-            wsaError.set(args[0] ?? 0);
+            wsaLastError = (args[0] ?? 0) | 0;
             return 0;
         };
-        const setError = (code: number) => wsaError.set(code);
+        const setError = (code: number) => {
+            wsaLastError = code | 0;
+        };
         const startup = makeWsaStartup(setError, WSAEFAULT, SOCKET_ERROR);
         const socketExports = makeSocketExports(this.socketTable, setError);
         const dns = createDnsStubs(process, setError);
@@ -164,22 +163,9 @@ export class Wsock32 implements IModule {
         this.exports["ord_115"] = startup; // WSAStartup
         this.exports["ord_116"] = cleanup; // WSACleanup
         this.exports["ord_151"] = fdIsSet; // __WSAFDIsSet
-        this.installLan(process, setError, wsaError.capture);
-    }
-
-    /** Real sockets over the virtual LAN when one is configured; the stubs otherwise. */
-    private installLan(process: Process, setError: (code: number) => void, captureError: () => (code: number) => void): void {
-        const deps = {
-            stack: lanStack, table: this.socketTable, process, setError, captureError,
-            isActive: lanActive, clearEvent: lanClearEvent,
-        };
-        overlayLan(this.exports, createLanExports(deps));
-        wrapSocketCreate(this.exports, deps);
-        for (const [ord, name] of [[1, "accept"], [2, "bind"], [3, "closesocket"], [4, "connect"], [5, "getpeername"], [6, "getsockname"], [7, "getsockopt"], [12, "ioctlsocket"], [13, "listen"], [16, "recv"], [17, "recvfrom"], [18, "select"], [19, "send"], [20, "sendto"], [21, "setsockopt"], [22, "shutdown"], [23, "socket"], [51, "gethostbyaddr"], [52, "gethostbyname"], [57, "gethostname"], [101, "WSAAsyncSelect"]] as const) this.exports[`ord_${ord}`] = this.exports[name]!;
     }
 
     reset(): void {
-        lanStack.reset();
         this.socketTable.reset();
         wsaStartupCount.reset();
     }
