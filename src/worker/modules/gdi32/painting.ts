@@ -14,6 +14,7 @@ import { LOGPEN_OFFSETS, LOGPEN_SIZE, STOCK_NULL_BRUSH } from './gdi-objects';
 import { writeBackDibSectionRect } from './bitmap-resolve';
 import { patBlt } from './gdi-blit';
 import { extTextOut } from './ext-text-out';
+import { fontCellHeight, prefixWidths } from './text-extent-cache';
 import { Mem } from '../../core/memory/mem-accessor';
 import { isValidAddress } from '../../core/memory/address-guard';
 import { getFontSetEpoch } from './font-resource';
@@ -2138,10 +2139,8 @@ export function createPaintingExports(): Record<string, ThunkImplementation> {
         let cy = 16;
         if (dcCtx) {
             try {
-                for (let i = 0; i < text.length; i++) {
-                    cum[i] = Math.round(dcCtx.measureText(text.substring(0, i + 1)).width);
-                }
-                cy = measureVerticalMetrics(dcCtx).height;
+                prefixWidths(dcCtx, text, cum);
+                cy = fontCellHeight(dcCtx) ?? measureVerticalMetrics(dcCtx).height;
             } catch (_) { /* fall through to 8px/char fallback below */ }
         }
         for (let i = 0; i < text.length; i++) {
