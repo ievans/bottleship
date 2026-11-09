@@ -40,7 +40,6 @@ bun install
 
 # Slot 1 shown; add 10 to each port for slot 2, and so on.
 export BS_TAB=<name>
-export BS_VITE_PORT=5184 LAN_PORT=5185
 export BS_SIDECAR_PORT=3011 VITE_SIDECAR_PORT=3011
 export BS_CDP_PORT=9343 BS_CHROME_PROFILE="$PWD/tmp/chrome-profile"
 export BS_WGB_ROOTS=<folder holding your bundles>
@@ -48,7 +47,7 @@ export BS_WGB_ROOTS=<folder holding your bundles>
 bun tools/harness.ts up
 ```
 
-See [Separate worktrees](harness.md#separate-worktrees). The dev servers only serve bundles from the
+The dev servers only serve bundles from the
 repository and `BS_WGB_ROOTS`, so a bundle anywhere else fails to load with an HTTP 403.
 
 Memory sets the limit on parallel work. A guest can take several GB, so 2-3 running at once is the
