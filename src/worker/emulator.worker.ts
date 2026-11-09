@@ -201,7 +201,6 @@ import { noteAppliedWorkerFlag } from "./harness/cmds/dbg";
 // onmessage handler families (static imports — worker bundled with inlineDynamicImports).
 import { handleAudioBridgeMessage } from "./worker-handlers/audio-bridge";
 import { handleLoggingMessage } from "./worker-handlers/logging";
-import { configureLan } from "./net/lan";
 import { handleDebugMonitorMessage } from "./worker-handlers/debug-monitor";
 import { handleRegistryMessage } from "./worker-handlers/registry";
 
@@ -3431,12 +3430,6 @@ const handleWorkerMessage = (event: MessageEvent): void => {
       : null;
     Logger.log(LogCategory.SYSTEM,
       `[ReExec] boot from host: image "${pendingReExecImage ?? "(manifest)"}" args "${pendingReExecArgs ?? ""}"`);
-    return;
-  }
-
-  if (message?.type === "set_lan") {
-    // Virtual-LAN relay endpoint for multiplayer; null leaves the LAN.
-    configureLan(typeof message.url === "string" && message.url ? message.url : null);
     return;
   }
 

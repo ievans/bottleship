@@ -25,8 +25,7 @@ this repository: anything for upstream is sent separately, later.
   worked out. This is the template for the networking half.
 - [Compatibility](compatibility.md), [Importing games](bundles.md), [GOG import](gog-import.md):
   how bundles are built and what has been tested.
-- `tools/harness/regression/empire-earth-single-player.harness.ts` and
-  `empire-earth-lan.harness.ts`: the shape your regression scripts should take.
+- `tools/harness/regression/empire-earth-single-player.harness.ts`: the shape your regression scripts should take.
 
 ## Set up a workspace
 
@@ -59,7 +58,6 @@ Memory sets the limit on parallel work. A guest can take several GB, so 2-3 runn
 sane range on a desktop, and two Empire Earth guests don't fit in 8 GB.
 
 - Run one guest per agent, and close its tab when you aren't using it.
-- Play the second player with `tools/lan-peer.ts`, which costs a few MB, not a second real guest.
 - Take timing measurements only with a single guest running.
 
 Keep plans and notes in the ignored `plan/` folder, and evidence in the ignored `logs/` folder.
@@ -88,8 +86,7 @@ Find out what the game needs before committing to it.
    - Keep each game's folder under its own name. An expansion's bundle carries the base game's
      folder too, as The Art of Conquest does.
 2. **Drive it** with the harness to the main menu, then into a skirmish or first mission.
-3. **Look at the network.** Join a room (`lanJoin`), turn tracing on, and open the multiplayer menu.
-   `lanTrace` shows the Winsock calls, ports, and whether traffic is broadcast or unicast. `stubs()`
+3. **Look at the network.** Open the game's multiplayer menu and watch `stubs()`, which
    names missing APIs. Check specifically for DirectPlay (`dplayx`), which the relay doesn't carry.
 4. **Report on the issue:** what works, what breaks, a rough size for the missing work, and
    anything that needs a decision. Then continue, unless it's a blocker from
