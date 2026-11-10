@@ -1,0 +1,88 @@
+name: LAN relay image
+
+# Publishes the Rust virtual-LAN relay (Dockerfile.lan) as ghcr.io/<repo>-lan, tagged with the
+# release version, so the relay and the app image of one release share a number.
+#
+# A tag created with GITHUB_TOKEN starts no other workflow (ci.yml's publish-image job explains
+# why that image is built inside CI), so this one runs after CI completes on main and builds only
+# when the commit CI just ran on is itself a release tag that has no relay image yet.
+# workflow_dispatch backfills a release: run it from that tag's ref.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: lan-image-${{ github.event.workflow_run.head_sha || github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish relay image
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+
+      - id: version
+        run: |
+          tag="$(git tag --points-at HEAD --list 'v*' | head -n1)"
+          if [ -z "$tag" ]; then
+            echo "HEAD is not a release tag; nothing to publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      # arm64 is cross-built under emulation.
+      - if: steps.version.outputs.publish == 'true'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - if: steps.version.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - if: steps.version.outputs.publish == 'true'
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - id: exists
+        if: steps.version.outputs.publish == 'true'
+        run: |
+          if docker buildx imagetools inspect "ghcr.io/${GITHUB_REPOSITORY}-lan:${{ steps.version.outputs.version }}" > /dev/null 2>&1; then
+            echo "Already published."
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - if: steps.version.outputs.publish == 'true' && steps.exists.outputs.built != 'true'
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          file: Dockerfile.lan
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}-lan:${{ steps.version.outputs.version }}
+            ghcr.io/${{ github.repository }}-lan:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ github.event.workflow_run.head_sha || github.sha }}
+          provenance: false
+          cache-from: type=gha,scope=lan-image
+          cache-to: type=gha,mode=max,scope=lan-image

@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+# The Rust virtual-LAN relay (packages/lan-rust), as a static binary on an empty image. It serves
+# no game files and keeps all state in memory; run it with --config <server.json> to set
+# allowedOrigins. Published by .github/workflows/lan-image.yml as ghcr.io/<repo>-lan.
+FROM rust:1.97-alpine AS build
+RUN apk add --no-cache musl-dev
+WORKDIR /src
+COPY packages/lan-rust ./
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build --release --locked && cp target/release/bottleship-lan /bottleship-lan
+
+FROM scratch
+COPY --from=build /bottleship-lan /bottleship-lan
+USER 65532:65532
+EXPOSE 9001
+ENTRYPOINT ["/bottleship-lan"]
+CMD ["--host", "0.0.0.0", "--port", "9001"]
