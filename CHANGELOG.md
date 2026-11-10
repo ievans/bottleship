@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/ievans/bottleship/compare/v0.8.0...v0.8.1) (2026-11-10)
+
+
+### Bug Fixes
+
+* **dev:** make the harness honor BS_DEV_PORT and stop only its own Vite ([#95](https://github.com/ievans/bottleship/issues/95)) ([d18be9b](https://github.com/ievans/bottleship/commit/d18be9b04ad5f8acec8b9b40d9f1256d6d70aae6))
+
 ## [0.8.0](https://github.com/ievans/bottleship/compare/v0.7.0...v0.8.0) (2026-11-08)
 
 
