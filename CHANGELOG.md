@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/ievans/bottleship/compare/v0.8.1...v0.8.2) (2026-11-10)
+
+
+### Bug Fixes
+
+* **net:** draw default LAN addresses from one /16 ([#98](https://github.com/ievans/bottleship/issues/98)) ([3bec200](https://github.com/ievans/bottleship/commit/3bec2006688630119cb2f3f95a7baa840b3ce1b5))
+
 ## [0.8.1](https://github.com/ievans/bottleship/compare/v0.8.0...v0.8.1) (2026-11-10)
 
 
