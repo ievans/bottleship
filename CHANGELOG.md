@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/ievans/bottleship/compare/v0.8.2...v0.8.3) (2026-11-11)
+
+
+### Bug Fixes
+
+* **ui:** default the LAN server field to the page origin ([#100](https://github.com/ievans/bottleship/issues/100)) ([8d1c68b](https://github.com/ievans/bottleship/commit/8d1c68bbc18c359befc983b3b34dd3fb27687f48))
+
 ## [0.8.2](https://github.com/ievans/bottleship/compare/v0.8.1...v0.8.2) (2026-11-10)
 
 
