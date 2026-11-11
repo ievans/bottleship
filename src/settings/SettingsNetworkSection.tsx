@@ -1,16 +1,16 @@
 import React from "react";
 import { Button, Hint, SettingsRow, SettingsSection } from "../ui";
-import { normalizeNetworkConfig, networkInviteUrl } from "../network-config";
+import { defaultServerUrl, normalizeNetworkConfig, networkInviteUrl } from "../network-config";
 import type { SettingsDrawerProps } from "./types";
 
 export default function SettingsNetworkSection({
   network, networkStatus, onNetworkChange,
 }: SettingsDrawerProps): React.ReactElement {
-  const [serverUrl, setServerUrl] = React.useState(network?.serverUrl ?? "");
+  const [serverUrl, setServerUrl] = React.useState(network?.serverUrl ?? defaultServerUrl(window.location.origin));
   const [room, setRoom] = React.useState(network?.room ?? "");
   const [error, setError] = React.useState("");
   React.useEffect(() => {
-    setServerUrl(network?.serverUrl ?? "");
+    setServerUrl(network?.serverUrl ?? defaultServerUrl(window.location.origin));
     setRoom(network?.room ?? "");
   }, [network]);
   const connect = (event: React.FormEvent) => {
