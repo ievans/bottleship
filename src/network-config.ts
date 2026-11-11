@@ -103,6 +103,12 @@ export function networkInviteUrl(href: string, config: NetworkConfig | null): st
   return url.toString();
 }
 
+/** The LAN server prefilled in settings when none is saved: the page's own origin, for deployments that serve the relay beside the app. */
+export function defaultServerUrl(origin: string): string {
+  try { return ["http:", "https:"].includes(new URL(origin).protocol) ? new URL(origin).origin : ""; }
+  catch { return ""; }
+}
+
 export function loadNetworkConfig(): NetworkConfig | null {
   if (typeof window === "undefined") return null;
   let saved: NetworkConfig | null = null;

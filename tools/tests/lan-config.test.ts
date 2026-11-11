@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { networkConfigFromLocation, networkInviteUrl, normalizeNetworkConfig } from "../../src/network-config";
+import { defaultServerUrl, networkConfigFromLocation, networkInviteUrl, normalizeNetworkConfig } from "../../src/network-config";
 import { EmulatorConfig } from "../../src/worker/core/emulator-config-manager";
 
 describe("LAN connection configuration", () => {
@@ -11,6 +11,12 @@ describe("LAN connection configuration", () => {
       .toEqual({ serverUrl: "https://lan.example.org", room: "friends" });
     expect(normalizeNetworkConfig({ serverUrl: "ws://127.0.0.1:9001", room: "test_1" }))
       .toEqual({ serverUrl: "http://127.0.0.1:9001", room: "test_1" });
+  });
+
+  test("the default server is the page's own HTTP(S) origin", () => {
+    expect(defaultServerUrl("https://games.example.org")).toBe("https://games.example.org");
+    expect(defaultServerUrl("http://localhost:5173")).toBe("http://localhost:5173");
+    for (const origin of ["null", "file://", "about:blank", ""]) expect(defaultServerUrl(origin)).toBe("");
   });
 
   test("rejects malformed or ambiguous endpoints and room identities", () => {
