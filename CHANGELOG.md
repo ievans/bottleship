@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.8.4](https://github.com/ievans/bottleship/compare/v0.8.3...v0.8.4) (2026-11-12)
+
+
+### Bug Fixes
+
+* **d3d8:** retain buffers owned by bindings and state blocks ([bf0cc4a](https://github.com/ievans/bottleship/commit/bf0cc4a401c4f4667afa270a6570df4b888c0550))
+* **storage:** preserve shadow metadata through library exports and legacy imports ([59f8e6a](https://github.com/ievans/bottleship/commit/59f8e6aa120d5c893ba6f38b6c166ccee6eea339))
+* **user32:** traverse the complete sibling order in both directions ([08ae6bd](https://github.com/ievans/bottleship/commit/08ae6bd06080b8d8b8907bfa75761286d6c1f824))
+
 ## [0.8.3](https://github.com/ievans/bottleship/compare/v0.8.2...v0.8.3) (2026-11-11)
 
 
