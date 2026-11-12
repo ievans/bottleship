@@ -11,7 +11,7 @@
  */
 import { buildZip, crc32 } from "@bottleship/formats/wgb/zip-build";
 import { ZipArchive, BufferSource } from "@bottleship/formats/zip";
-import { getContainerDir, PERSISTENT_ROOT_FILES } from "./container-store";
+import { getContainerDir, PERSISTENT_ROOT_FILES, SHADOW_INDEX_FILE } from "./container-store";
 import { Logger, LogCategory } from "../../core/logger";
 import { asWriteChunk } from "../../../dom-buffer";
 
@@ -78,11 +78,20 @@ export async function importContainer(gameId: string, zipBytes: Uint8Array): Pro
     const archive = new ZipArchive(new BufferSource(zipBytes));
     await archive.init();
     let written = 0;
+    let hasShadowIndex = false;
     for (const entry of archive.listEntries()) {
         if (entry.isDirectory) continue;
         const data = await archive.readEntry(entry);
-        await writeContainerFile(container, entry.name.replace(/\\/g, "/"), data);
+        const rel = entry.name.replace(/\\/g, "/").split("/").filter(Boolean).join("/");
+        await writeContainerFile(container, rel, data);
+        if (rel === SHADOW_INDEX_FILE) hasShadowIndex = true;
         written++;
+    }
+    // Older exports carry no shadow index: do not retain tombstones from the previous save.
+    // Remove it only after all archive entries have been restored successfully.
+    if (!hasShadowIndex) {
+        try { await container.removeEntry(SHADOW_INDEX_FILE); }
+        catch (err) { if ((err as DOMException).name !== "NotFoundError") throw err; }
     }
     Logger.log(LogCategory.SYSTEM, `save-import: "${gameId}" ← ${written} files`);
     return written;
