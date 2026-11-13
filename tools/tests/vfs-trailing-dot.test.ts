@@ -4,6 +4,7 @@
  * is naming a file inside <dir>.
  */
 import { afterAll, describe, expect, test } from "bun:test";
+import { normalizeGuestPath } from "../../src/worker/runtime/filesystem/guest-path-resolver";
 import { VirtualFileSystem } from "../../src/worker/runtime/filesystem/vfs";
 import type { ZipArchive, ZipEntry } from "@bottleship/formats/zip";
 import { installFakeOpfs, findFakeByName } from "./fixtures/fake-opfs";
@@ -43,4 +44,15 @@ describe("VFS trailing dots", () => {
         expect(vfs.listDirectory("C:\\Saves").map((e) => e.name)).toContain("GameLog.ini");
         expect(vfs.listDirectory("C:\\").map((e) => e.name)).toContain("Saves");
     });
+});
+
+// Ordinary DOS paths share normalization between lookup expansion and the VFS.
+test.each([
+    ["C:/Games. /Saves... /slot.sav. ", "C:\\Games\\Saves\\slot.sav"],
+    ["D:\\Games\\.\\Saves\\..\\slot.sav", "D:\\Games\\slot.sav"],
+    ["C:\\", "C:\\"],
+])("normalizes %s consistently and idempotently", (input, expected) => {
+    expect(normalizeGuestPath(input)).toBe(expected);
+    expect(normalizeGuestPath(expected)).toBe(expected);
+    expect(new VirtualFileSystem().resolvePath(input)).toBe(expected);
 });
