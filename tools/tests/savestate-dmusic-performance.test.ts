@@ -627,7 +627,7 @@ describe("dmusic saved fields of the playing objects", () => {
             expect(restoredOf(back, PerformanceObject).directMusic).toBeNull();
         });
         edit((s) => { of<SavedPerformance>(s, "dmusic-performance").engine!.now += 1; });
-        for (const key of ["pathType", "buffer", "channels"] as const) edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath")[key] += 1; });
+        for (const key of ["pathType", "buffer", "channels", "volume"] as const) edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath")[key] += 1; });
         edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath").performance = -1; });
         edit((s) => { of<SavedSegmentState>(s, "dmusic-segment-state").state!.grooveLevel += 1; });
         edit((s) => { of<SavedSegmentState>(s, "dmusic-segment-state", 3).performance = -1; });
@@ -666,7 +666,7 @@ describe("dmusic saved fields of the playing objects", () => {
             .toEqual(keys(SYNTH_VOICE_FIELDS).filter(k => k !== "channel" && k !== "region"));
         expect(Object.keys(port.sink!).sort()).toEqual(keys(SINK_FIELDS));
         expect(Object.keys(of<SavedPort>(capture(), "dmusic-port")).sort()).toEqual(DMUSIC_SCHEMA.savedPort);
-        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 5, schemaHash: "2c7000ebe28c598d" });
+        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 6, schemaHash: "7974b358a1e3a776" });
     });
 });
 
