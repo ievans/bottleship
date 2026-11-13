@@ -1,4 +1,5 @@
-name: Windows DirectMusic review validation
+name: Windows contribution review validation
+run-name: Windows focused contribution batch
 on:
   workflow_dispatch:
     inputs:
@@ -8,44 +9,41 @@ on:
 permissions:
   contents: read
 jobs:
-  ordered:
+  focused:
+    name: ${{ matrix.slug }}
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: thread-timers
+            ref: 99df608300e9482ddf5671ad7477b4515d8a51f2
+            tests: tools/tests/user32-thread-timer.test.ts tools/tests/savestate-user32.test.ts tools/tests/savestate-participants.test.ts
+          - slug: freelibrary-rollback
+            ref: 3df20d0ff9dfcef1f805d95a65be9b9e28775b48
+            tests: tools/tests/freelibrary-dllmain-detach.test.ts
+          - slug: dmusic-file-loader
+            ref: e8ee51e88d5ebb962d67a7ef056b1c1e17970db7
+            tests: tools/tests/dmusic-file-loader.test.ts
+          - slug: unicode-imports
+            ref: e93630224da52b7f71cde4a211a51d1edce1cbd3
+            tests: tools/tests/unicode-compat-imports.test.ts
+          - slug: dmusic-path-volume
+            ref: 819c27d96379f42e9b1b11d83aa5d86880763907
+            tests: tools/tests/dmusic-path-volume.test.ts tools/tests/savestate-dmusic-performance.test.ts tools/tests/savestate-participants.test.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ inputs.contribution_ref }}
+          ref: ${{ matrix.ref }}
           submodules: true
           fetch-depth: 0
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
-      - name: Ordered saved-state suites
-        continue-on-error: true
-        run: bun test tools/tests/savestate-audio-input.test.ts tools/tests/savestate-binkw32.test.ts tools/tests/savestate-blobs-deferred.test.ts tools/tests/savestate-blobs.test.ts tools/tests/savestate-com-server-loads.test.ts tools/tests/savestate-comctl32.test.ts tools/tests/savestate-container.test.ts tools/tests/savestate-content-hash.test.ts tools/tests/savestate-cursor.test.ts tools/tests/savestate-dbghelp.test.ts tools/tests/savestate-ddraw.test.ts tools/tests/savestate-dmusic-performance.test.ts
       - name: Record tested revision
         run: git rev-parse HEAD
-      - name: Cache offline WGSL validator
-        id: naga-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
-        with:
-          path: ~/.cargo/bin/naga.exe
-          key: naga-cli-30.0.1-Windows
-      - name: Install offline WGSL validator
-        if: steps.naga-cache.outputs.cache-hit != 'true'
-        run: cargo install naga-cli --locked --version 30.0.1
-      - name: Locate native LAN compiler
-        shell: pwsh
-        run: |
-          $compiler = (Get-Command gcc -ErrorAction SilentlyContinue).Source
-          if (-not $compiler) {
-            foreach ($candidate in @('C:/mingw64/bin/gcc.exe', 'C:/msys64/ucrt64/bin/gcc.exe', 'C:/msys64/mingw64/bin/gcc.exe')) {
-              if (Test-Path $candidate) { $compiler = $candidate; break }
-            }
-          }
-          if (-not $compiler) { throw 'The Windows gate needs a native GCC toolchain' }
-          "BS_LAN_CC=$compiler" >> $env:GITHUB_ENV
-          (Split-Path $compiler) >> $env:GITHUB_PATH
-          & $compiler --version
-      - name: Normal quality gate
-        run: bun run gate
+      - name: Focused API flows
+        run: bun test ${{ matrix.tests }}
+      - name: Ordered saved-state group
+        run: bun test tools/tests/savestate-audio-input.test.ts tools/tests/savestate-binkw32.test.ts tools/tests/savestate-blobs-deferred.test.ts tools/tests/savestate-blobs.test.ts tools/tests/savestate-com-server-loads.test.ts tools/tests/savestate-comctl32.test.ts tools/tests/savestate-container.test.ts tools/tests/savestate-content-hash.test.ts tools/tests/savestate-cursor.test.ts tools/tests/savestate-dbghelp.test.ts tools/tests/savestate-ddraw.test.ts tools/tests/savestate-dmusic-performance.test.ts
