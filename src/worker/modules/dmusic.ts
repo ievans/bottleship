@@ -1431,7 +1431,7 @@ export class DMusic implements IModule {
             const state = perf.engine.playSegment(seg.segment, flags >>> 0);
             if (state) {
                 if (!path) {
-                    perf.defaultAudioPath ??= new AudioPathObject();
+                    perf.defaultAudioPath ??= this.createAudioPath(perf, 0);
                     perf.defaultAudioPath.performance ??= perf;
                 }
                 state.audioPath = path ?? perf.defaultAudioPath;

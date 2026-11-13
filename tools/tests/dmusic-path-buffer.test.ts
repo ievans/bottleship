@@ -113,4 +113,13 @@ function riff(): Uint8Array {
         const obj = rp.getComObjectByAddress(path) as DMusicObject;
         obj.forceRelease();
         expect(released).toContain(0x7100);
+        // Implicit playback must preserve the default path's existing buffer support.
+        const midi = make<SegmentObject>(CLSID_DirectMusicSegment);
+        midi.obj.segment = new PerfSegment(); midi.obj.segment.length = 3072;
+        expect(call("IDirectMusicPerformance8_PlaySegmentEx", [perf, midi.ptr, 0, 0, 0x80, 0, 0, 0, 0, 0])).toBe(0);
+        expect(call("IDirectMusicPerformance8_GetDefaultAudioPath", [perf, PP])).toBe(0);
+        const defaultPath = Mem.readUint32(PP)!;
+        objects.push(rp.getComObjectByAddress(defaultPath) as DMusicObject);
+        expect(call("IDirectMusicAudioPath_GetObjectInPath", [defaultPath, 0, 0x6000, 0, GUID_NULL, 0, IID, 0x6a0])).toBe(0);
+        expect(made).toBe(2); expect(plays).toBe(1);
     });
