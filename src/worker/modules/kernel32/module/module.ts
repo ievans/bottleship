@@ -88,6 +88,15 @@ function ensureProcessLocalCaches(): void {
     hleLibraryReferences.clear();
 }
 
+/** Drop the per-process module caches and references now, whatever process they were keyed
+ *  to; the next caller re-keys them to the current process. For a host (or a test) that swaps
+ *  `System.process` out from under kernel32 and must not leave the old process's
+ *  LoadLibrary references to be captured by whoever comes next. */
+export function resetModuleRefs(): void {
+    cacheOwnerProcess = undefined;
+    ensureProcessLocalCaches();
+}
+
 export interface ModuleRefState {
     pinned: number[];
     dynamicRefs: Array<[number, number]>;
@@ -1292,10 +1301,20 @@ function initModuleFunctions(): void {
             return { value: 0, stackCleanup: 4 };
         }
         mod.initialized = false;
-        const { callbackId } = callbackManager.invokeCallback(
-            (hModule + mod.entryPoint) >>> 0, [hModule, DLL_PROCESS_DETACH, 0], 0, () => { unload(); return 1; },
-            false, 'FreeLibrary DllMain', frameId,
-        );
+        let callbackId: number;
+        try {
+            ({ callbackId } = callbackManager.invokeCallback(
+                (hModule + mod.entryPoint) >>> 0, [hModule, DLL_PROCESS_DETACH, 0], 0, () => { unload(); return 1; },
+                false, 'FreeLibrary DllMain', frameId,
+            ));
+        } catch (error) {
+            mod.initialized = true;
+            dynamicLoadRefs.set(hModule, 1);
+            callbackManager.abandonSuspendedFrame(frameId);
+            // Setup can throw after changing guest ESP/EIP. Preserve the fatal error;
+            // abandoning a frame releases ownership but does not restore the CPU.
+            throw error;
+        }
         if (!callbackId) {
             callbackManager.abandonSuspendedFrame(frameId);
             mod.initialized = true;
