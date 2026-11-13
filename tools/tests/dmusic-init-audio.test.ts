@@ -102,3 +102,26 @@ function riff(): Uint8Array {
         module.reset();
         expect(refs).toBe(1); // only the caller retains it after closing both performances
     });
+
+test("InitAudio rejects a bad out pointer before creating DirectSound", () => {
+    let calls = 0;
+    internals.process.getModule = () => { calls++; return undefined; };
+    const { ptr } = make<PerformanceObject>(CLSID_DirectMusicPerformance);
+    expect(call("IDirectMusicPerformance8_InitAudio", [ptr, 0, mem.length - 1, 0, 0, 64, 0, 0])).toBe(E_POINTER);
+    expect(calls).toBe(0);
+});
+
+test("a failed cooperative-level setup releases the new device and leaves the output empty", () => {
+    let refs = 0;
+    internals.process.getModule = () => ({ exports: {
+        directsoundcreate8: (_c: unknown, _m: unknown, a: number[]) => { refs++; Mem.writeUint32(a[1]!, 0x7000); return 0; },
+        idirectsound8_setcooperativelevel: () => E_FAIL,
+        IDirectSound8_Release: () => --refs,
+    } });
+    const { ptr } = make<PerformanceObject>(CLSID_DirectMusicPerformance);
+    Mem.writeUint32(0x600, 0);
+    expect(call("IDirectMusicPerformance8_InitAudio", [ptr, 0, 0x600, 0, 0, 64, 0, 0])).toBe(E_FAIL);
+    expect(Mem.readUint32(0x600)).toBe(0);
+    expect(refs).toBe(0);
+    expect(heap.size).toBe(0);
+});
