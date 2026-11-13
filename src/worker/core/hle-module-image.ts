@@ -94,9 +94,17 @@ function planOrdinals(exports: ReadonlyArray<{ ordinal?: number }>): OrdinalPlan
         const assigned = exports.map((_, i) => i + 1);
         return { base: 1, numberOfFunctions: exports.length, slotToExportIndex: exports.map((_, i) => i), assigned };
     }
+    const used = new Set<number>();
+    for (const ordinal of declared) {
+        if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 0xffff || used.has(ordinal)) {
+            throw new Error(`Invalid or duplicate export ordinal: ${ordinal}`);
+        }
+        used.add(ordinal);
+    }
     const base = Math.min(...declared);
     let nextFree = Math.max(...declared) + 1;
     const assigned = exports.map(e => e.ordinal ?? nextFree++);
+    if (nextFree > 0x10000) throw new Error("Synthesized export ordinal exceeds 65535");
     const numberOfFunctions = Math.max(...assigned) - base + 1;
     const slotToExportIndex = new Array(numberOfFunctions).fill(-1);
     exports.forEach((e, i) => { slotToExportIndex[assigned[i] - base] = i; });

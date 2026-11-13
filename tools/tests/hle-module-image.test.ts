@@ -216,3 +216,10 @@ describe("HLE image arena layout", () => {
         }
     });
 });
+
+for (const ordinals of [[0], [-1], [1.5], [65536], [1, 1], [65535, undefined]]) {
+    test(`invalid ordinal layout ${ordinals} fails before writing an image`, () => {
+        const exports = ordinals.map((ordinal, i) => ({ name: `f${i}`, code: stub(i), ordinal }));
+        expect(() => buildHleModuleImage("fixture", BASE, HLE_IMAGE_SLOT_SIZE, exports)).toThrow();
+    });
+}
