@@ -383,8 +383,14 @@ test("native EnumSessions uses READY, native reply and normal timeout callback c
     const f=nativeDiscoveryFixture();
     try {
         const pending=f.run();expect(f.sent).toHaveLength(0);
-        f.ready();await discoveryTick();
-        const udp=f.sent.map(decodeDatagram).find(d=>d?.proto===PROTO_UDP);
+        f.ready();
+        // READY resumes asynchronous discovery; wait for the packet, not one timer tick.
+        const deadline=Date.now()+1000;
+        let udp: ReturnType<typeof decodeDatagram>;
+        do {
+            await discoveryTick();
+            udp=f.sent.map(decodeDatagram).find(d=>d?.proto===PROTO_UDP);
+        } while (!udp && Date.now()<deadline);
         expect(udp?.dstPort).toBe(47624);
         expect(f.sent.map(decodeDatagram).some(d=>d?.proto===PROTO_DIRECTPLAY)).toBe(false);
         const port=f.table.get(0x10000000).local!.port, source=Uint8Array.of(2,1,127,0,0,1);
