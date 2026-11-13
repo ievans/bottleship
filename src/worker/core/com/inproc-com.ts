@@ -114,49 +114,18 @@ export function resolveInprocDllPath(clsidNormalized: string): string | null {
     return resolveInprocServerPath(clsidNormalized) ?? resolveRomFallbackPath(clsidNormalized);
 }
 
-/**
- * Read HKCR\CLSID\{guid}\TreatAs default value: the CLSID that emulates this one
- * (CoGetTreatAsClass). Windows follows it for both the server lookup and the CLSID handed
- * to DllGetClassObject, e.g. a version-independent MSXML class served by a versioned DLL.
- */
-export function resolveTreatAsClsid(clsidNormalized: string): string | null {
+/** Resolve a valid immediate TreatAs target for native in-process activation. */
+function resolveTreatAsClass(clsid: string): string {
     const store = System.getInstance().registry;
-    if (!store) return null;
-
-    const key = store.open("HKEY_CLASSES_ROOT", `CLSID\\{${normalizeGuid(clsidNormalized)}}\\TreatAs`);
-    if (!key) return null;
-
-    const val = store.getValue(key, "");
-    if (!val || val.type !== "REG_SZ") return null;
-
-    const target = normalizeGuid(String(val.data).trim());
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(target)) return null;
-    return target === normalizeGuid(clsidNormalized) ? null : target;
-}
-
-/** Guest copies of TreatAs target CLSIDs, written once and passed as DllGetClassObject's rclsid. */
-const treatAsClsidPtrs = new WeakMap<Process, Map<string, number>>();
-
-function applyTreatAs(process: Process, args: InprocCoCreateArgs): InprocCoCreateArgs {
-    const target = resolveTreatAsClsid(args.clsidNormalized);
-    if (!target) return args;
-
-    let ptrs = treatAsClsidPtrs.get(process);
-    if (!ptrs) {
-        ptrs = new Map();
-        treatAsClsidPtrs.set(process, ptrs);
+    const key = store?.open("HKEY_CLASSES_ROOT", `CLSID\\{${normalizeGuid(clsid)}}\\TreatAs`);
+    const value = key ? store.getValue(key, "") : null;
+    if (!value) return normalizeGuid(clsid);
+    const text = value.type === "REG_SZ" ? String(value.data).trim() : "";
+    const guid = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
+    if (!new RegExp(`^(?:${guid}|\\{${guid}\\})$`, "i").test(text)) {
+        return normalizeGuid(clsid);
     }
-    let ptr = ptrs.get(target);
-    if (ptr === undefined) {
-        ptr = process.memory.alloc(16, "THUNK_DATA");
-        if (Mem.writeBytes(ptr, guidToBytes(target)) !== 16) {
-            process.memory.free(ptr);
-            return args;
-        }
-        ptrs.set(target, ptr);
-    }
-    Logger.log(LogCategory.COM, `inproc: TreatAs ${args.clsidNormalized} → ${target}`);
-    return { ...args, rclsid: ptr, clsidNormalized: target };
+    return normalizeGuid(text);
 }
 
 function readGuestVtblSlot(mem: Uint8Array, objPtr: number, slot: number): number {
@@ -191,8 +160,7 @@ function runDllMainChain(
     if (!frameId) return null;
 
     let initIndex = 0;
-    const chainDllMain = (ret: number): number | null => {
-        dllInits[initIndex]?.onReturn?.(ret);
+    const chainDllMain = (_ret: number): number | null => {
         initIndex++;
         if (initIndex < dllInits.length) {
             const next = dllInits[initIndex]!;
@@ -246,14 +214,19 @@ function beginGuestCreateChain(
     dllPath: string,
     dllGetClassObject: number,
 ): { callbackId: number } {
-    const scratch = process.memory.alloc(32, "THUNK_DATA");
+    const scratch = process.memory.alloc(48, "THUNK_DATA");
     const iidClassFactoryPtr = scratch;
     const pFactoryOut = scratch + 16;
+    const pClassId = scratch + 32;
 
     const iidBytes = guidToBytes(IID_CLASSFACTORY_NORMALIZED);
     if (Mem.writeBytes(iidClassFactoryPtr, iidBytes) !== 16) {
         process.memory.free(scratch);
         throw new Error("inproc: failed to write IClassFactory IID");
+    }
+    if (Mem.writeBytes(pClassId, guidToBytes(args.clsidNormalized)) !== 16) {
+        process.memory.free(scratch);
+        throw new Error("inproc: failed to write activation CLSID");
     }
     Mem.writeUint32(pFactoryOut, 0);
 
@@ -332,7 +305,7 @@ function beginGuestCreateChain(
 
     return callbackManager.invokeCallback(
         dllGetClassObject,
-        [args.rclsid, iidClassFactoryPtr, pFactoryOut],
+        [pClassId, iidClassFactoryPtr, pFactoryOut],
         12,
         afterGetClassObject,
         false,
@@ -432,11 +405,19 @@ export function tryInprocCoCreateInstance(
     process: Process,
     ctx: { esp: number; returnAddr?: number },
     mem: Uint8Array,
-    requested: InprocCoCreateArgs,
+    args: InprocCoCreateArgs,
 ): ThunkResult | Promise<ThunkResult | null> | null {
-    const args = applyTreatAs(process, requested);
+    const resolved = resolveTreatAsClass(args.clsidNormalized);
+    const redirected = resolved !== normalizeGuid(args.clsidNormalized);
+    args = { ...args, clsidNormalized: resolved };
+    // A failed redirect must not activate the original class via the HLE fallback.
+    const activationResult = (result: ThunkResult | null): ThunkResult | null => {
+        if (result !== null || !redirected) return result;
+        if (args.ppv) Mem.writeUint32(args.ppv, 0);
+        return { value: REGDB_E_CLASSNOTREG, stackCleanup: COCREATEINSTANCE_STACK_CLEANUP };
+    };
     const dllPath = resolveInprocDllPath(args.clsidNormalized);
-    if (!dllPath) return null;
+    if (!dllPath) return activationResult(null);
 
     const moduleName = dllPath.split(/[/\\]/).pop() ?? dllPath;
     const existing = process.moduleRegistry.getByName(moduleName);
@@ -444,14 +425,14 @@ export function tryInprocCoCreateInstance(
         const getClassObject = process.moduleRegistry.getExportAddress(existing.name, "DllGetClassObject");
         if (!getClassObject) {
             Logger.warn(LogCategory.COM, `inproc: ${dllPath} loaded but no DllGetClassObject`);
-            return null;
+            return activationResult(null);
         }
         // Sync path: the DLL is already loaded, no async park happens — [ctx.esp] still holds the real
         // guest return address. startGuestCreateChain reads it (returnAddr undefined → [ESP]).
-        return startGuestCreateChain(process, ctx, mem, args, dllPath, getClassObject);
+        return activationResult(startGuestCreateChain(process, ctx, mem, args, dllPath, getClassObject));
     }
 
-    return loadDllThenCreate(process, args, dllPath);
+    return loadDllThenCreate(process, args, dllPath).then(activationResult);
 }
 
 /**

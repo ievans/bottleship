@@ -3,11 +3,12 @@
  */
 import type { ThunkImplementation } from "../../core/thunking/thunk-dispatcher";
 import { Logger, LogCategory } from "../../core/logger";
-import { DD_OK, DDERR_INVALIDPARAMS, DDERR_CANTDUPLICATE, SUPPORTED_FOURCC_CODES } from "./constants";
+import { DD_OK, DDERR_INVALIDPARAMS, DDERR_CANTDUPLICATE, SUPPORTED_FOURCC_CODES, STACK_CLEANUP_RESTOREDISPLAYMODE } from "./constants";
 import { isValidAddress } from "../../core/memory/address-guard";
 import type { DDrawContext } from "./context";
 import { System } from "../../core/system";
-import { restoreDisplayModeToDesktop, notifyDisplayChange } from "./directdraw";
+import { restoreDisplayModeToDesktop } from "./directdraw";
+import { sendDisplayChange } from "../user32/message";
 
 export function createDirectDrawStubsExports(context: DDrawContext): Record<string, ThunkImplementation> {
     const exports: Record<string, ThunkImplementation> = {};
@@ -26,12 +27,15 @@ export function createDirectDrawStubsExports(context: DDrawContext): Record<stri
             Logger.log(LogCategory.SYSTEM, `IDirectDraw7_${method} stub called: this=0x${args[0].toString(16)}, ret=0x${retAddr.toString(16)}`);
             if (method === "RestoreDisplayMode") {
                 // Faithful: revert the current display mode back to the saved desktop mode,
-                // resize the host, and broadcast WM_DISPLAYCHANGE. Leaving exclusive returns
+                // resize the host, and send WM_DISPLAYCHANGE. Leaving exclusive returns
                 // the screen to GDI.
                 const changed = restoreDisplayModeToDesktop(System.getInstance(), context);
                 context.cooperative.exclusive = false;
                 context.gdiSurfaceVisible = true;
-                return notifyDisplayChange(ctx, mem, context, changed, 4, DD_OK);
+                if (changed) {
+                    return sendDisplayChange(ctx, mem, context.display,
+                        STACK_CLEANUP_RESTOREDISPLAYMODE, "IDirectDraw7_RestoreDisplayMode", DD_OK);
+                }
             }
             return DD_OK;
         };

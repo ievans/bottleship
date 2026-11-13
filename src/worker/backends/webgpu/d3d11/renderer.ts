@@ -75,6 +75,7 @@ export interface SamplerRes { kind: "sampler"; sampler: GPUSampler; comparison: 
 
 interface Viewport { x: number; y: number; w: number; h: number; minDepth: number; maxDepth: number }
 
+// @transient(host renderer identity sequence; no guest pointer or persisted state)
 let nextId = 1;
 
 export class D3D11Renderer implements RenderActive {

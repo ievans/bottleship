@@ -7,9 +7,10 @@
  */
 import { Logger, LogCategory } from "../../core/logger";
 import { drawTextPrefixOptions, fillTextWithMnemonic, parseMnemonicText } from "../win32-text";
-import { pullDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
+import { refreshCanvasFromDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
 import type { GDIContext } from './context';
-import { measureVerticalMetrics } from './text-metrics';
+import { fontBaselineDrop } from './text-extent-cache';
+import { measureVerticalMetrics } from "./text-metrics";
 
 const NONANTIALIASED_QUALITY = 3;
 
@@ -28,20 +29,13 @@ function wantsAliasedText(state: { fontQuality: number }): boolean {
     return state.fontQuality === NONANTIALIASED_QUALITY;
 }
 
-const ascentByFont = new Map<string, number>();
-
-/** tmAscent of the context's current font — the distance from a GDI cell's top to its baseline. */
-function cellAscent(ctx: OffscreenCanvasRenderingContext2D, fontSize: number): number {
-    const font = ctx.font;
-    let a = ascentByFont.get(font);
-    if (a === undefined) {
-        a = measureVerticalMetrics(ctx, fontSize).ascent;
-        ascentByFont.set(font, a);
-    }
-    return a;
+// @transient(host scratch canvas)
+let aliasScratch: OffscreenCanvas | null = null;
+function mergedCellAscent(ctx: OffscreenCanvasRenderingContext2D, size: number): number {
+    return measureVerticalMetrics(ctx, size).ascent;
 }
 
-let aliasScratch: OffscreenCanvas | null = null;
+// @transient(host scratch canvas)
 let aliasScratchCtx: OffscreenCanvasRenderingContext2D | null = null;
 
 /** Binary (alpha-thresholded) glyph fill: rasterize to a scratch canvas, then
@@ -111,7 +105,7 @@ function fillTextGdi(
     x: number,
     y: number
 ): void {
-    const ascent = cellAscent(ctx, state.fontSize);
+    const ascent = mergedCellAscent(ctx, state.fontSize);
     if (wantsAliasedText(state)) { fillTextAliased(ctx, state, text, x, y, ascent); return; }
     const saved = ctx.textBaseline;
     ctx.textBaseline = 'alphabetic';
@@ -133,6 +127,7 @@ const GGO_MODE_MASK = 0x0f;
 // POLYGONHEADER/POLYCURVE record); this emulator doesn't parse font outline tables, so it
 // can only produce the metrics/bitmap formats below. Anything else (including a future mode
 // value) is equally unsupported — whitelist rather than exclude the two known vector modes.
+// @transient(immutable supported glyph formats)
 const SUPPORTED_GGO_FORMATS = new Set([GGO_METRICS, GGO_BITMAP, GGO_GRAY2_BITMAP, GGO_GRAY4_BITMAP, GGO_GRAY8_BITMAP]);
 
 export interface GlyphOutlineResult {
@@ -146,7 +141,9 @@ export interface GlyphOutlineResult {
     bitmap: Uint8Array | null;
 }
 
+// @transient(host glyph scratch canvas)
 let glyphScratch: OffscreenCanvas | null = null;
+// @transient(host glyph scratch context)
 let glyphScratchCtx: OffscreenCanvasRenderingContext2D | null = null;
 
 function ensureGlyphScratch(w: number, h: number): OffscreenCanvasRenderingContext2D | null {
@@ -326,7 +323,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         if (hAlign === TA_CENTER) x -= metrics.width / 2;
         else if (hAlign === TA_RIGHT) x -= metrics.width;
         const vAlign = align & TA_BASELINE;
-        if (vAlign === TA_BASELINE) y -= cellAscent(ctx, state.fontSize);
+        if (vAlign === TA_BASELINE) y -= measureVerticalMetrics(ctx, state.fontSize).ascent;
         else if (vAlign === TA_BOTTOM) y -= measureVerticalMetrics(ctx, state.fontSize).height;
         if (updateCp) gdi.setCurrentPosition(hdc, x + metrics.width, refY);
     }
@@ -339,15 +336,14 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
     // The clip belongs to the DC, so it wraps the glyphs on every target. It is applied
     // after the lazy font/fillStyle sync above so the matching restore hands the context
     // back with exactly the attributes state.applied* claims are on it.
-    let back: { x: number; y: number; w: number; h: number } | null;
-    if (hasRotation) {
-        // Rotated glyphs land anywhere in the swept circle, so mirror that whole box.
-        const reach = Math.max(metrics.width, state.fontSize * 1.7) + 4;
-        back = gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2);
-    } else {
-        back = gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
-    }
-    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+    // The rect mirrored into a DIB section afterwards is wider than the glyphs (rotated
+    // glyphs land anywhere in the swept circle), so it first takes the section's current
+    // bits: the app paints them directly, and the canvas only knows what it last saw.
+    const reach = hasRotation ? Math.max(metrics.width, state.fontSize * 1.7) + 4 : 0;
+    const back = hasRotation
+        ? gdi.clipCopyRect(hdc, x - reach, y - reach, reach * 2, reach * 2)
+        : gdi.clipCopyRect(hdc, x - 2, y - 2, metrics.width + 4, state.fontSize * 1.7 + 4);
+    if (back) refreshCanvasFromDibSectionRect(gdi, hdc, state.hBitmap, ctx, back.x, back.y, back.w, back.h);
 
     const clipped = gdi.beginClipOn(hdc, ctx);
 
@@ -375,7 +371,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
 
         // Draw text at origin after rotation, baseline tmAscent below the cell top
         ctx.textBaseline = 'alphabetic';
-        ctx.fillText(text, 0, cellAscent(ctx, state.fontSize));
+        ctx.fillText(text, 0, mergedCellAscent(ctx, state.fontSize));
         ctx.textBaseline = 'top';
 
         // Restore transform manually (doesn't reset font/fillStyle)
@@ -446,7 +442,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillStyle = state.textColor;
                 }
                 bitmapCtx.textBaseline = 'alphabetic';
-                bitmapCtx.fillText(text, 0, cellAscent(bitmapCtx, state.fontSize));
+                bitmapCtx.fillText(text, 0, mergedCellAscent(bitmapCtx, state.fontSize));
                 bitmapCtx.textBaseline = 'top';
                 bitmapCtx.restore();
             } else {
@@ -622,7 +618,7 @@ function drawLaidOutLine(
     const encoded = esc(line.text.slice(0, line.underline)) + '&' + esc(line.text.slice(line.underline));
     const savedBaseline = ctx.textBaseline;
     ctx.textBaseline = 'alphabetic';
-    fillTextWithMnemonic(ctx, encoded, x, y + cellAscent(ctx, state.fontSize), { ...opts, drawText: false });
+    fillTextWithMnemonic(ctx, encoded, x, y + mergedCellAscent(ctx, state.fontSize), { ...opts, drawText: false });
     ctx.textBaseline = savedBaseline;
 }
 
@@ -778,14 +774,15 @@ export function drawText(
     };
 
     // Same contract as TextOut: a DIBSection selected into this DC IS the pixel surface,
-    // so the glyphs have to reach the guest bits or the next SelectObject discards them.
+    // so the glyphs have to reach the guest bits or the next SelectObject discards them,
+    // and the rect that goes back starts from the bits the app has there now.
     // Without a format rect DrawText lays out from the origin, so the laid-out extent is
     // the whole reach; the alignment origin can sit at its centre or right edge.
     const painted = rect
         ? { x: rect.left, y: rect.top, w: boxWidth, h: rect.bottom - rect.top }
         : { x: originX - layout.width, y: originY, w: layout.width * 2, h: layout.height };
     const back = gdi.clipCopyRect(hdc, painted.x - 2, painted.y - 2, painted.w + 4, painted.h + 4);
-    if (back) pullDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+    if (back) refreshCanvasFromDibSectionRect(gdi, hdc, state.hBitmap, ctx, back.x, back.y, back.w, back.h);
 
     paint(ctx);
     if (state.bkMode === 2) state.appliedFillStyle = state.textColor;

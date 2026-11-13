@@ -102,6 +102,7 @@ export interface ApiFailureRecord {
     lastSeq: number;
 }
 
+// @transient(pure API-name to HRESULT classification cache)
 const hresultThunkByName = new Map<string, boolean>();
 
 /** Does a failing return from this thunk mean an HRESULT failure? */

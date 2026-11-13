@@ -1,3 +1,4 @@
+import { setTimerHandler } from "../core/scheduler/timer-wheel";
 /**
  * DirectShow multimedia streaming (amstream.dll): CLSID_AMMultiMediaStream reading a file
  * into a DirectDraw video stream, with the default audio renderer for its sound.
@@ -245,6 +246,22 @@ function surfaceState(ptr: number): DirectDrawSurfaceState | null {
 }
 
 export class Amstream implements IModule {
+    constructor() {
+        setTimerHandler(TimerKind.AMSTREAM_SAMPLE, ownerPtr => {
+            const sample = this.object(ownerPtr, DirectDrawSampleObject);
+            if (!sample) return;
+            sample.timerId = 0;
+            const owner = sample.stream.owner;
+            if (!sample.pending || !owner) return;
+            if (!owner.running) {
+                this.endPending(sample);
+                sample.status = MS_S_NOUPDATE;
+                return;
+            }
+            this.completeAsync(sample, owner);
+        });
+    }
+
     name = "amstream";
     exports: Record<string, ThunkImplementation> = {};
     vtables: Record<string, VTableInfo> = {};
@@ -478,17 +495,8 @@ export class Amstream implements IModule {
     private armAsync(sample: DirectDrawSampleObject, mms: MultiMediaStreamObject): void {
         const scheduler = System.getInstance().scheduler;
         const delay = Math.max(1, Math.ceil(this.nextDueMs(mms)));
-        sample.timerId = scheduler.timerWheel.add(delay, false, TimerKind.QUARTZ_VIDEO, () => {
-            sample.timerId = 0;
-            const owner = sample.stream.owner;
-            if (!sample.pending || !owner) return;
-            if (!owner.running) {
-                this.endPending(sample);
-                sample.status = MS_S_NOUPDATE;
-                return;
-            }
-            this.completeAsync(sample, owner);
-        }, TimeService.getInstance().nowMs());
+        const owner = sample.addresses.get(sample.primaryVtable) ?? sample.addresses.values().next().value ?? 0;
+        sample.timerId = scheduler.timerWheel.add(delay, false, TimerKind.AMSTREAM_SAMPLE, owner, TimeService.getInstance().nowMs());
     }
 
     /** Finish one asynchronous update: write the frame, signal the application's event, and re-arm if continuous. */

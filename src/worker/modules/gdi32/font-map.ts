@@ -28,6 +28,7 @@ const WINDOWS_FONTS: ReadonlyArray<readonly [face: string, bundled: string]> = [
     ['Impact',               'Liberation Sans'],
 ];
 
+// @transient(immutable built-in font substitution table)
 const WINDOWS_FONT_MAP: ReadonlyMap<string, string> = new Map(
     WINDOWS_FONTS.map(([face, bundled]) => [face.toLowerCase(), bundled]),
 );
