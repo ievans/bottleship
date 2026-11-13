@@ -1,3 +1,4 @@
+import { stopDevServerListener } from "./dev-server-process";
 /**
  * cdp-core.ts — the shared Chrome DevTools Protocol transport for BottleShip
  * tooling. Until now ~35 `cdp-*.ts` scripts each copy-pasted the same
@@ -955,17 +956,7 @@ function spawnVite(): void {
 }
 
 function killWedgedVite(): void {
-    // By PID via the listening socket — matching 'vite' on the command line kills every
-    // Vite on the machine, including other agents' and other checkouts'.
-    const port = new URL(DEFAULT_DEV_URL).port || "5174";
-    if (!IS_WIN) {
-        const pids = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"]).stdout.toString().split(/\s+/).filter(Boolean);
-        if (pids.length > 0) Bun.spawnSync(["kill", ...pids]);
-        return;
-    }
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command",
-        `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
+    stopDevServerListener(DEFAULT_DEV_URL);
 }
 
 /**
