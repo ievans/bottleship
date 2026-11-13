@@ -1,4 +1,5 @@
 import {afterEach, beforeEach, describe, expect, test} from "bun:test";
+import { Scheduler } from "../../src/worker/core/scheduler/scheduler";
 import {System} from "../../src/worker/core/system";
 import {Mem} from "../../src/worker/core/memory/mem-accessor";
 import {SystemResourceProvider} from "../../src/worker/core/resources/system-resource-provider";
@@ -14,13 +15,14 @@ preserveMemBinding(); preserveComVtableOwners(); preserveComReleaseTracking();
 import {PerfSegment, Performance} from "../../src/worker/core/audio/directmusic/performance";
 import {DlsSynth} from "../../src/worker/core/audio/directmusic/synth";
 
-const system = System.getInstance(), savedProcess = system.process, OUT = 0x200;
+const system = System.getInstance(), savedProcess = system.process, savedScheduler = system.scheduler, OUT = 0x200;
 const E_POINTER = 0x80004003 | 0, E_FAIL = 0x80004005 | 0;
 let mem: Uint8Array, module: DMusic, internals: any, heap: Set<number>, objects: DMusicObject[];
 let denyWrite: boolean, epoch = 100, nextHeap: number, nextCom: number;
 const rp = SystemResourceProvider.getInstance();
 
 beforeEach(() => {
+    system.scheduler = new Scheduler();
     mem = new Uint8Array(0x20000);
     Mem.bind(() => mem);
     heap = new Set(); objects = []; denyWrite = false; nextHeap = 0x8000; nextCom = 0x4000;
@@ -51,6 +53,7 @@ afterEach(() => {
     module.reset();
     for (const obj of objects) obj.forceRelease();
     system.process = savedProcess;
+    system.scheduler = savedScheduler;
 });
 
 function make<T extends DMusicObject>(clsid: string): {obj: T; ptr: number} {
