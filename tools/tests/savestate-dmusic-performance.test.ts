@@ -768,6 +768,9 @@ describe("dmusic object lifetimes", () => {
                 band: band.refCount, states: perf.stateObjects.size, playing: perf.engine!.activeStates().length,
             });
             const before = counts();
+            const destroyBand = band.onDestroy;
+            band.onDestroy = () => { console.trace("DEBUG band destroyed", band.handle, band.refCount, [...band.addresses]); destroyBand?.(); };
+            console.log("DEBUG band start", saving, band.handle, band.refCount, [...band.addresses]);
             for (let i = 0; i < 50; i++) {
                 writeWide(NAME_AT, "Sting");
                 expect(call("IDirectMusicStyle8_GetMotif", [ptrOf(c.race), NAME_AT, OUT])).toBe(0);
@@ -777,7 +780,9 @@ describe("dmusic object lifetimes", () => {
             }
             expect(counts()).toEqual(before);
             for (let i = 0; i < 50; i++) {
-                expect(call("IDirectMusicBand_CreateSegment", [ptrOf(band), OUT])).toBe(0);
+                const hr = call("IDirectMusicBand_CreateSegment", [ptrOf(band), OUT]);
+                if (hr !== 0) console.log("DEBUG band failure", {saving, i, hr, handle:band.handle, refs:band.refCount, addresses:[...band.addresses], registered:rp.getComObject(band.handle)?.constructor.name, lookedUp:rp.getComObjectByAddress(ptrOf(band))?.constructor.name});
+                expect(hr).toBe(0);
                 at<SegmentObject>(view().getUint32(OUT, true)).release();
                 expect(call("IDirectMusicStyle8_GetDefaultBand", [ptrOf(c.race), OUT])).toBe(0);
                 at<DMusicObject>(view().getUint32(OUT, true)).release();
