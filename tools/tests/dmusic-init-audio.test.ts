@@ -88,7 +88,7 @@ function riff(): Uint8Array {
         expect(call("IDirectMusicPerformance8_InitAudio", [ptr, 0, ppDS, 0x10001, 0, 64, 0, 0])).toBe(0);
         expect(Mem.readUint32(ppDS)).toBe(0x7000);
         expect(calls).toEqual(["create", "coop 7000 10001 2"]);
-        expect(refs).toBe(2); // the caller's reference, and the performance's own
+        expect(refs).toBe(3); // caller, DirectMusic object, and default port
 
         // A caller-supplied object is used as it is; nothing new is created.
         calls.length = 0;
@@ -96,4 +96,6 @@ function riff(): Uint8Array {
         call("IDirectMusicPerformance8_InitAudio", [other, 0, ppDS, 0x10001, 0, 64, 0, 0]);
         expect(calls).toEqual([]);
         expect(Mem.readUint32(ppDS)).toBe(0x7000);
+        module.reset();
+        expect(refs).toBe(1); // only the caller retains it after closing both performances
     });
