@@ -76,13 +76,7 @@ function normalizeSafeRelativePath(path: string): string | null {
  */
 const GOG_SUPPORT_APP = /^__support[\\/]app[\\/]/i;
 
-/**
- * `__support\save\…` is the same idea with install-if-absent semantics: GOG copies it into
- * the app directory only where nothing is there. Civ3 Complete ships `Conquests\conquests.biq`
- * and the `LSANS.TTF` its `LSANS.fot` points at ONLY here, so dropping the tree left the game
- * without its main scenario and font. Because an entry shipped directly must win, callers
- * resolve these as fallbacks (see `isGogSupportSave`).
- */
+/** GOG copies this staging tree into the app directory only where no installed file exists. */
 const GOG_SUPPORT_SAVE = /^__support[\\/]save[\\/]/i;
 
 /** Whether `dest` is a `__support\save` staging entry, i.e. install-if-absent. */

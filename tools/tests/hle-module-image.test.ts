@@ -135,7 +135,7 @@ describe("HLE module image — PE header walk", () => {
 });
 
 describe("HLE module image — real (sparse) ordinals", () => {
-    test("a sparse ordinal set (twitchsdk-style) resolves each ordinal to its OWN export, not array position", () => {
+    test("a sparse ordinal set resolves each ordinal to its OWN export, not array position", () => {
         // [1, 3, 5] packed at array indices [0, 1, 2] — sequential assignment (the bug this
         // guards) would have ordinal 2 "exist" pointing at index 1's body (ordinal 3's
         // export) and ordinal 3 pointing at index 2's body (ordinal 5's), instead of ordinal
@@ -145,7 +145,7 @@ describe("HLE module image — real (sparse) ordinals", () => {
             { name: "ord_3", code: stub(2), ordinal: 3 },
             { name: "ord_5", code: stub(3), ordinal: 5 },
         ];
-        const image = buildHleModuleImage("twitchsdk_32_release", BASE, HLE_IMAGE_SLOT_SIZE, exports);
+        const image = buildHleModuleImage("ordinal-fixture", BASE, HLE_IMAGE_SLOT_SIZE, exports);
 
         expect(image.ordinalAddresses.get(1)).toBe(image.exportAddresses.get("ord_1"));
         expect(image.ordinalAddresses.get(3)).toBe(image.exportAddresses.get("ord_3"));
@@ -168,7 +168,7 @@ describe("HLE module image — real (sparse) ordinals", () => {
         expect(u32(b, functions + (3 - base) * 4)).toBeGreaterThan(0); // real: ordinal 3
     });
 
-    test("a module mixing declared and undeclared ordinals (dsound-style) never collides", () => {
+    test("a module mixing declared and undeclared ordinals never collides", () => {
         // Two real, documented ordinals among otherwise by-name-only exports — the shape
         // dsound/dplayx actually ship.
         const exports: HleImageExport[] = [
@@ -215,4 +215,20 @@ describe("HLE image arena layout", () => {
             expect(hleImageBaseForSlot(slot) % 0x10000).toBe(0);
         }
     });
+});
+
+for (const ordinals of [[0], [-1], [1.5], [65536], [65535, undefined]]) {
+    test(`invalid ordinal layout ${ordinals} fails before writing an image`, () => {
+        const exports = ordinals.map((ordinal, i) => ({ name: `f${i}`, code: stub(i), ordinal }));
+        expect(() => buildHleModuleImage("fixture", BASE, HLE_IMAGE_SLOT_SIZE, exports)).toThrow();
+    });
+}
+
+test("two export names can alias the same declared ordinal", () => {
+    const image = buildHleModuleImage("fixture", BASE, HLE_IMAGE_SLOT_SIZE, [
+        { name: "Canonical", code: stub(1), ordinal: 17 },
+        { name: "ord_17", code: stub(2), ordinal: 17 },
+    ]);
+    expect(image.exportAddresses.get("Canonical")).toBe(image.ordinalAddresses.get(17));
+    expect(image.exportAddresses.get("ord_17")).toBe(image.ordinalAddresses.get(17));
 });

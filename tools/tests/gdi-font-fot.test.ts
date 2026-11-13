@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { System } from '../../src/worker/core/system';
 import { Mem } from '../../src/worker/core/memory/mem-accessor';
@@ -6,6 +6,11 @@ import { registerPaintingMiscExports } from '../../src/worker/modules/gdi32/pain
 import { removeFontResource, registeredFontFamilies } from '../../src/worker/modules/gdi32/font-resource';
 import { buildFot, parseFot } from '../../src/worker/modules/gdi32/font-fot';
 import type { ThunkImplementation } from '../../src/worker/core/thunking/thunk-dispatcher';
+
+const memState = ["memoryGetter", "validateRange", "getRegion", "dataRoutes"].map(
+    key => [key, Object.getOwnPropertyDescriptor(Mem, key)] as const,
+);
+afterAll(() => { for (const [key, descriptor] of memState) if (descriptor) Object.defineProperty(Mem, key, descriptor); });
 
 const ERROR_FILE_NOT_FOUND = 2;
 const ERROR_FILE_EXISTS = 80;

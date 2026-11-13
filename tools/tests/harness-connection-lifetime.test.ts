@@ -56,6 +56,10 @@ async function exercise(mode: Mode) {
                     socket.send(JSON.stringify({ id: request.id, result: {} }));
                     return;
                 }
+                if (request.method === "Inspector.enable") {
+                    socket.send(JSON.stringify({ id: request.id, result: {} }));
+                    return;
+                }
                 if (request.method !== "Runtime.evaluate") {
                     throw new Error("Unexpected CDP command " + request.method);
                 }

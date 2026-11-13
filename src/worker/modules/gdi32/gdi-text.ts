@@ -160,25 +160,7 @@ function ggoRowStride(bitsPerPixel: number, width: number): number {
     return ((width * bitsPerPixel + 31) >> 5) << 2;
 }
 
-/**
- * GetGlyphOutline's rasterizer. D3DX8's ID3DXFont builds its font-texture atlas by calling
- * this once per glyph (metrics first, then the bitmap at the size those metrics reported);
- * failing it silently — the pre-fix behavior for every uImplemented import — left D3DX8
- * either reusing whatever was already in that atlas cell or drawing nothing, which is why
- * unrelated punctuation collapsed onto a single leftover glyph (see issue #37).
- *
- * TextOut/DrawText already rasterize via OffscreenCanvas against the DC's selected font
- * (fillTextAliased above); this follows the same approach instead of a from-scratch
- * outline/hinting engine. measureText's actualBoundingBox* fields give the glyph's true ink
- * box (tighter than the font's overall cell), which is rendered to a scratch canvas sized to
- * exactly that box and then thresholded (GGO_BITMAP) or quantized (GGO_GRAY*_BITMAP) from the
- * alpha channel.
- *
- * Returns null for a format this emulator can't produce (SUPPORTED_GGO_FORMATS) or when a
- * requested raster genuinely can't be built (no scratch canvas, failed readback) — never a
- * "successful" result standing in for either, since the caller treats null as GDI_ERROR and
- * anything else as data to trust.
- */
+/** Rasterize the selected font into DWORD-aligned GGO bitmap rows; unsupported modes fail. */
 export function getGlyphOutline(
     gdi: GDIContext,
     hdc: number,

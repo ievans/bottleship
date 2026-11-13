@@ -41,6 +41,7 @@ export function parseFot(data: Uint8Array): FotReference | null {
 
     let fontPath: string | null = null;
     const shift = dv.getUint16(rsrc, true);
+    if (shift > 15 || resNames < rsrc + 2) return null;
     for (let p = rsrc + 2; p + 8 <= resNames;) {
         const type = dv.getUint16(p, true);
         if (type === 0) break;
@@ -48,8 +49,8 @@ export function parseFot(data: Uint8Array): FotReference | null {
         p += 8;
         for (let i = 0; i < count && p + 12 <= resNames; i++, p += 12) {
             if (type !== NE_RT_PATH) continue;
-            const off = dv.getUint16(p, true) << shift;
-            const len = dv.getUint16(p + 2, true) << shift;
+            const off = dv.getUint16(p, true) * 2 ** shift;
+            const len = dv.getUint16(p + 2, true) * 2 ** shift;
             if (off + len > data.byteLength) continue;
             const raw = ascii(data.subarray(off, off + len));
             const nul = raw.indexOf("\0");

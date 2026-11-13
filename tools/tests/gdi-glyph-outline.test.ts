@@ -1,11 +1,4 @@
-/**
- * GetGlyphOutline (issue #37): D3DX8's ID3DXFont calls this once per glyph while building its
- * font-texture atlas. Before this, every uChar failed, so the atlas cell kept whatever was
- * already there — collapsing comma/period/quote/etc. onto one leftover glyph (usually a
- * colon). These tests pin the rasterizer's math (ink-box metrics, GGO_BITMAP/GRAY8_BITMAP
- * packing) against a scriptable fake OffscreenCanvas, the same technique
- * gdi-drawtext-aliasing.test.ts uses for the sibling TextOut/DrawText aliased path.
- */
+/** Glyph metrics and bitmap packing, including explicit failures for unsupported formats. */
 import { afterEach, expect, test } from "bun:test";
 import { System } from "../../src/worker/core/system";
 import { EmulatorConfig } from "../../src/worker/core/emulator-config-manager";

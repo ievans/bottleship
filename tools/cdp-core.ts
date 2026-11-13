@@ -1,3 +1,4 @@
+import { stopDevServerListener } from "./dev-server-process";
 /**
  * cdp-core.ts — the shared Chrome DevTools Protocol transport for BottleShip
  * tooling. Until now ~35 `cdp-*.ts` scripts each copy-pasted the same
@@ -285,7 +286,6 @@ export class CdpSession {
     private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void }>();
     private listeners = new Map<string, Array<(params: any, sessionId?: string) => void>>();
     private crashed: string | null = null;
-    private crashWaiters: Array<(reason: string) => void> = [];
     private recoveryIds = new Set<number>();
 
     private constructor(ws: WebSocket) {
@@ -320,18 +320,10 @@ export class CdpSession {
             this.pending.delete(id);
             p.reject(new Error(reason));
         }
-        const waiters = this.crashWaiters.splice(0);
-        for (const w of waiters) w(reason);
     }
 
     /** Non-null once the renderer has crashed. */
     crashReason(): string | null { return this.crashed; }
-
-    /** Resolves when the renderer crashes; never resolves otherwise (race it). */
-    whenCrashed(): Promise<string> {
-        if (this.crashed) return Promise.resolve(this.crashed);
-        return new Promise((resolve) => { this.crashWaiters.push(resolve); });
-    }
 
     /** Acquisition-only ownership. Defaults remain unbounded for legacy callers.
      * A timeout/abort retires the raw socket even before its WebSocket handshake
@@ -387,7 +379,7 @@ export class CdpSession {
         // Inspector.targetCrashed only fires on an ENABLED domain, and arming it here is what
         // makes crash detection unconditional for every caller. Meaningless on the browser
         // endpoint (captureTrace), hence the catch.
-        await session.send("Inspector.enable", {}, undefined, { timeoutMs: 5_000 }).catch(() => { /* not a page session */ });
+        void session.send("Inspector.enable", {}, undefined, { timeoutMs: 5_000 }).catch(() => { /* not a page session */ });
         return session;
     }
 
@@ -412,6 +404,7 @@ export class CdpSession {
             if (!ms) return;
             const timer = setTimeout(() => {
                 if (!this.pending.delete(id)) return;
+                this.recoveryIds.delete(id);
                 reject(new Error(`CDP ${method} did not answer within ${ms}ms`));
             }, ms);
             const entry = this.pending.get(id)!;
@@ -434,6 +427,9 @@ export class CdpSession {
     }
 
     close(): void {
+        for (const p of this.pending.values()) p.reject(new Error("CDP session closed"));
+        this.pending.clear();
+        this.recoveryIds.clear();
         try { this.ws.close(); } catch { /* */ }
     }
 }
@@ -567,32 +563,16 @@ export async function connect(opts: { port?: number; urlMatch?: string } = {}): 
 /** Evaluate an expression in the PAGE context; returns the deserialized value. */
 export async function pageEval(session: CdpSession, expr: string, opts: { timeoutMs?: number; awaitPromise?: boolean; returnByValue?: boolean; userGesture?: boolean } = {}): Promise<any> {
     const timeoutMs = opts.timeoutMs ?? 30_000;
-    // The request owns its deadline and clears it on every reply (a losing sleep in
-    // Promise.race kept successful CLI processes alive for the whole step budget); a crashed
-    // renderer is raced in so the reason surfaces at once instead of after the deadline.
-    let r: any;
-    try {
-        r = await Promise.race([
-            session.send("Runtime.evaluate", {
-                expression: expr,
-                awaitPromise: opts.awaitPromise ?? true,
-                returnByValue: opts.returnByValue ?? true,
-                // Gesture-gated APIs (requestPointerLock, requestFullscreen, AudioContext.resume)
-                // reject without user activation, which no harness verb can otherwise grant.
-                userGesture: opts.userGesture ?? false,
-            }, undefined, { timeoutMs }),
-            session.whenCrashed().then((reason) => ({ __crashed: reason } as any)),
-        ]);
-    } catch (e) {
-        if (/did not answer within/.test(String((e as Error)?.message))) {
-            throw new Error(
-                `pageEval timed out after ${timeoutMs}ms`
-                + (session.crashReason() ? ` — ${session.crashReason()}` : ""),
-            );
-        }
-        throw e;
-    }
-    if ((r as any).__crashed) throw new Error((r as any).__crashed);
+    // The request owns its deadline and clears it on every reply. A losing sleep
+    // in Promise.race kept successful CLI processes alive for the whole step budget.
+    const r = await session.send("Runtime.evaluate", {
+        expression: expr,
+        awaitPromise: opts.awaitPromise ?? true,
+        returnByValue: opts.returnByValue ?? true,
+        // Gesture-gated APIs (requestPointerLock, requestFullscreen, AudioContext.resume)
+        // reject without user activation, which no harness verb can otherwise grant.
+        userGesture: opts.userGesture ?? false,
+    }, undefined, { timeoutMs });
     const res = (r as any).result;
     if (res?.exceptionDetails) {
         throw new Error(`page eval exception: ${res.exceptionDetails.text} ${res.exceptionDetails.exception?.description ?? ""}`);
@@ -996,17 +976,7 @@ function spawnVite(): void {
 }
 
 function killWedgedVite(): void {
-    // By PID via the listening socket — matching 'vite' on the command line kills every
-    // Vite on the machine, including other agents' and other checkouts'.
-    const port = new URL(DEFAULT_DEV_URL).port || "5174";
-    if (!IS_WIN) {
-        const pids = Bun.spawnSync(["lsof", "-ti", `tcp:${port}`, "-sTCP:LISTEN"]).stdout.toString().split(/\s+/).filter(Boolean);
-        if (pids.length > 0) Bun.spawnSync(["kill", ...pids]);
-        return;
-    }
-    Bun.spawnSync(["powershell", "-NoProfile", "-Command",
-        `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | ` +
-        `ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }`]);
+    stopDevServerListener(DEFAULT_DEV_URL);
 }
 
 /**

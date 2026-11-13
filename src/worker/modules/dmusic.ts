@@ -1207,19 +1207,23 @@ export class DMusic implements IModule {
         return path;
     }
 
-    /** A new IDirectSound8 from the dsound module, at DSSCL_PRIORITY for `hWnd`; 0 when there is none. */
+    /** A new IDirectSound8 from the dsound module, at 2 for `hWnd`; 0 when there is none. */
     private createDirectSound(hWnd: number): number {
         const exports = this.process.getModule("dsound")?.exports;
         const create = exports?.["directsoundcreate8"];
         const mem = Mem.getView();
         if (!create || !mem) return 0;
         const scratch = this.process.memory.alloc(4, "HEAP", "rw");
+        if (!scratch) return 0;
         try {
             Mem.writeUint32(scratch, 0);
-            const ctx = {} as Parameters<ThunkImplementation>[0];
+            const ctx = NO_CONTEXT;
             if ((create(ctx, mem, [0, scratch, 0]) as number) !== S_OK) return 0;
             const ds = Mem.readUint32(scratch) ?? 0;
-            if (ds) exports["idirectsound8_setcooperativelevel"]?.(ctx, mem, [ds, hWnd, DSSCL_PRIORITY]);
+            if (ds && exports["idirectsound8_setcooperativelevel"]?.(ctx, mem, [ds, hWnd, 2]) !== S_OK) {
+                soundReference(this.process, ds, false, false);
+                return 0;
+            }
             return ds;
         } finally {
             this.process.memory.free(scratch);
@@ -1337,9 +1341,8 @@ export class DMusic implements IModule {
         // InitAudio(ppDirectMusic, ppDirectSound, hWnd, dwDefaultPathType, dwPChannelCount, dwFlags, pParams)
         e["IDirectMusicPerformance8_InitAudio"] = (_c, _m, a) => {
             const ppDirectSound = a[2]! >>> 0;
+            if (!perfOf(a) || (ppDirectSound && !validPointer(ppDirectSound, 4, "rw"))) return E_POINTER;
             let directSound = ppDirectSound ? (Mem.readUint32(ppDirectSound) ?? 0) : 0;
-            // A NULL *ppDirectSound asks InitAudio to create the DirectSound object and hand it
-            // back: the caller owns that reference, and goes on to use it (GetCaps, buffers).
             if (ppDirectSound && !directSound) {
                 directSound = this.createDirectSound(a[3]! >>> 0);
                 if (!directSound) return E_FAIL;
@@ -1990,8 +1993,7 @@ export class DMusic implements IModule {
             const volume = a[1]! | 0;
             if (volume > 0 || volume < -9600) return E_INVALIDARG;
             path.volume = volume;
-            if (this.ensurePathBuffer(path)) return this.callBuffer(path.buffer, "IDirectSoundBuffer8_SetVolume", [volume]);
-            return S_OK;
+            return path.buffer ? this.callBuffer(path.buffer, "idirectsoundbuffer8_setvolume", [volume]) : S_OK;
         };
         e["IDirectMusicAudioPath_ConvertPChannel"] = (_c, _m, a) => { Mem.writeUint32(a[2]! >>> 0, a[1]! >>> 0); return S_OK; };
     }
@@ -2339,6 +2341,7 @@ export class DMusic implements IModule {
         const buffer = createSinkBuffer(this.process, path.performance?.directMusic?.directSound ?? 0, channels, DMusic.PATH_RATE, flags);
         if (!buffer) return false;
         path.buffer = buffer;
+        this.callBuffer(buffer, "idirectsoundbuffer8_setvolume", [path.volume]);
         path.channels = channels;
         this.wirePath(path);
         return true;

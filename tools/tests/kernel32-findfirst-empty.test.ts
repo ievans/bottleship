@@ -1,8 +1,13 @@
 /** An empty FindFirstFile spec names nothing to search: INVALID_HANDLE_VALUE + ERROR_PATH_NOT_FOUND. */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import { System } from "../../src/worker/core/system";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { exports as fileIo } from "../../src/worker/modules/kernel32/file-io";
+
+const memState = ["memoryGetter", "validateRange", "getRegion", "dataRoutes"].map(
+    key => [key, Object.getOwnPropertyDescriptor(Mem, key)] as const,
+);
+afterAll(() => { for (const [key, descriptor] of memState) if (descriptor) Object.defineProperty(Mem, key, descriptor); });
 
 const ERROR_PATH_NOT_FOUND = 3;
 

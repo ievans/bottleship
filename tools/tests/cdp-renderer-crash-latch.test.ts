@@ -59,16 +59,23 @@ test("Page.reload still reaches the browser after a crash, and lifts the latch",
     }
 });
 
-test("whenCrashed resolves only on a crash", async () => {
-    const cdp = fakeCdp();
+test("successful evaluations leave no crash waiters or pending commands", async () => {
+    const cdp = fakeCdp({ answer: () => ({ result: { value: 1 } }) });
     const session = await CdpSession.connect(cdp.url);
     try {
-        const quiet = await Promise.race([session.whenCrashed(), Bun.sleep(100).then(() => "quiet")]);
-        expect(quiet).toBe("quiet");
-        cdp.crash();
-        expect(await session.whenCrashed()).toBe(RENDERER_CRASH_HINT);
-    } finally {
-        session.close();
-        cdp.stop();
-    }
+        for (let i = 0; i < 100; i++) await session.send("Runtime.evaluate", { expression: "1" });
+        expect((session as any).pending.size).toBe(0);
+        expect((session as any).recoveryIds.size).toBe(0);
+        expect((session as any).crashWaiters).toBeUndefined();
+    } finally { session.close(); cdp.stop(); }
+});
+
+test("closing a session rejects outstanding commands and retires their timers", async () => {
+    const cdp = fakeCdp();
+    const session = await CdpSession.connect(cdp.url);
+    const pending = session.send("Runtime.evaluate", {}, undefined, { timeoutMs: 600_000 });
+    session.close();
+    await expect(pending).rejects.toThrow("CDP session closed");
+    expect((session as any).pending.size).toBe(0);
+    cdp.stop();
 });

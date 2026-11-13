@@ -78,12 +78,13 @@ describe("filterExtractableFiles with __support\\save", () => {
         ({ destination, location, externalSize: 0n, options: 0, additionalLocations: [], galaxyChecksumType: "none" }) as never;
     const data = Array.from({ length: 3 }, () => ({ options: 0, zlibFilter: false }) as never);
 
-    it("installs a save-only file, but a directly shipped entry for the same path wins", () => {
-        const picked = filterExtractableFiles([
+    it.each([false, true])("direct entries win regardless of input order (reverse=%s)", (reverse) => {
+        const entries = [
             file("{app}\\__support\\save\\Conquests\\conquests.biq", 0),
             file("{app}\\__support\\save\\Conquests\\LSANS.TTF", 1),
             file("{app}\\Conquests\\LSANS.TTF", 2),
-        ], data);
+        ];
+        const picked = filterExtractableFiles(reverse ? entries.reverse() : entries, data);
         const byPath = new Map(picked.map((s) => [s.relPath, s.file.location]));
         expect(byPath.get("Conquests/conquests.biq")).toBe(0);
         expect(byPath.get("Conquests/LSANS.TTF")).toBe(2);

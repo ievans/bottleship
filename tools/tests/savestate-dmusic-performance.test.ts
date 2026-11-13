@@ -622,7 +622,7 @@ describe("dmusic saved fields of the playing objects", () => {
             expect(restoredOf(back, PerformanceObject).directMusic).toBeNull();
         });
         edit((s) => { of<SavedPerformance>(s, "dmusic-performance").engine!.now += 1; });
-        for (const key of ["pathType", "buffer", "channels"] as const) edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath")[key] += 1; });
+        for (const key of ["pathType", "buffer", "channels", "volume"] as const) edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath")[key] += 1; });
         edit((s) => { of<SavedAudioPath>(s, "dmusic-audiopath").performance = -1; });
         edit((s) => { of<SavedSegmentState>(s, "dmusic-segment-state").state!.grooveLevel += 1; });
         edit((s) => { of<SavedSegmentState>(s, "dmusic-segment-state", 3).performance = -1; });
