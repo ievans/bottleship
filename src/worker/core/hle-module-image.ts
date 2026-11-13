@@ -94,12 +94,10 @@ function planOrdinals(exports: ReadonlyArray<{ ordinal?: number }>): OrdinalPlan
         const assigned = exports.map((_, i) => i + 1);
         return { base: 1, numberOfFunctions: exports.length, slotToExportIndex: exports.map((_, i) => i), assigned };
     }
-    const used = new Set<number>();
     for (const ordinal of declared) {
-        if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 0xffff || used.has(ordinal)) {
-            throw new Error(`Invalid or duplicate export ordinal: ${ordinal}`);
+        if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > 0xffff) {
+            throw new Error(`Invalid export ordinal: ${ordinal}`);
         }
-        used.add(ordinal);
     }
     const base = Math.min(...declared);
     let nextFree = Math.max(...declared) + 1;
@@ -107,7 +105,10 @@ function planOrdinals(exports: ReadonlyArray<{ ordinal?: number }>): OrdinalPlan
     if (nextFree > 0x10000) throw new Error("Synthesized export ordinal exceeds 65535");
     const numberOfFunctions = Math.max(...assigned) - base + 1;
     const slotToExportIndex = new Array(numberOfFunctions).fill(-1);
-    exports.forEach((e, i) => { slotToExportIndex[assigned[i] - base] = i; });
+    exports.forEach((_e, i) => {
+        const slot = assigned[i] - base;
+        if (slotToExportIndex[slot] === -1) slotToExportIndex[slot] = i;
+    });
     return { base, numberOfFunctions, slotToExportIndex, assigned };
 }
 
@@ -250,7 +251,9 @@ export function buildHleModuleImage(
         // EAT's RVA slot (below) depends on it.
         const rva = TEXT_RVA + i * STUB_SIZE;
         bytes.set(exports[i].code.subarray(0, STUB_SIZE), rva);
-        exportAddresses.set(exports[i].name, (base + rva) >>> 0);
+        // Several names may alias one declared ordinal; the EAT and every name must agree.
+        const target = ordinalPlan.slotToExportIndex[eatIndexOf(i)];
+        exportAddresses.set(exports[i].name, (base + TEXT_RVA + target * STUB_SIZE) >>> 0);
     }
     for (let slot = 0; slot < ordinalPlan.numberOfFunctions; slot++) {
         const exportIndex = ordinalPlan.slotToExportIndex[slot];

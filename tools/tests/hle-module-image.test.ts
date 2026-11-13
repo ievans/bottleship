@@ -217,9 +217,18 @@ describe("HLE image arena layout", () => {
     });
 });
 
-for (const ordinals of [[0], [-1], [1.5], [65536], [1, 1], [65535, undefined]]) {
+for (const ordinals of [[0], [-1], [1.5], [65536], [65535, undefined]]) {
     test(`invalid ordinal layout ${ordinals} fails before writing an image`, () => {
         const exports = ordinals.map((ordinal, i) => ({ name: `f${i}`, code: stub(i), ordinal }));
         expect(() => buildHleModuleImage("fixture", BASE, HLE_IMAGE_SLOT_SIZE, exports)).toThrow();
     });
 }
+
+test("two export names can alias the same declared ordinal", () => {
+    const image = buildHleModuleImage("fixture", BASE, HLE_IMAGE_SLOT_SIZE, [
+        { name: "Canonical", code: stub(1), ordinal: 17 },
+        { name: "ord_17", code: stub(2), ordinal: 17 },
+    ]);
+    expect(image.exportAddresses.get("Canonical")).toBe(image.ordinalAddresses.get(17));
+    expect(image.exportAddresses.get("ord_17")).toBe(image.ordinalAddresses.get(17));
+});
