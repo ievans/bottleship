@@ -33,5 +33,18 @@ jobs:
       - name: Install offline WGSL validator
         if: steps.naga-cache.outputs.cache-hit != 'true'
         run: cargo install naga-cli --locked --version 30.0.1
+      - name: Locate native LAN compiler
+        shell: pwsh
+        run: |
+          $compiler = (Get-Command gcc -ErrorAction SilentlyContinue).Source
+          if (-not $compiler) {
+            foreach ($candidate in @('C:/mingw64/bin/gcc.exe', 'C:/msys64/ucrt64/bin/gcc.exe', 'C:/msys64/mingw64/bin/gcc.exe')) {
+              if (Test-Path $candidate) { $compiler = $candidate; break }
+            }
+          }
+          if (-not $compiler) { throw 'The Windows gate needs a native GCC toolchain' }
+          "BS_LAN_CC=$compiler" >> $env:GITHUB_ENV
+          (Split-Path $compiler) >> $env:GITHUB_PATH
+          & $compiler --version
       - name: Normal quality gate
         run: bun run gate
