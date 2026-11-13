@@ -1929,10 +1929,8 @@ export class DMusic implements IModule {
         e["IDirectMusicAudioPath_SetVolume"] = (_c, _m, a) => {
             const path = this.object<AudioPathObject>(a[0]!);
             if (!path) return E_POINTER;
-            const volume = a[1]! | 0;
-            if (volume > 0 || volume < -9600) return E_INVALIDARG;
-            path.volume = volume;
-            return path.buffer ? this.callBuffer(path.buffer, "idirectsoundbuffer8_setvolume", [volume]) : S_OK;
+            if (path.buffer) this.callBuffer(path.buffer, "idirectsoundbuffer8_setvolume", [a[1]! | 0]);
+            return S_OK;
         };
         e["IDirectMusicAudioPath_ConvertPChannel"] = (_c, _m, a) => { Mem.writeUint32(a[2]! >>> 0, a[1]! >>> 0); return S_OK; };
     }
@@ -2233,7 +2231,6 @@ export class DMusic implements IModule {
         const buffer = createSinkBuffer(this.process, path.performance?.directMusic?.directSound ?? 0, channels, DMusic.PATH_RATE, flags);
         if (!buffer) return false;
         path.buffer = buffer;
-        this.callBuffer(buffer, "idirectsoundbuffer8_setvolume", [path.volume]);
         path.channels = channels;
         this.wirePath(path);
         return true;

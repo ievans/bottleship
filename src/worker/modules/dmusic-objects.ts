@@ -176,7 +176,6 @@ export class AudioPathObject extends DMusicObject {
     readonly interfaces = { [IID_IDirectMusicAudioPath]: "IDirectMusicAudioPath" };
     performance: PerformanceObject | null = null;
     pathType = 0;
-    volume = 0;
     buffer = 0;
     sink: DirectSoundSink | null = null;
     channels = 2;
