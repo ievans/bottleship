@@ -185,6 +185,10 @@ export class AudioPathObject extends DMusicObject {
     graph: GraphObject | null = null;
     /** SetVolume's level, hundredths of a decibel. */
     volume = 0;
+    volumeFrom = 0;
+    volumeTarget = 0;
+    volumeStarted = 0;
+    volumeDuration = 0;
     sink: DirectSoundSink | null = null;
 }
 

@@ -1,10 +1,6 @@
-/**
- * Every import of a DLL needs a known argument count, or its stub cannot be generated and the
- * whole DLL fails to load. These are the ones Rise of Nations' unicows.dll (the Microsoft Layer
- * for Unicode) imports that had none, each of which made it fail to load on every boot.
- */
-
 import { expect, test } from "bun:test";
+import { avicap32Module } from "../../src/worker/api/avicap32.api";
+import { unimplementedReturnValue } from "../../src/worker/core/thunking/unimplemented-return";
 import { APIRegistry } from "../../src/worker/core/api-registry";
 
 const registry = APIRegistry.getInstance();
@@ -26,3 +22,7 @@ for (const [name, args] of [
         expect(registry.getStackCleanupBytes("avicap32", name)).toBe(args * 4);
     });
 }
+
+test("unsupported capture exports report failure", () => {
+    for (const fn of avicap32Module.functions) expect(unimplementedReturnValue(fn.onUnimplemented!)).toBe(0);
+});

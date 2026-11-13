@@ -21,9 +21,7 @@ export const oledlgModule: ModuleDescriptor = {
         callingConvention: "stdcall",
         description: "Add an IOleObject verb menu to an HMENU",
     },
-    // `int OleUIPromptUser(int nTemplate, HWND hwndParent, ...)` is variadic, so __cdecl: the
-    // Wine .spec gives it no stack size and the reference has no count for it. Without one, the
-    // stub fails to generate and every DLL importing it fails to load (unicows.dll among them).
+    // Variadic exports use cdecl: the caller owns stack cleanup.
     ...(["OleUIPromptUserA", "OleUIPromptUserW"] as const).map((name) => ({
         name,
         params: [

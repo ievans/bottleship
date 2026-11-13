@@ -16,6 +16,7 @@ import {
     PORT_FIELDS, SEGMENT_STATE_FIELDS, SINK_FIELDS, SYNTH_CHANNEL_FIELDS, SYNTH_FIELDS, SYNTH_VOICE_FIELDS, type SavedAudioPath,
     type SavedModule, type SavedPerformance, type SavedPort, type SavedSegmentState,
 } from "../../src/worker/modules/dmusic-savestate";
+import { TimeService } from "../../src/worker/runtime/time";
 import { DirectSoundSink } from "../../src/worker/modules/dmusic-sink";
 import { guidBytes } from "../../src/worker/modules/dpnet/constants";
 import { DMUS_IO_INST_PATCH } from "../../packages/formats/src/dmusic/band";
@@ -376,7 +377,7 @@ const restoredOf = <T extends DMusicObject>(back: { roots: DMusicObject[] }, typ
 describe("dmusic without music", () => {
     test("nothing created saves and restores an empty module", () => {
         const snap = capture();
-        expect(snap.section).toEqual({ performances: [], ports: [], pathOutputs: [], messages: [], pumpTimer: -1 });
+        expect(snap.section).toEqual({ performances: [], ports: [], pathOutputs: [], volumeFades: [], messages: [], pumpTimer: -1 });
         const back = restore(snap);
         expect(again(back)).toBe(first(snap));
         expect(back.module.savestateRefusal()).toBeNull();
@@ -665,7 +666,7 @@ describe("dmusic saved fields of the playing objects", () => {
             .toEqual(keys(SYNTH_VOICE_FIELDS).filter(k => k !== "channel" && k !== "region"));
         expect(Object.keys(port.sink!).sort()).toEqual(keys(SINK_FIELDS));
         expect(Object.keys(of<SavedPort>(capture(), "dmusic-port")).sort()).toEqual(DMUSIC_SCHEMA.savedPort);
-        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 7, schemaHash: "198a6e25d668843b" });
+        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 8, schemaHash: "ed2804da327df9d8" });
     });
 });
 
@@ -827,4 +828,29 @@ describe("dmusic object lifetimes", () => {
         const channel = of<SavedPort>(capture(ours().filter(o => o !== s.kit)), "dmusic-port").synth.channels.find(ch => ch.id === 7)!;
         expect(channel.collection).toBe(-1);
     });
+});
+
+test("an in-progress audio-path fade resumes through capture and restore", () => {
+    const clock = TimeService.getInstance(), readNow = clock.nowMs;
+    let now = 0;
+    clock.nowMs = () => now;
+    try {
+        const s = scene();
+        const volumes: number[] = [];
+        sound.exports.idirectsoundbuffer8_setvolume = (_c, _m, a) => { volumes.push(a[1]!); return 0; };
+        expect(call("IDirectMusicAudioPath_SetVolume", [ptrOf(s.path), -1000, 100])).toBe(0);
+        now = 50; internals.pump();
+        expect(s.path.volume).toBe(-500);
+        const snap = capture();
+        expect(snap.section.volumeFades).toHaveLength(1);
+        const back = restore(snap);
+        const path = restoredAt!.get(ptrOf(s.path)) as AudioPathObject;
+        expect(again(back)).toBe(first(snap));
+        expect(path.volume).toBe(-500);
+        expect((back.module as unknown as Internals).volumeFades.has(path)).toBe(true);
+        now = 100; (back.module as unknown as Internals).pump();
+        expect(path.volume).toBe(-1000);
+        expect(volumes.at(-1)).toBe(-1000);
+        expect((back.module as unknown as Internals).volumeFades.size).toBe(0);
+    } finally { clock.nowMs = readNow; }
 });

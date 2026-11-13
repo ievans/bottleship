@@ -268,7 +268,7 @@ describe("DirectMusic streams and COM lifetimes", () => {
         expect(call("IDirectMusicGraph_GetTool", [graph, 0, 0x6a4]) >>> 0).toBe(0x88781161); // DMUS_E_NOT_FOUND
     });
 
-    test("LoadObjectFromFile loads a WAVE file as a wave segment, looking under the search directory first", () => {
+    test("LoadObjectFromFile searches the current directory before its configured directory", () => {
         const wave = new Uint8Array(48), v = new DataView(wave.buffer);
         wave.set(new TextEncoder().encode("RIFF"), 0); v.setUint32(4, 40, true);
         wave.set(new TextEncoder().encode("WAVEfmt "), 8); v.setUint32(16, 16, true);
@@ -276,18 +276,20 @@ describe("DirectMusic streams and COM lifetimes", () => {
         v.setUint32(28, 44100, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
         wave.set(new TextEncoder().encode("data"), 36); v.setUint32(40, 4, true);
         const tried: string[][] = [];
-        internals.readSystemFile = (paths: string[]) => { tried.push(paths); return wave; };
+        internals.readSystemFile = (paths: string[]) => { tried.push(paths); return paths[0]!.toLowerCase().includes("\\sounds\\") || paths[0] === "C:\\x.wav" ? wave : null; };
         const wide = (at: number, text: string) => { for (let i = 0; i <= text.length; i++) Mem.writeUint16(at + i * 2, i < text.length ? text.charCodeAt(i) : 0); return at; };
         const {ptr: loader} = make<DMusicObject>(CLSID_DirectMusicLoader);
         expect(call("IDirectMusicLoader8_SetSearchDirectory", [loader, 0x700, wide(0x800, ".\\sounds\\"), 0])).toBe(0);
+        const clsid = CLSID_DirectMusicSegment.replace(/-/g, "").match(/../g)!.map(x => parseInt(x, 16));
+        Mem.writeBytes(0x700, new Uint8Array([clsid[3]!, clsid[2]!, clsid[1]!, clsid[0]!, clsid[5]!, clsid[4]!, clsid[7]!, clsid[6]!, ...clsid.slice(8)]));
         Mem.writeBytes(0x900, new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46])); // IID_IUnknown
         expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "tracks\\Hearth.wav"), 0x6b0])).toBe(0);
-        expect(tried).toEqual([[".\\sounds\\tracks\\Hearth.wav"]]);
+        expect(tried).toEqual([[system.fileSystem.resolvePath("tracks\\Hearth.wav")], [system.fileSystem.resolvePath(".\\sounds\\tracks\\Hearth.wav")]]);
         const seg = rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as SegmentObject;
         objects.push(seg);
         expect(seg.segment?.wave?.frames).toBe(2);
         expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "C:\\x.wav"), 0x6b0])).toBe(0);
-        expect(tried[1]).toEqual(["C:\\x.wav"]);
+        expect(tried[2]).toEqual(["C:\\x.wav"]);
         objects.push(rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as DMusicObject);
     });
 

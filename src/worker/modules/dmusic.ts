@@ -116,12 +116,6 @@ const DESC = {
     memLength: 0x340, memData: 0x348,
 } as const;
 
-/** Where a loader looks for `file`: under its search directory first, unless the path is absolute. */
-function searchPaths(directory: string, file: string): string[] {
-    if (/^([a-z]:)?[\\/]/i.test(file) || !directory) return [file];
-    return [directory.replace(/[\\/]*$/, "\\") + file, file];
-}
-
 const WAVE_CACHE_ENTRIES = 64;
 const DMUS_APATH_DYNAMIC_3D = 6;
 const DMUS_APATH_DYNAMIC_MONO = 7;
@@ -221,6 +215,7 @@ export class DMusic implements IModule {
     private process!: Process;
     private readonly ports = new Set<PortObject>();
     private readonly pathOutputs = new Set<AudioPathObject>();
+    private readonly volumeFades = new Set<AudioPathObject>();
     private readonly performances = new Set<PerformanceObject>();
     private readonly loading = new Set<LoadableObject>();
     private pumpTimer: number | null = null;
@@ -276,6 +271,7 @@ export class DMusic implements IModule {
         this.performances.clear();
         this.loading.clear();
         this.messages.clear();
+        this.volumeFades.clear();
     }
 
     recreateVTables(): void {
@@ -820,11 +816,11 @@ export class DMusic implements IModule {
             newSink: (buffer, channels, sampleRate) => new DirectSoundSink(this.process, buffer, channels, sampleRate ?? DMusic.PATH_RATE),
             newEngine: (perf, port) => this.newEngine(perf, port),
             moduleState: () => ({
-                performances: [...this.performances], ports: [...this.ports], pathOutputs: [...this.pathOutputs],
+                performances: [...this.performances], ports: [...this.ports], pathOutputs: [...this.pathOutputs], volumeFades: [...this.volumeFades],
                 messages: [...this.messages], pumpTimer: this.pumpTimer,
             }),
             restoreModuleState: (state) => {
-                for (const [set, list] of [[this.performances, state.performances], [this.ports, state.ports], [this.pathOutputs, state.pathOutputs]] as const) {
+                for (const [set, list] of [[this.performances, state.performances], [this.ports, state.ports], [this.pathOutputs, state.pathOutputs], [this.volumeFades, state.volumeFades]] as const) {
                     (set as Set<DMusicObject>).clear();
                     for (const obj of list) (set as Set<DMusicObject>).add(obj);
                 }
@@ -1079,21 +1075,41 @@ export class DMusic implements IModule {
         //                            WCHAR *pwzFilePath, void **ppObject)
         // A WAVE file loads as a wave segment; other file types are not read from disk here.
         e["IDirectMusicLoader8_LoadObjectFromFile"] = (_c, _m, a) => {
-            const loader = this.object<LoaderObject>(a[0]);
-            const ppObject = a[4] >>> 0;
-            if (!loader || !ppObject || !a[3]) return E_POINTER;
+            const ppObject = a[4]! >>> 0;
+            if (!validPointer(ppObject, 4, "w")) return E_POINTER;
             Mem.writeUint32(ppObject, 0);
-            const file = readWide(a[3] >>> 0, DESC_FILENAME_CHARS);
-            for (const path of searchPaths(loader.searchDirectory, file)) {
-                const cached = loader.cache.get(path.toLowerCase());
-                if (cached) return this.queryInterface(cached, guidAt(a[2]! >>> 0), ppObject);
+            const loader = this.object<LoaderObject>(a[0]);
+            if (!(loader instanceof LoaderObject) || !validPointer(a[1]! >>> 0, 16, "r")
+                || !validPointer(a[2]! >>> 0, 16, "r") || !validPointer(a[3]! >>> 0, 2, "r")) return E_POINTER;
+            const classId = guidAt(a[1]! >>> 0), iid = guidAt(a[2]! >>> 0);
+            if (classId !== CLSID_DirectMusicSegment) return 0x80040154 | 0; // REGDB_E_CLASSNOTREG
+            const file = readWide(a[3]! >>> 0, DESC_FILENAME_CHARS);
+            if (!validPointer(a[3]! >>> 0, (file.length + 1) * 2, "r")) return E_POINTER;
+            if (!file || Mem.readUint16((a[3]! >>> 0) + file.length * 2) !== 0) return E_INVALIDARG;
+            const vfs = System.getInstance().fileSystem;
+            const candidates = [file];
+            if (!/^(?:[a-z]:|[\\/])/i.test(file)) {
+                // LoadObjectFromFile searches cwd, PATH, then the loader's directory.
+                const envPath = [...(this.process.environment ?? [])].find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
+                for (const dir of [...envPath.split(";"), loader.searchDirectory]) {
+                    if (dir) candidates.push(dir.replace(/[\\/]+$/, "") + "\\" + file);
+                }
+            }
+            const seen = new Set<string>();
+            for (const candidate of candidates) {
+                const path = vfs.resolvePath(candidate), key = path.toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                const cached = loader.cache.get(key);
+                if (cached?.classId === classId) return this.queryInterface(cached, iid, ppObject);
                 const bytes = this.readSystemFile([path]);
                 if (!bytes) continue;
-                const object = this.objectFromFile(loader, bytes, file, path);
-                if (!object) continue;
-                const hr = this.queryInterface(object, guidAt(a[2]! >>> 0), ppObject);
-                if (hr === S_OK && this.loaderCaches(loader, object.classId)) loader.cache.set(path.toLowerCase(), object);
-                else object.release();
+                if (!isRiffWave(bytes)) return DMUS_E_LOADER_FORMATNOTSUPPORTED;
+                const obj = this.objectFromFile(loader, bytes, file, path);
+                if (!obj) return DMUS_E_LOADER_FORMATNOTSUPPORTED;
+                const hr = this.queryInterface(obj, iid, ppObject);
+                if (hr === S_OK && this.loaderCaches(loader, classId)) loader.cache.set(key, obj);
+                else obj.release();
                 return hr;
             }
             return DMUS_E_LOADER_FAILEDOPEN;
@@ -1996,15 +2012,26 @@ export class DMusic implements IModule {
 
         };
         e["IDirectMusicAudioPath_Activate"] = () => S_OK;
-        // HRESULT SetVolume(long lVolume, DWORD dwDuration): the path's mix gain. The fade
-        // duration is not followed; the change is ramped over the next few milliseconds.
         e["IDirectMusicAudioPath_SetVolume"] = (_c, _m, a) => {
             const path = this.object<AudioPathObject>(a[0]!);
-            if (!path) return E_POINTER;
-            const volume = a[1]! | 0;
-            if (volume > 0 || volume < -9600) return E_INVALIDARG;
+            if (!(path instanceof AudioPathObject)) return E_POINTER;
+            const target = a[1]! | 0, duration = a[2]! >>> 0;
+            if (target < -9600 || target > 0) return E_INVALIDARG;
+            if (!path.performance?.engine) return DMUS_E_NOT_INIT;
+            if (!this.dynamicPath(path)) return E_NOTIMPL;
+            const now = TimeService.getInstance().nowMs(), current = this.pathVolumeAt(path, now);
+            const volume = duration ? current : target;
+            if (path.buffer) {
+                const hr = this.callBuffer(path.buffer, "idirectsoundbuffer8_setvolume", [volume]);
+                if (hr < 0) return hr;
+            }
             path.volume = volume;
-            if (this.ensurePathBuffer(path)) return this.callBuffer(path.buffer, "IDirectSoundBuffer8_SetVolume", [volume]);
+            path.volumeFrom = current;
+            path.volumeTarget = target;
+            path.volumeStarted = now;
+            path.volumeDuration = duration;
+            if (duration) { this.volumeFades.add(path); this.startPump(); }
+            else { this.volumeFades.delete(path); this.stopIdlePump(); }
             return S_OK;
         };
         e["IDirectMusicAudioPath_ConvertPChannel"] = (_c, _m, a) => { Mem.writeUint32(a[2]! >>> 0, a[1]! >>> 0); return S_OK; };
@@ -2292,7 +2319,7 @@ export class DMusic implements IModule {
             port.active = false;
             port.sink?.stop();
             port.synth.silence();
-            if (![...this.ports].some((p) => p.active) && this.pathOutputs.size === 0) this.stopPump();
+            this.stopIdlePump();
             return true;
         }
         if (!port.sink) {
@@ -2330,6 +2357,8 @@ export class DMusic implements IModule {
     private pump(): void {
         const system = System.getInstance();
         if (!system.process || system.isExiting) return;
+        const now = TimeService.getInstance().nowMs();
+        for (const path of this.volumeFades) this.updatePathVolume(path, now);
         for (const port of this.ports) {
             if (!port.active || !port.sink) continue;
             port.sink.pump((pcm, frames) => this.render(port, pcm, frames));
@@ -2340,6 +2369,42 @@ export class DMusic implements IModule {
             if (!sink) continue;
             if (skipIdle && sink.isSilent() && !path.performance?.engine?.hasWaveOn(path)) continue;
             sink.pump((pcm, frames) => this.renderPath(path, pcm, frames));
+        }
+        this.stopIdlePump();
+    }
+
+    private stopIdlePump(): void {
+        if (this.pathOutputs.size || this.volumeFades.size) return;
+        for (const port of this.ports) if (port.active) return;
+        this.stopPump();
+    }
+
+    private dynamicPath(path: AudioPathObject): boolean {
+        return path.pathType === DMUS_APATH_DYNAMIC_3D || path.pathType === DMUS_APATH_DYNAMIC_MONO
+            || path.pathType === DMUS_APATH_DYNAMIC_STEREO;
+    }
+
+    private pathVolumeAt(path: AudioPathObject, now: number): number {
+        if (!path.volumeDuration) return path.volume;
+        const fraction = Math.max(0, Math.min(1, (now - path.volumeStarted) / path.volumeDuration));
+        return Math.round(path.volumeFrom + (path.volumeTarget - path.volumeFrom) * fraction);
+    }
+
+    private updatePathVolume(path: AudioPathObject, now: number): void {
+        const volume = this.pathVolumeAt(path, now);
+        if (path.buffer && volume !== path.volume) {
+            const hr = this.callBuffer(path.buffer, "idirectsoundbuffer8_setvolume", [volume]);
+            if (hr < 0) {
+                path.volumeDuration = 0;
+                this.volumeFades.delete(path);
+                Logger.warn(LogCategory.COM, `[DMusic] audio path volume update failed: 0x${(hr >>> 0).toString(16)}`);
+                return;
+            }
+        }
+        path.volume = volume;
+        if (now - path.volumeStarted >= path.volumeDuration) {
+            path.volumeDuration = 0;
+            this.volumeFades.delete(path);
         }
     }
 
@@ -2356,6 +2421,13 @@ export class DMusic implements IModule {
         if (!buffer) return false;
         path.buffer = buffer;
         path.channels = channels;
+        const volume = this.pathVolumeAt(path, TimeService.getInstance().nowMs());
+        if (volume !== 0 && this.callBuffer(buffer, "idirectsoundbuffer8_setvolume", [volume]) < 0) {
+            soundReference(this.process, buffer, true, false);
+            path.buffer = 0;
+            return false;
+        }
+        path.volume = volume;
         this.wirePath(path);
         return true;
     }
@@ -2388,7 +2460,8 @@ export class DMusic implements IModule {
                 this.releaseEndedStates(perf);
             }
             this.pathOutputs.delete(path);
-            if (![...this.ports].some((p) => p.active) && this.pathOutputs.size === 0) this.stopPump();
+            this.volumeFades.delete(path);
+            this.stopIdlePump();
             path.sink?.release();
             path.sink = null;
             if (path.buffer) soundReference(this.process, path.buffer, true, false);

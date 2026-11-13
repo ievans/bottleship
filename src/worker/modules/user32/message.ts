@@ -1721,7 +1721,12 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const uElapse = args[2];
         const lpTimerFunc = args[3];
 
-        const timerId = nIDEvent || nextTimerId++;
+        const threadId = hWnd === 0 ? System.getInstance().scheduler.getCurrentThreadId() : 0;
+        let timerId = nIDEvent;
+        if (!hWnd && timers.get(timerKey(0, timerId))?.threadId !== threadId) timerId = 0;
+        if (!timerId) {
+            do { timerId = nextTimerId++; } while (timers.has(timerKey(hWnd, timerId)));
+        }
         Logger.verbose(LogCategory.USER32,
             `SetTimer(hwnd=0x${hWnd.toString(16)}, id=${timerId}, elapse=${uElapse}ms, func=0x${lpTimerFunc.toString(16)}) ` +
             `- ${lpTimerFunc ? 'callback' : 'message'} mode`
@@ -1735,7 +1740,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
             timerFunc: lpTimerFunc >>> 0,
             intervalMs: Math.max(uElapse, USER_TIMER_MINIMUM),
             pendingTicks: 0,
-            threadId: hWnd === 0 ? System.getInstance().scheduler.getCurrentThreadId() : 0,
+            threadId,
         };
 
         // Win32: SetTimer with an existing (hwnd, id) RESETS that timer — cancel the
@@ -1758,7 +1763,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
         const uIDEvent = args[1];
         const key = timerKey(hWnd, uIDEvent);
         const timerState = timers.get(key);
-        if (timerState) {
+        if (timerState && (hWnd !== 0 || timerState.threadId === System.getInstance().scheduler.getCurrentThreadId())) {
             cancelTimerState(timerState);
             System.getInstance().windowManager.cancelPendingTimer(hWnd, uIDEvent);
             if (timerState.pendingTicks > 0) {

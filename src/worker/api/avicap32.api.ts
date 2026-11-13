@@ -11,11 +11,7 @@ const makeFunc = (name: string, argCount: number): FunctionDescriptor => ({
     onUnimplemented: "zero",
 });
 
-/**
- * Video capture (avicap32.dll). No capture device exists here, so both entry points answer
- * as Windows does with none installed: no window (NULL) and no driver description (FALSE).
- * Declaring them lets DLLs that merely import them load (Rise of Nations' unicows.dll).
- */
+/** Capture is unavailable; creation and driver enumeration report failure. */
 export const avicap32Module: ModuleDescriptor = {
     name: "avicap32",
     description: "Video for Windows capture",
