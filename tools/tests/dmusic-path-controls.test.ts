@@ -106,6 +106,9 @@ test("volume set before playback is applied when the path buffer is first create
     internals.process.getModule = () => ({ exports: {
         directsoundcreate: (_c: unknown, _m: unknown, a: number[]) => { Mem.writeUint32(a[1]!, 0x7000); return 0; },
         idirectsound8_createsoundbuffer: (_c: unknown, _m: unknown, a: number[]) => { Mem.writeUint32(a[2]!, 0x7100); return 0; },
+        idirectsoundbuffer8_getcaps: (_c: unknown, _m: unknown, a: number[]) => { Mem.writeUint32(a[1]! + 8, 4096); return 0; },
+        idirectsoundbuffer8_play: () => 0,
+        idirectsoundbuffer8_stop: () => 0,
         idirectsoundbuffer8_setvolume: (_c: unknown, _m: unknown, a: number[]) => { changes.push(a[1]!); return 0; },
         IDirectSoundBuffer8_QueryInterface: (_c: unknown, _m: unknown, a: number[]) => { Mem.writeUint32(a[2]!, a[0]!); return 0; },
         IDirectSoundBuffer8_Release: () => 0,
@@ -118,6 +121,7 @@ test("volume set before playback is applied when the path buffer is first create
     expect(call("IDirectMusicAudioPath_SetVolume", [path, -600, 0])).toBe(0);
     expect(call("IDirectMusicAudioPath_SetVolume", [path, 1, 0])).not.toBe(0);
     expect(call("IDirectMusicAudioPath_SetVolume", [path, -9601, 0])).not.toBe(0);
+    expect(internals.ensurePathOutput(rp.getComObjectByAddress(path))).toBe(true);
     expect(call("IDirectMusicAudioPath_GetObjectInPath", [path, 0, 0x6000, 0, 0x600, 0, 0x620, 0x640])).toBe(0);
     expect(changes).toEqual([-600]);
     expect(call("IDirectMusicAudioPath_SetVolume", [path, -1200, 0])).toBe(0);
