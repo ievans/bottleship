@@ -1343,11 +1343,22 @@ export class DMusic implements IModule {
             const ppDirectSound = a[2]! >>> 0;
             if (!perfOf(a) || (ppDirectSound && !validPointer(ppDirectSound, 4, "rw"))) return E_POINTER;
             let directSound = ppDirectSound ? (Mem.readUint32(ppDirectSound) ?? 0) : 0;
-            if (ppDirectSound && !directSound) {
+            const created = !!ppDirectSound && !directSound;
+            if (created) {
                 directSound = this.createDirectSound(a[3]! >>> 0);
                 if (!directSound) return E_FAIL;
-                Mem.writeUint32(ppDirectSound, directSound);
             }
+            const finish = (hr: number): number => {
+                if (created) {
+                    if (hr === S_OK) Mem.writeUint32(ppDirectSound, directSound);
+                    else {
+                        const dm = perfOf(a)?.directMusic;
+                        if (dm?.directSound === directSound) this.setDirectSound(dm, 0);
+                        soundReference(this.process, directSound, false, false);
+                    }
+                }
+                return hr;
+            };
             const hr = init(a[0]!, a[1]! >>> 0, directSound);
             const perf = perfOf(a);
             // InitAudio brings its own synthesizer: there is no AddPort to wait for.
@@ -1357,9 +1368,9 @@ export class DMusic implements IModule {
                 this.attachEngine(perf, port);
                 const active = this.activatePort(port, true);
                 port.release();
-                if (!active) { this.detachPort(perf); return E_FAIL; }
+                if (!active) { this.detachPort(perf); return finish(E_FAIL); }
             }
-            return hr;
+            return finish(hr);
         };
 
         // HRESULT AddPort(IDirectMusicPort *pPort) — NULL adds the default port.
@@ -1416,8 +1427,15 @@ export class DMusic implements IModule {
             if (!perf.engine) return DMUS_E_NOT_INIT;
             if (!seg.segment) return E_FAIL;
             const path = pathPtr ? this.object<AudioPathObject>(pathPtr) : null;
-            if (pathPtr && !path) return E_INVALIDARG;
+            if (pathPtr && !(path instanceof AudioPathObject)) return E_INVALIDARG;
             const state = perf.engine.playSegment(seg.segment, flags >>> 0);
+            if (state) {
+                if (!path) {
+                    perf.defaultAudioPath ??= new AudioPathObject();
+                    perf.defaultAudioPath.performance ??= perf;
+                }
+                state.audioPath = path ?? perf.defaultAudioPath;
+            }
             if (state && seg.segment.wave && path instanceof AudioPathObject && this.ensurePathOutput(path)) state.output = path;
             if (state && savestatesEnabled()) this.holdStateSegment(this.stateObject(perf, state), seg);
             return this.publishState(perf, state, seg, ppState);
@@ -1451,15 +1469,13 @@ export class DMusic implements IModule {
             if (!a[1]) {
                 perf.engine?.stop(null, null, flags);
             } else if (target instanceof AudioPathObject) {
-                for (const state of perf.engine?.statesOnOutput(target) ?? []) {
-                    if (state.output === target) perf.engine?.stop(null, state, flags);
+                for (const state of perf.engine?.statesOnAudioPath(target) ?? []) {
+                    perf.engine?.stop(null, state, flags);
                 }
             } else if (target instanceof SegmentObject) {
                 if (target.segment) perf.engine?.stop(target.segment, null, flags);
             } else if (target instanceof SegmentStateObject) {
                 if (target.state) perf.engine?.stop(null, target.state, flags);
-            } else {
-                return E_INVALIDARG;
             }
             this.releaseEndedStates(perf);
             return S_OK;

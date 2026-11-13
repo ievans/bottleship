@@ -198,6 +198,7 @@ describe("DirectMusic streams and COM lifetimes", () => {
     });
 
     test("InitAudio creates the DirectSound object when *ppDirectSound is NULL and returns it", () => {
+        internals.activatePort = () => true;
         const calls: string[] = [];
         let refs = 0;
         const dsound = { exports: {
@@ -210,10 +211,10 @@ describe("DirectMusic streams and COM lifetimes", () => {
         const {ptr} = make<PerformanceObject>(CLSID_DirectMusicPerformance);
         const ppDS = 0x600;
         Mem.writeUint32(ppDS, 0);
-        call("IDirectMusicPerformance8_InitAudio", [ptr, 0, ppDS, 0x10001, 0, 64, 0, 0]);
+        expect(call("IDirectMusicPerformance8_InitAudio", [ptr, 0, ppDS, 0x10001, 0, 64, 0, 0])).toBe(0);
         expect(Mem.readUint32(ppDS)).toBe(0x7000);
         expect(calls).toEqual(["create", "coop 7000 10001 2"]);
-        expect(refs).toBe(2); // the caller's reference, and the performance's own
+        expect(refs).toBe(3); // caller, DirectMusic object, and default port
 
         // A caller-supplied object is used as it is; nothing new is created.
         calls.length = 0;
@@ -301,8 +302,8 @@ describe("DirectMusic streams and COM lifetimes", () => {
         const pathB = Mem.readUint32(PP)!;
         const a = rp.getComObjectByAddress(pathA) as any, b = rp.getComObjectByAddress(pathB) as any;
         objects.push(a, b);
-        const s1 = { id: 1, output: a }, s2 = { id: 2, output: b }, s3 = { id: 3, output: a };
-        (perf.engine as any).statesOnOutput = (path: unknown) => [s1, s2, s3].filter(state => state.output === path);
+        const s1 = { id: 1, audioPath: a }, s2 = { id: 2, audioPath: b }, s3 = { id: 3, audioPath: a };
+        (perf.engine as any).statesOnAudioPath = (path: unknown) => [s1, s2, s3].filter(state => state.audioPath === path);
 
         expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, pathA, 0, 0, 0x40])).toBe(0);
         expect(stops).toEqual([[null, s1, 0x40], [null, s3, 0x40]]);
@@ -348,7 +349,7 @@ describe("DirectMusic streams and COM lifetimes", () => {
         const seg = make<SegmentObject>(CLSID_DirectMusicSegment);
         seg.obj.segment = new PerfSegment(); seg.obj.segment.length = 3072;
         expect(call("IDirectMusicPerformance8_PlaySegment", [perf.ptr, seg.ptr, 0, 0, 0, 0])).toBe(0);
-        const state = perf.obj.engine!.statesOnOutput(null as never)[0]!;
+        const state = perf.obj.engine!.activeStates()[0]!;
         perf.obj.notifySegments = true;
         internals.notify(perf.obj, 1, state, 0);
         const obj = perf.obj.stateObjects.get(state)!;

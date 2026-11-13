@@ -1,4 +1,3 @@
-import { stopDevServerListener } from "./dev-server-process";
 /**
  * cdp-core.ts — the shared Chrome DevTools Protocol transport for BottleShip
  * tooling. Until now ~35 `cdp-*.ts` scripts each copy-pasted the same
@@ -17,6 +16,7 @@ import { stopDevServerListener } from "./dev-server-process";
  *
  * Bun script (top-level await, Bun.spawnSync, global fetch/WebSocket).
  */
+import { stopDevServerListener } from "./dev-server-process";
 import { gzipSync } from "node:zlib";
 import { closeSync, existsSync, mkdirSync, openSync, rmSync, statSync, writeSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
