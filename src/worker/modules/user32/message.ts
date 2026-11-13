@@ -469,7 +469,7 @@ export function createMessageExports(): Record<string, ThunkImplementation> {
     } as const satisfies Record<keyof TimerState, FieldPolicy>;
 
     if (savestatesEnabled()) savestateParticipants.add({
-        id: 'user32-timers', version: 1, order: 41,
+        id: 'user32-timers', version: 2, order: 41,
         schema: { state: stateKeys<User32TimerState>({ timers: true, nextTimerId: true, nextTimerEpoch: true, messageExtraInfo: true, lastHoverChildHwnd: true }), timer: TIMER_FIELDS },
         capture: () => {
             const state: User32TimerState = {

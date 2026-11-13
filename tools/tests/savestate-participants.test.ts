@@ -358,17 +358,17 @@ describe("schema pin and mutation", () => {
             "window-manager": { version: 1, schemaHash: "0a7d493b700e7f53" },
             "message-queue": { version: 1, schemaHash: "58fb335bdd9764ed" },
             "user32": { version: 2, schemaHash: "32eb51b29591ecf8" },
-            "user32-timers": { version: 1, schemaHash: "e6c18e508aea7e24" },
+            "user32-timers": { version: 2, schemaHash: "ba3ad8089d775350" },
             "user32-input": { version: 4, schemaHash: "5665463c4f60f14e" },
             "user32-system": { version: 1, schemaHash: "b93e806912786ec3" },
             "user32-accelerators": { version: 1, schemaHash: "4ab3bf298a09550d" },
             "gdi32": { version: 1, schemaHash: "f5495edbe7c4ae9d" },
             "gdi32-palettes": { version: 1, schemaHash: "fdca280b054649f9" },
-            "ddraw": { version: 1, schemaHash: "844462508bc4ae1e" },
+            "ddraw": { version: 2, schemaHash: "de31f3ebc62d8b73" },
             "dsound": { version: 3, schemaHash: "d59d33450645191b" },
             "dinput": { version: 1, schemaHash: "d7eaf2cafce58a42" },
             "winmm": { version: 3, schemaHash: "13a32abfc6563265" },
-            "dmusic": { version: 5, schemaHash: "2c7000ebe28c598d" },
+            "dmusic": { version: 6, schemaHash: "58b61b38a9554e44" },
         });
     });
 

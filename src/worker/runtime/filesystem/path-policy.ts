@@ -103,15 +103,6 @@ export class PathPolicy {
     private readonly ephemeralRules: RegExp[];
     private readonly persistRules: RegExp[];
     private readonly persistOnly: boolean;
-    // classify() is a pure function of the path, but vfs.ts calls isEphemeral() on EVERY
-    // writeFileSync/write (not just on open) — a game whose save routine does one tiny
-    // fwrite() per struct field reaches this thousands of times per save. Classification
-    // only depends on the (already-lowercased) overlay-relative path, so it is cacheable
-    // for the PathPolicy's lifetime with no behavior change — the game's path set is
-    // small and bounded by its own file usage, and the cache dies with the worker on
-    // reload.
-    private readonly cache = new Map<string, Classification>();
-
     constructor(cfg: PathPolicyConfig = {}) {
         this.persistOnly = !!cfg.persistOnly;
         this.ephemeralRules = compile([...DEFAULT_EPHEMERAL_GLOBS, ...(cfg.ephemeral ?? [])]);
@@ -121,26 +112,23 @@ export class PathPolicy {
     private readonly memo = new Map<string, Classification>();
 
     classify(guestPath: string): Classification {
-        if ((globalThis as { __pathPolicyMemo?: boolean }).__pathPolicyMemo === false) return this.classifyUncached(guestPath);
-        let c = this.memo.get(guestPath);
+        const rel = toOverlayRel(guestPath);
+        if ((globalThis as { __pathPolicyMemo?: boolean }).__pathPolicyMemo === false) return this.classifyUncached(rel);
+        let c = this.memo.get(rel);
         if (c === undefined) {
-            c = this.classifyUncached(guestPath);
+            c = this.classifyUncached(rel);
             if (this.memo.size >= 4096) this.memo.clear();
-            this.memo.set(guestPath, c);
+            this.memo.set(rel, c);
         }
         return c;
     }
 
-    private classifyUncached(guestPath: string): Classification {
-        const rel = toOverlayRel(guestPath);
-        const cached = this.cache.get(rel);
-        if (cached !== undefined) return cached;
+    private classifyUncached(rel: string): Classification {
         const result = this.persistOnly
             // Allowlist: persist only known-save paths; everything else is ephemeral.
             ? (matchesAny(rel, this.persistRules) ? "persist" : "ephemeral")
             // Default: persist everything except declared ephemeral.
             : (matchesAny(rel, this.ephemeralRules) ? "ephemeral" : "persist");
-        this.cache.set(rel, result);
         return result;
     }
 

@@ -128,6 +128,13 @@ function resolveTreatAsClass(clsid: string): string {
     return normalizeGuid(text);
 }
 
+/** Compatibility helper for callers that only need an actual redirection target. */
+export function resolveTreatAsClsid(clsid: string): string | null {
+    const requested = normalizeGuid(clsid);
+    const target = resolveTreatAsClass(requested);
+    return target === requested ? null : target;
+}
+
 function readGuestVtblSlot(mem: Uint8Array, objPtr: number, slot: number): number {
     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
     const vtable = view.getUint32(objPtr, true) >>> 0;

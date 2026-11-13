@@ -1221,7 +1221,7 @@ function initModuleFunctions(): void {
         return notFound();
     };
 
-    const freeLibrary = (ctx: X86Context | null, hModule: number): ThunkResult | Promise<ThunkResult> => {
+    const freeLibrary = (ctx: X86Context | null, hModule: number): ThunkResult => {
         ensureProcessLocalCaches();
         pinUntrackedModules();
 
@@ -1280,24 +1280,29 @@ function initModuleFunctions(): void {
                 `FreeLibrary(0x${hModule.toString(16)}): unloaded "${mod.name}" (image left mapped; next LoadLibrary maps fresh)`);
         };
 
-        // DllMain(DLL_PROCESS_DETACH) undoes what ATTACH did to process-global state (e.g. a
-        // top-level exception filter chained to the previous one). Skipping it lets the next
-        // load of the same image capture its own stale filter as "previous" and recurse.
-        // The module stays resolvable while DETACH runs, as on NT: it unlinks after DllMain
-        // returns. If the chain never starts the module stays loaded and attached, so a
-        // later FreeLibrary retries instead of silently losing the detach.
-        if (ctx && mod.isRealDll && mod.initialized && mod.entryPoint !== 0) {
-            return Promise.resolve({
-                value: 1,
-                stackCleanup: 4,
-                dllInits: [{
-                    baseAddress: mod.baseAddress, entryPoint: mod.baseAddress + mod.entryPoint, name: mod.name, reason: 0,
-                    onReturn: () => { mod.initialized = false; unload(); },
-                }],
-            });
+        const system = System.getInstance();
+        const callbackManager = system.process?.dispatcher?.callbackManager;
+        if (!ctx || !mod.isRealDll || !mod.initialized || !mod.entryPoint || !callbackManager || system.isExiting) {
+            unload();
+            return { value: 1, stackCleanup: 4 };
         }
-        unload();
-        return { value: 1, stackCleanup: 4 };
+        const frameId = callbackManager.saveSuspendedThunkContext(ctx as never, 4, 'FreeLibrary DllMain');
+        if (!frameId) {
+            dynamicLoadRefs.set(hModule, 1);
+            return { value: 0, stackCleanup: 4 };
+        }
+        mod.initialized = false;
+        const { callbackId } = callbackManager.invokeCallback(
+            (hModule + mod.entryPoint) >>> 0, [hModule, DLL_PROCESS_DETACH, 0], 0, () => { unload(); return 1; },
+            false, 'FreeLibrary DllMain', frameId,
+        );
+        if (!callbackId) {
+            callbackManager.abandonSuspendedFrame(frameId);
+            mod.initialized = true;
+            dynamicLoadRefs.set(hModule, 1);
+            return { value: 0, stackCleanup: 4 };
+        }
+        return { value: 1, suspendedForCallback: true, callbackId, stackCleanup: 4 };
     };
 
     exports['FreeLibrary'] = (ctx, mem, args) => freeLibrary(ctx, args[0] >>> 0);
