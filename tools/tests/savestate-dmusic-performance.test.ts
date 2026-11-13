@@ -7,7 +7,7 @@ import { Performance, PerfSegment, PerfSegmentState } from "../../src/worker/cor
 import { DlsSynth } from "../../src/worker/core/audio/directmusic/synth";
 import { DMusic } from "../../src/worker/modules/dmusic";
 import {
-    AudioPathObject, CLSID_DirectMusicCollection, CLSID_DirectMusicComposer, CLSID_DirectMusicLoader, CLSID_DirectMusicPerformance,
+    AudioPathObject, GraphObject, CLSID_DirectMusicCollection, CLSID_DirectMusicComposer, CLSID_DirectMusicLoader, CLSID_DirectMusicPerformance,
     CLSID_DirectMusicSegment, CLSID_DirectMusicStyle, type CollectionObject, type ComposerObject, type DirectMusicObject, DMusicObject,
     IID_IUnknown, type LoadableObject, type LoaderObject, PerformanceObject, PortObject, SegmentObject, SegmentStateObject, type StyleObject,
 } from "../../src/worker/modules/dmusic-objects";
@@ -661,11 +661,17 @@ describe("dmusic saved fields of the playing objects", () => {
             .toEqual(keys(SYNTH_VOICE_FIELDS).filter(k => k !== "channel" && k !== "region"));
         expect(Object.keys(port.sink!).sort()).toEqual(keys(SINK_FIELDS));
         expect(Object.keys(of<SavedPort>(capture(), "dmusic-port")).sort()).toEqual(DMUSIC_SCHEMA.savedPort);
-        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 5, schemaHash: "2c7000ebe28c598d" });
+        expect(savestateParticipants.schemas().dmusic).toEqual({ version: 6, schemaHash: "58b61b38a9554e44" });
     });
 });
 
 describe("dmusic refusals that remain", () => {
+    test("an audio path with a tool graph refuses capture instead of losing its tools", () => {
+        const s = scene();
+        s.path.graph = new GraphObject();
+        expect(() => capture()).toThrow(/tool graph|GraphObject/);
+    });
+
     test("an object still loading asks to try again; nothing else about the module refuses", () => {
         scene();
         expect(module.savestateRefusal()).toBeNull();

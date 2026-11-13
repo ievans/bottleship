@@ -323,6 +323,9 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         if (hAlign === TA_CENTER) x -= metrics.width / 2;
         else if (hAlign === TA_RIGHT) x -= metrics.width;
         const vAlign = align & TA_BASELINE;
+        // The reference point is the alphabetic baseline. `metrics` was measured with
+        // textBaseline 'top', where fontBoundingBoxAscent is the sliver above the em box,
+        // not the ascent: using it left the text a whole ascent too low.
         if (vAlign === TA_BASELINE) y -= measureVerticalMetrics(ctx, state.fontSize).ascent;
         else if (vAlign === TA_BOTTOM) y -= measureVerticalMetrics(ctx, state.fontSize).height;
         if (updateCp) gdi.setCurrentPosition(hdc, x + metrics.width, refY);
@@ -369,10 +372,8 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
             state.appliedFillStyle = state.textColor;
         }
 
-        // Draw text at origin after rotation, baseline tmAscent below the cell top
-        ctx.textBaseline = 'alphabetic';
-        ctx.fillText(text, 0, mergedCellAscent(ctx, state.fontSize));
-        ctx.textBaseline = 'top';
+        // Draw text at origin (0, 0) after rotation
+        ctx.fillText(text, 0, 0);
 
         // Restore transform manually (doesn't reset font/fillStyle)
         ctx.setTransform(savedTransform);
@@ -441,9 +442,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillRect(0, 0, metrics.width, state.fontSize);
                     bitmapCtx.fillStyle = state.textColor;
                 }
-                bitmapCtx.textBaseline = 'alphabetic';
-                bitmapCtx.fillText(text, 0, mergedCellAscent(bitmapCtx, state.fontSize));
-                bitmapCtx.textBaseline = 'top';
+                bitmapCtx.fillText(text, 0, 0);
                 bitmapCtx.restore();
             } else {
                 if (state.bkMode === 2) {

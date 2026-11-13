@@ -252,6 +252,15 @@ describe("ddraw participant", () => {
         expect(bytes(captureDDrawState(h))).toBe(bytes(first));
     });
 
+    test("restoring GDI ownership rebases the host present counter", () => {
+        const saved = captureDDrawState(host({ gdiSurfaceVisible: true, gdiFlippedAtPresent: 900 }));
+        const restored = fresh();
+        restored.ctx.presenter = { contentPresentCount: () => 12 } as never;
+        restoreDDrawState(restored, saved);
+        expect(restored.ctx.gdiSurfaceVisible).toBe(true);
+        expect(restored.ctx.gdiFlippedAtPresent).toBe(12);
+    });
+
     test("the context field table covers DDrawContext and names exactly the saved state", () => {
         const saved = Object.entries(DDRAW_CONTEXT_FIELDS).filter(([, p]) => p === "save").map(([k]) => k);
         expect([...saved, "bitmapSurfaces"].sort()).toEqual([...DDRAW_SCHEMA.state].sort());

@@ -79,6 +79,7 @@ export const TRACK_FIELDS = {
 
 export interface SavedAudioPath extends SavedDMusicBase {
     pathType: number;
+    volume: number;
     performance: number;
     buffer: number;
     channels: number;
@@ -87,7 +88,8 @@ export interface SavedAudioPath extends SavedDMusicBase {
 
 export const AUDIO_PATH_FIELDS = {
     ...DMUSIC_OBJECT_FIELDS, primaryVtable: 'derive', interfaces: 'derive', pathType: 'save', performance: 'save',
-    buffer: 'save', sink: 'save', channels: 'save',
+    // A path with a graph refuses capture below; the only restorable graph value is null.
+    buffer: 'save', sink: 'save', channels: 'save', volume: 'save', graph: 'derive',
 } as const satisfies Record<string, FieldPolicy>;
 
 export interface SavedPort extends SavedDMusicBase {
@@ -141,7 +143,7 @@ export const SEGMENT_STATE_FIELDS = {
 } as const satisfies Record<string, FieldPolicy>;
 
 export const ENGINE_FIELDS = {
-    synth: 'derive', random: 'derive', randomState: 'save', onNotification: 'derive', defaultCollection: 'save', now: 'save',
+    synth: 'derive', random: 'derive', randomState: 'save', onNotification: 'derive', onWave: 'derive', onStateEnd: 'derive', defaultCollection: 'save', now: 'save',
     tempo: 'save', masterTempo: 'save', states: 'save', events: 'save', transpose: 'save', drumChannels: 'save', installed: 'save',
 } as const satisfies Record<string, FieldPolicy>;
 
@@ -224,7 +226,7 @@ export const DMUSIC_SCHEMA = {
     }),
     notificationRow: ['type', 'state', 'musicTime', 'ageMs'],
     savedSegmentState: stateKeys<SavedSegmentState>({ base: true, addresses: true, performance: true, segment: true, state: true }),
-    savedAudioPath: stateKeys<SavedAudioPath>({ base: true, addresses: true, pathType: true, performance: true, buffer: true, channels: true, sink: true }),
+    savedAudioPath: stateKeys<SavedAudioPath>({ base: true, addresses: true, pathType: true, volume: true, performance: true, buffer: true, channels: true, sink: true }),
     savedEngine: stateKeys<PerformanceData>({
         now: true, tempo: true, masterTempo: true, randomState: true, states: true, events: true, transpose: true, drumChannels: true,
         installed: true, defaultCollection: true,
@@ -389,13 +391,17 @@ export function registerDMusicCodecs(host: DMusicHost): void {
     objectCodecs.add<AudioPathObject>({
         tag: 'dmusic-audiopath',
         matches: (o): o is AudioPathObject => o instanceof AudioPathObject,
-        capture: (o, ref): SavedAudioPath => ({
-            ...base(o), pathType: o.pathType, performance: optional(o.performance, ref, 'performance'), buffer: o.buffer,
-            channels: o.channels, sink: o.sink?.captureState() ?? null,
-        }),
+        capture: (o, ref): SavedAudioPath => {
+            if (o.graph) throw new CaptureRefusal("dmusic audio path has a tool graph that is not yet saveable");
+            return {
+                ...base(o), pathType: o.pathType, volume: o.volume, performance: optional(o.performance, ref, 'performance'), buffer: o.buffer,
+                channels: o.channels, sink: o.sink?.captureState() ?? null,
+            };
+        },
         restore: (d: SavedAudioPath) => {
             const path = rebuild(() => new AudioPathObject(), d);
             path.pathType = d.pathType;
+            path.volume = d.volume;
             path.buffer = d.buffer;
             path.channels = d.channels;
             if (d.sink) {
@@ -627,7 +633,7 @@ export function registerDMusicCodecs(host: DMusicHost): void {
 export function registerDMusicParticipant(host: DMusicHost): () => void {
     registerDMusicCodecs(host);
     return savestateParticipants.add({
-        id: 'dmusic', version: 5, order: 64, covers: ['dmusic'], schema: DMUSIC_SCHEMA as unknown as SaveValue,
+        id: 'dmusic', version: 6, order: 64, covers: ['dmusic'], schema: DMUSIC_SCHEMA as unknown as SaveValue,
         capture: (ctx): SaveValue => {
             const refusal = host.idleRefusal();
             if (refusal) throw new CaptureRefusal(refusal);

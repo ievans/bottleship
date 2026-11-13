@@ -68,7 +68,7 @@ describe("presenter content-present count", () => {
     function presenter() {
         // pumpRunning keeps the draw loop from starting; only the request bookkeeping runs.
         return Object.assign(Object.create(DDrawPresenter.prototype), {
-            presentCallCount: 0, contentPresents: 0, pendingResolvers: [], pendingSurface: null, pumpRunning: true,
+            presentClock: { now: () => 0 }, presentCallCount: 0, contentPresents: 0, pendingResolvers: [], pendingSurface: null, pumpRunning: true,
         }) as DDrawPresenter;
     }
 

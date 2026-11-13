@@ -86,7 +86,7 @@ interface MsvcrtFileStream {
 export const MSVCRT_BOOT_ADDRESSES = [
     'errnoAddr', 'pctypeVarAddr', 'pctypeTableAddr', 'caseLowerTableAddr', 'caseUpperTableAddr', 'mbCurMaxAddr', 'fmodeAddr',
     'commodeAddr', 'acmdlnAddr', 'arg0Addr', 'argvVectorAddr', 'argcAddr', 'argvPtrVarAddr', 'dosErrnoAddr', 'mbctypeAddr',
-    'ehPrologAddr', 'environVarAddr', 'iobAddr', 'pioinfoAddr', 'badioinfoAddr', 'lcCodepageAddr', 'osVerVarsAddr',
+    'ehPrologAddr', 'environVarAddr', 'iobAddr', 'pioinfoAddr', 'badioinfoAddr', 'lcCodepageAddr', 'lcHandleAddr', 'lcCollateCpAddr', 'setlcActiveAddr', 'unguardedReadlcActiveAddr', 'osVerVarsAddr',
     'acmdlnVarAddr', 'adjustFdivAddr', 'encodedNullAddr', 'hugeValAddr', 'qsortCodeAddr', 'bsearchCodeAddr',
 ] as const;
 
@@ -96,7 +96,7 @@ export const MSVCRT_FIELDS = {
     mbCurMaxAddr: 'derive', fmodeAddr: 'derive', commodeAddr: 'derive', acmdlnAddr: 'derive', arg0Addr: 'derive', argvVectorAddr: 'derive',
     argcAddr: 'derive', argvPtrVarAddr: 'derive', dosErrnoAddr: 'derive', mbctypeAddr: 'derive', ehPrologAddr: 'derive',
     envpVectorAddr: 'save', environVarAddr: 'derive', crtEnvironment: 'save', iobAddr: 'derive', tmpnamBuf: 'save', pioinfoAddr: 'derive',
-    badioinfoAddr: 'derive', lcCodepageAddr: 'derive', osVerVarsAddr: 'derive', appType: 'save', userMathErrHandler: 'save',
+    badioinfoAddr: 'derive', lcCodepageAddr: 'derive', lcHandleAddr: 'derive', lcCollateCpAddr: 'derive', setlcActiveAddr: 'derive', unguardedReadlcActiveAddr: 'derive', osVerVarsAddr: 'derive', appType: 'save', userMathErrHandler: 'save',
     newHandlerPtr: 'save', newMode: 'save', strerrorBuf: 'save', timezoneState: 'derive', temporaryFiles: 'transient', crtDbgFlag: 'save',
     controlFpDnBits: 'save', tempnamCounter: 'save', exitHandlers: 'save', exitChainRunning: 'transient', fdNext: 'save', fds: 'transient',
     fdHandles: 'transient', handleFds: 'transient', dbgStrCap: 'transient', acmdlnVarAddr: 'derive', adjustFdivAddr: 'derive',
@@ -397,7 +397,7 @@ export class Msvcrt implements IModule {
 
     registerSavestate(): () => void {
         return savestateParticipants.add({
-            id: 'msvcrt', version: 1, order: 7, covers: ['msvcrt'], schema: MSVCRT_SCHEMA as unknown as SaveValue,
+            id: 'msvcrt', version: 2, order: 7, covers: ['msvcrt'], schema: MSVCRT_SCHEMA as unknown as SaveValue,
             capture: () => {
                 try {
                     return this.captureSavestate() as unknown as SaveValue;

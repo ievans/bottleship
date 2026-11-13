@@ -114,6 +114,7 @@ export function restoreDDrawState(host: DDrawHost, s: DDrawState): void {
     c.desktopMode = { ...s.desktopMode };
     c.cooperative = { ...s.cooperative };
     c.gdiSurfaceVisible = s.gdiSurfaceVisible;
+    c.gdiFlippedAtPresent = c.presenter?.contentPresentCount?.() ?? 0;
     c.surfaces = { ...s.surfaces };
     c.ddraw7ObjectAddr = s.ddraw7ObjectAddr;
     c.usedVidMem = s.usedVidMem;
@@ -176,7 +177,7 @@ export function registerDDrawCodecs(): void {
 export function registerDDrawParticipant(host: DDrawHost): void {
     registerDDrawCodecs();
     savestateParticipants.add({
-        id: 'ddraw', version: 1, order: 60, covers: ['ddraw'], schema: DDRAW_SCHEMA as unknown as SaveValue,
+        id: 'ddraw', version: 2, order: 60, covers: ['ddraw'], schema: DDRAW_SCHEMA as unknown as SaveValue,
         prepare: async () => { await readBackGpuLatest(host); },
         capture: () => refusing(() => captureDDrawState(host)) as unknown as SaveValue,
         restore: (s) => restoreDDrawState(host, s as unknown as DDrawState),

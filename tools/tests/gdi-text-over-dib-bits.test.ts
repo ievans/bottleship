@@ -31,8 +31,8 @@ function pixelCanvas() {
     let imageDataObjects = 0;
     const ctx = {
         font: "10px dib-text-test", fillStyle: "#ffffff", textAlign: "left", textBaseline: "top", canvas: {},
-        measureText: (t: string) => ({ width: t.length * 2, actualBoundingBoxLeft: 0, actualBoundingBoxRight: t.length * 2, fontBoundingBoxAscent: 1, fontBoundingBoxDescent: 9 }),
-        fillText(_t: string, x: number, y: number) { const o = ((y | 0) * W + (x | 0)) * 4; px[o] = px[o + 1] = px[o + 2] = 255; },
+        measureText: (t: string) => ({ width: t.length * 2, actualBoundingBoxLeft: 0, actualBoundingBoxRight: t.length * 2, fontBoundingBoxAscent: ctx.textBaseline === "alphabetic" ? 9 : 1, fontBoundingBoxDescent: ctx.textBaseline === "alphabetic" ? 1 : 9 }),
+        fillText(_t: string, x: number, y: number) { if (ctx.textBaseline === "alphabetic") y -= 9; const o = ((y | 0) * W + (x | 0)) * 4; px[o] = px[o + 1] = px[o + 2] = 255; },
         getImageData(x: number, y: number, w: number, h: number) {
             const out = new Uint8ClampedArray(w * h * 4);
             for (let r = 0; r < h; r++) out.set(px.subarray(((y + r) * W + x) * 4, ((y + r) * W + x + w) * 4), r * w * 4);

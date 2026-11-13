@@ -29,6 +29,7 @@ import { handleMciWndMessage } from '../msvfw32-mciwnd';
 import { windows, buttonCheckStates, registerWindowTimerKiller, registerRemovedTimerHook, finalizeWindowDestroy, getAbsoluteWindowPosition, getWindowByHandle, isEffectivelyVisible } from './shared-state';
 import { clearWindowUpdate, hasPendingUpdate, validateWindow } from './paint-region';
 import { translateKeyMessage } from './translate-message';
+export { translateKeyMessage };
 import { repaintChildControls, isButtonSystemControl, hitTestSystemControlAtClient } from './controls';
 import { isOwnerDrawButton } from './owner-draw';
 import { defWindowProcSetCursor, runOwnerDrawButtonPaint } from './window';

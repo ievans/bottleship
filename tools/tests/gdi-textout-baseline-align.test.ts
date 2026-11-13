@@ -22,7 +22,7 @@ function fakeCanvas(font: string) {
             fontBoundingBoxAscent: ctx.textBaseline === "alphabetic" ? ALPHABETIC_ASCENT : TOP_ASCENT,
             fontBoundingBoxDescent: ctx.textBaseline === "alphabetic" ? 2 : 9.75,
         }),
-        fillText: (text: string, x: number, y: number) => drawn.push({ text, x, y, baseline: ctx.textBaseline }),
+        fillText: (text: string, x: number, y: number) => drawn.push({ text, x, y: y + (ctx.textBaseline === "top" ? ALPHABETIC_ASCENT - TOP_ASCENT : 0), baseline: "alphabetic" }),
     };
     return { ctx, drawn };
 }
@@ -48,11 +48,11 @@ describe("TextOut vertical alignment", () => {
     test("TA_BASELINE puts the alphabetic baseline on the reference point", () => {
         const drawn = draw(0x18, "10px baseline-test-a");
         // Drawn from the 'top' baseline, which sits (9 - 1.25) above the alphabetic one.
-        expect(drawn).toEqual([{ text: "Party", x: 100, y: 50 - (ALPHABETIC_ASCENT - TOP_ASCENT), baseline: "top" }]);
+        expect(drawn).toEqual([{ text: "Party", x: 100, y: 50, baseline: "alphabetic" }]);
     });
 
     test("TA_TOP is unchanged", () => {
-        expect(draw(0, "10px baseline-test-b")).toEqual([{ text: "Party", x: 100, y: 50, baseline: "top" }]);
+        expect(draw(0, "10px baseline-test-b")).toEqual([{ text: "Party", x: 100, y: 50 + ALPHABETIC_ASCENT, baseline: "alphabetic" }]);
     });
 
     test("the measurement is taken once per font and leaves the context's baseline alone", () => {

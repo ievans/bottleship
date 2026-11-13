@@ -281,10 +281,10 @@ describe("DirectMusic streams and COM lifetimes", () => {
         expect(call("IDirectMusicLoader8_SetSearchDirectory", [loader, 0x700, wide(0x800, ".\\sounds\\"), 0])).toBe(0);
         Mem.writeBytes(0x900, new Uint8Array([0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46])); // IID_IUnknown
         expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "tracks\\Hearth.wav"), 0x6b0])).toBe(0);
-        expect(tried).toEqual([[".\\sounds\\tracks\\Hearth.wav", "tracks\\Hearth.wav"]]);
+        expect(tried).toEqual([[".\\sounds\\tracks\\Hearth.wav"]]);
         const seg = rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as SegmentObject;
         objects.push(seg);
-        expect(seg.segment?.waves.length).toBe(1);
+        expect(seg.segment?.wave?.frames).toBe(2);
         expect(call("IDirectMusicLoader8_LoadObjectFromFile", [loader, 0x700, 0x900, wide(0xa00, "C:\\x.wav"), 0x6b0])).toBe(0);
         expect(tried[1]).toEqual(["C:\\x.wav"]);
         objects.push(rp.getComObjectByAddress(Mem.readUint32(0x6b0)!) as DMusicObject);
@@ -301,8 +301,8 @@ describe("DirectMusic streams and COM lifetimes", () => {
         const pathB = Mem.readUint32(PP)!;
         const a = rp.getComObjectByAddress(pathA) as any, b = rp.getComObjectByAddress(pathB) as any;
         objects.push(a, b);
-        const s1 = { id: 1 }, s2 = { id: 2 }, s3 = { id: 3 };
-        perf.waveRoutes.set(s1 as any, a); perf.waveRoutes.set(s2 as any, b); perf.waveRoutes.set(s3 as any, a);
+        const s1 = { id: 1, output: a }, s2 = { id: 2, output: b }, s3 = { id: 3, output: a };
+        (perf.engine as any).statesOnOutput = (path: unknown) => [s1, s2, s3].filter(state => state.output === path);
 
         expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, pathA, 0, 0, 0x40])).toBe(0);
         expect(stops).toEqual([[null, s1, 0x40], [null, s3, 0x40]]);
@@ -315,7 +315,6 @@ describe("DirectMusic streams and COM lifetimes", () => {
 
         expect(call("IDirectMusicPerformance8_StopEx", [perfPtr, 0, 0, 0, 0])).toBe(0);
         expect(stops).toEqual([[null, null, 0]]);
-        perf.waveRoutes.clear();
     });
 
     test("replacing or destroying a port releases its buffer and DirectSound references", () => {
@@ -349,7 +348,7 @@ describe("DirectMusic streams and COM lifetimes", () => {
         const seg = make<SegmentObject>(CLSID_DirectMusicSegment);
         seg.obj.segment = new PerfSegment(); seg.obj.segment.length = 3072;
         expect(call("IDirectMusicPerformance8_PlaySegment", [perf.ptr, seg.ptr, 0, 0, 0, 0])).toBe(0);
-        const state = [...perf.obj.stateObjects.keys()][0]!;
+        const state = perf.obj.engine!.statesOnOutput(null as never)[0]!;
         perf.obj.notifySegments = true;
         internals.notify(perf.obj, 1, state, 0);
         const obj = perf.obj.stateObjects.get(state)!;

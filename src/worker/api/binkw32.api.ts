@@ -50,7 +50,6 @@ export const binkw32Module: ModuleDescriptor = {
         makeFunc("_BinkBufferBlit@16", 4),        // buffer, bink, x, y
         makeFunc("_BinkBufferBlit@12", 3),        // buffer, BINKRECT* rects, numrects
         makeFunc("_BinkBufferSetDDPrimary@4", 1), // LPDIRECTDRAWSURFACE primary
-        makeFunc("_BinkBufferSetOffset@12", 3),   // buffer, destx, desty
         makeFunc("_BinkBufferCheckWinPos@12", 3), // buffer, S32* x, S32* y
         makeFunc("_BinkBufferSetHWND@8", 2),      // buffer, hwnd
         makeFunc("_BinkBufferLock@4", 1),         // buffer

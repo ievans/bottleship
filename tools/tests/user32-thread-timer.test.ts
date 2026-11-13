@@ -1,13 +1,19 @@
 import { expect, test } from "bun:test";
 import { System } from "../../src/worker/core/system";
 import { createMessageExports } from "../../src/worker/modules/user32/message";
+import { clearTimerHandler, getTimerHandler, replaceTimerHandler } from "../../src/worker/core/scheduler/timer-wheel";
+import { TimerKind } from "../../src/worker/core/scheduler/types";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 
 const memory = new Uint8Array(0x1000);
-Mem.bind(() => memory);
-const exports = createMessageExports();
+let exports: ReturnType<typeof createMessageExports>;
 
 function withStubs(threadId: number, run: (fire: () => void, posts: number[][], wakes: unknown[]) => void) {
+    const oldMem = Mem.memoryGetter;
+    Mem.bind(() => memory);
+    const oldHandler = getTimerHandler(TimerKind.USER32_TIMER);
+    clearTimerHandler(TimerKind.USER32_TIMER);
+    exports = createMessageExports();
     const system = System.getInstance();
     const wheel = system.scheduler.timerWheel;
     const origAdd = wheel.add, origPost = system.windowManager.postMessage;
@@ -15,11 +21,13 @@ function withStubs(threadId: number, run: (fire: () => void, posts: number[][], 
     let cb: () => void = () => {};
     const posts: number[][] = [];
     const wakes: unknown[] = [];
-    wheel.add = ((_ms: number, _rep: boolean, _kind: number, fn: () => void) => { cb = fn; return 1; }) as any;
+    wheel.add = ((_ms: number, _rep: boolean, kind: TimerKind, owner: number, _now: number, arg = 0) => { cb = () => getTimerHandler(kind)!(owner, arg, 1); return 1; }) as any;
     system.windowManager.postMessage = ((...a: number[]) => { posts.push(a); }) as any;
     system.scheduler.getCurrentThreadId = (() => threadId) as any;
     system.scheduler.wakeMessageWaiters = ((t?: number) => { wakes.push(t); }) as any;
     try { run(() => cb(), posts, wakes); } finally {
+        Mem.bind(oldMem);
+        if (oldHandler) replaceTimerHandler(TimerKind.USER32_TIMER, oldHandler); else clearTimerHandler(TimerKind.USER32_TIMER);
         wheel.add = origAdd; system.windowManager.postMessage = origPost;
         system.scheduler.getCurrentThreadId = origTid; system.scheduler.wakeMessageWaiters = origWake;
     }
