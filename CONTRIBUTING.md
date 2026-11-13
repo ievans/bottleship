@@ -65,8 +65,10 @@ bun tools/generate-index.ts          # regenerate module indexes
 bun tools/validate-signatures.ts     # WinAPI signatures vs reference data
 bun tools/validate-struct-offsets.ts # struct layout/offset checks
 bun run typecheck
-bun test
+bun run test
 ```
+
+The test script isolates each file so mocked host globals cannot leak between suites.
 
 ## Project layout
 
