@@ -50,6 +50,7 @@ import { readWindowsTimezoneSnapshot } from "../runtime/windows-timezone";
 import { crtFileCharBytes, decodeCrtFileChar, encodeCrtFileChar } from "./crt-file-codec";
 import { registerCrtWideFormatExports } from "./crt-wide-format";
 import { captureCrtConvStatics, registerCrtConvExports, resetCrtConvStatics, restoreCrtConvStatics } from "./crt-conv";
+import { registerCrtWidePathExports } from "./crt-wide-path";
 import { registerCrtPathExports } from "./crt-path";
 import { registerCrtSeh3Exports } from "./crt-seh3";
 import { registerCrtWideCopyExports } from "./crt-wide-copy";
@@ -655,6 +656,11 @@ export class Msvcrt implements IModule {
             malloc: (n) => this.malloc(n),
             setErrno: (e) => this.setErrno(e),
             nextTempnamSeq: () => (this.tempnamCounter++ & 0xffff),
+        });
+        registerCrtWidePathExports(exports, {
+            readWString: (p, max) => this.readWString(p, max),
+            malloc: (n) => this.malloc(n),
+            setErrno: (e) => { this.setErrno(e); },
         });
         exports["_setmode"] = () => 0;
         exports["_fileno"] = (ctx, mem, args) => this.fileno(args[0] ?? 0);
