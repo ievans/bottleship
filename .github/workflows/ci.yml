@@ -1,19 +1,32 @@
-name: Fork mirror Windows regressions
+name: Wide CRT dispatcher regressions
 on:
   workflow_dispatch:
-    inputs:
-      contribution_ref:
-        required: true
-        type: string
 permissions:
   contents: read
 jobs:
   focused:
+    name: Windows - ${{ matrix.target }}
     runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: copy
+            ref: ef3efc7ec441f554baf137c3db320e3b19aac7bf
+          - target: format
+            ref: 4080254f0e67ee933f17882e29171a54e50b5b2f
+          - target: path
+            ref: f0b27729ca95d0e23a2f3bcc2f679094e4adb52c
+          - target: integer
+            ref: 4e220f3a07080354709a71c177369448e1b5c64f
+          - target: integrated
+            ref: 30dad3ea1a6a2ddd3469eacf208bba0d43c851a6
+          - target: fork
+            ref: 9f6cca4a0347a2eb660175fd68ee000ac021bc4d
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ inputs.contribution_ref }}
+          ref: ${{ matrix.ref }}
           submodules: true
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -21,4 +34,6 @@ jobs:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: git rev-parse HEAD
-      - run: bun test tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/crt-wide-integer.test.ts tools/tests/crt-wide-secure.test.ts tools/tests/inno-registry-values.test.ts tools/tests/manifest-synth.test.ts
+      - if: matrix.target != 'fork'
+        run: bun run typecheck
+      - run: bun test crt-wide-
