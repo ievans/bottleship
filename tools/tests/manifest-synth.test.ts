@@ -115,13 +115,17 @@ describe("gog-import/synthesizeRegistry value types", () => {
         const values = seed([
             entry(3, "Flag", ascii("1")),
             entry(3, "Mask", ascii("$1F")),
-            entry(6, "Wide", ascii("4096")),
         ]);
         expect(values).toEqual([
             { name: "Flag", type: "REG_DWORD", data: 1 },
             { name: "Mask", type: "REG_DWORD", data: 31 },
-            { name: "Wide", type: "REG_DWORD", data: 4096 },
         ]);
+    });
+
+    test("rtQWord is refused rather than relabeled or truncated as a DWORD", () => {
+        for (const value of ["4096", "18446744073709551615"]) {
+            expect(() => seed([entry(6, "Wide", ascii(value))])).toThrow(/QWORD/);
+        }
     });
 
     test("rtBinary becomes a hex string typed REG_BINARY", () => {
