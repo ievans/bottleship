@@ -9,8 +9,10 @@ public static class NativeProbe {
  [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int wcsncpy_s(IntPtr d,UIntPtr n,IntPtr s,UIntPtr c);
  [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int wcsncat_s(IntPtr d,UIntPtr n,IntPtr s,UIntPtr c);
  [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int wcscpy_s(IntPtr d,UIntPtr n,IntPtr s);
- [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int swprintf_s(IntPtr d,UIntPtr n,IntPtr f);
- [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int _snwprintf_s(IntPtr d,UIntPtr n,UIntPtr c,IntPtr f);
+ [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] static extern int __stdio_common_vswprintf_s(ulong options,IntPtr d,UIntPtr n,IntPtr f,IntPtr locale,IntPtr args);
+ [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] static extern int __stdio_common_vsnwprintf_s(ulong options,IntPtr d,UIntPtr n,UIntPtr c,IntPtr f,IntPtr locale,IntPtr args);
+ public static int swprintf_s(IntPtr d,UIntPtr n,IntPtr f) {return __stdio_common_vswprintf_s(4,d,n,f,IntPtr.Zero,IntPtr.Zero);}
+ public static int _snwprintf_s(IntPtr d,UIntPtr n,UIntPtr c,IntPtr f) {return __stdio_common_vsnwprintf_s(4,d,n,c,f,IntPtr.Zero,IntPtr.Zero);}
  [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern IntPtr _wfullpath(IntPtr d,IntPtr s,UIntPtr n);
  [DllImport("ucrtbase",CallingConvention=CallingConvention.Cdecl)] public static extern int _wsplitpath_s(IntPtr p,IntPtr d,UIntPtr dn,IntPtr r,UIntPtr rn,IntPtr f,UIntPtr fn,IntPtr e,UIntPtr en);
  [StructLayout(LayoutKind.Sequential)] public struct Brush { public uint style;public uint color;public UIntPtr hatch; }
