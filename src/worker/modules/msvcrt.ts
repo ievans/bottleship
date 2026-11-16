@@ -48,6 +48,7 @@ import { registerMsvcrtTimeLocaleExports } from "./msvcrt-time-locale";
 import { MsvcrtTimezoneState } from "./msvcrt-timezone";
 import { readWindowsTimezoneSnapshot } from "../runtime/windows-timezone";
 import { crtFileCharBytes, decodeCrtFileChar, encodeCrtFileChar } from "./crt-file-codec";
+import { registerCrtWideFormatExports } from "./crt-wide-format";
 import { captureCrtConvStatics, registerCrtConvExports, resetCrtConvStatics, restoreCrtConvStatics } from "./crt-conv";
 import { registerCrtWidePathExports } from "./crt-wide-path";
 import { registerCrtPathExports } from "./crt-path";
