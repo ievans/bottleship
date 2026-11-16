@@ -1,4 +1,4 @@
-name: CRT review native observations
+name: Fork mirror Windows regressions
 on:
   workflow_dispatch:
     inputs:
@@ -8,45 +8,12 @@ on:
 permissions:
   contents: read
 jobs:
-  native:
-    if: inputs.contribution_ref != 'focused'
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - shell: pwsh
-        run: ./native-probe.ps1
   focused:
-    name: Windows - ${{ matrix.slug }}
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - slug: copy
-            ref: 0b541c21b7ee9c9bb55cf1be25ab9d426c0152f3
-            tests: tools/tests/crt-wide-copy.test.ts
-          - slug: format
-            ref: 81c4cc3a4f5422eeb59f9dbca6bae74110fc0d95
-            tests: tools/tests/crt-wide-format.test.ts
-          - slug: path
-            ref: 3aa2ee5e77b15b13385cbfc72394f24ad40a7890
-            tests: tools/tests/crt-wide-path.test.ts
-          - slug: integer
-            ref: 6d8faf9f9740a858b54e92663f4459ae160f7654
-            tests: tools/tests/crt-wide-integer.test.ts
-          - slug: registry
-            ref: ab2ad69c8e60fbb4afeb4b1c624dedcaa8105bad
-            tests: tools/tests/inno-registry-values.test.ts
-          - slug: integrated
-            ref: 5dcdb4134622a6acbb498cd5c544fa8d3446007d
-            tests: tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/crt-wide-integer.test.ts tools/tests/inno-registry-values.test.ts tools/tests/gdi-brush-styles.test.ts tools/tests/gdi-whole-text-cache.test.ts tools/tests/gdi-char-width-variants.test.ts tools/tests/gdi-char-widths-ansi.test.ts
-          - slug: fork
-            ref: 0d3d90d9f3bdb266c073dd78f160e317e6c8bb47
-            tests: tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/crt-wide-integer.test.ts tools/tests/inno-registry-values.test.ts tools/tests/crt-wide-secure.test.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: ${{ matrix.ref }}
+          ref: ${{ inputs.contribution_ref }}
           submodules: true
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
@@ -54,6 +21,4 @@ jobs:
           bun-version: 1.4.4
       - run: bun install --frozen-lockfile
       - run: git rev-parse HEAD
-      - if: matrix.slug != 'fork'
-        run: bun run typecheck
-      - run: bun test ${{ matrix.tests }}
+      - run: bun test tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/crt-wide-integer.test.ts tools/tests/crt-wide-secure.test.ts tools/tests/inno-registry-values.test.ts tools/tests/manifest-synth.test.ts
