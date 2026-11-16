@@ -22,19 +22,19 @@ jobs:
       matrix:
         include:
           - slug: inno-directories
-            ref: a2676589
+            ref: a267658967dbd9d3a2ec982db14e14371151bb77
             tests: tools/tests/inno-directory-manifest.test.ts
           - slug: inno-registry-types
-            ref: 6dd3a8eb
+            ref: 6dd3a8eb921a26c85e72a2e6c6588bd7aeccf657
             tests: tools/tests/inno-registry-values.test.ts
           - slug: crt-wide-integer
-            ref: 3e9d41d3
+            ref: 3e9d41d38c3e97efe00a5058802e3d7f491016db
             tests: tools/tests/crt-wide-integer.test.ts
           - slug: gdi-char-widths
-            ref: 36e2e6e7
+            ref: 36e2e6e7a29e7cb63fe38b144e7f1cffc9422636
             tests: tools/tests/gdi-char-width-variants.test.ts tools/tests/gdi-char-widths-ansi.test.ts
           - slug: integrated
-            ref: 3c587b31
+            ref: 3c587b31ba68877c832d2b900efeb276e5b7a217
             tests: tools/tests/inno-directory-manifest.test.ts tools/tests/inno-registry-values.test.ts tools/tests/crt-wide-integer.test.ts tools/tests/gdi-char-width-variants.test.ts tools/tests/gdi-char-widths-ansi.test.ts tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/gdi-brush-styles.test.ts tools/tests/gdi-whole-text-cache.test.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
