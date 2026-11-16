@@ -674,7 +674,6 @@ export class Msvcrt implements IModule {
         exports["localeconv"] = () => this.localeconv();
 
         registerCrtWideFormatExports(exports, {
-            format: (fmt, args, first) => this.formatWide(this.readWString(fmt, Msvcrt.MAX_WIDE_SCAN_CHARS), new ArrayVaListReader(args, first)),
             setErrno: (e) => { this.setErrno(e); },
         });
 
@@ -693,7 +692,6 @@ export class Msvcrt implements IModule {
             nextTempnamSeq: () => (this.tempnamCounter++ & 0xffff),
         });
         registerCrtWidePathExports(exports, {
-            readWString: (p, max) => this.readWString(p, max),
             malloc: (n) => this.malloc(n),
             setErrno: (e) => { this.setErrno(e); },
         });

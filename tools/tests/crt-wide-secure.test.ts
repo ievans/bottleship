@@ -89,9 +89,8 @@ describe("wide and secure CRT functions", () => {
         registerCrtWideCopyExports(exports, { setErrno: e => { errno = e; } });
         registerCrtWideFormatExports(exports, {
             setErrno: e => { errno = e; },
-            format: (fmt, args, first) => formatCLazy(readW(fmt), new ArrayVaListReader(args, first), readC, { wide: true, readWString: readW }),
         });
-        registerCrtWidePathExports(exports, { readWString: readW, writeWString: writeW,
+        registerCrtWidePathExports(exports, {
             malloc: alloc, setErrno: e => { errno = e; } });
         registerCrtWideIntegerExports(exports, { setErrno: e => { errno = e; } });
         registerCrtConvExports(exports, {
