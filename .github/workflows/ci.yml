@@ -12,17 +12,17 @@ jobs:
       matrix:
         include:
           - target: copy
-            ref: ef3efc7ec441f554baf137c3db320e3b19aac7bf
+            ref: 548ed9b7aac126ba41fabbf8585a77ff3e373d72
           - target: format
-            ref: 4080254f0e67ee933f17882e29171a54e50b5b2f
+            ref: 117586066e8e37e25e0d74c301d515a91545de48
           - target: path
-            ref: f0b27729ca95d0e23a2f3bcc2f679094e4adb52c
+            ref: 4b07a4e5e7c404adc7c6c1bfb1b2be0a84a55c7a
           - target: integer
-            ref: 4e220f3a07080354709a71c177369448e1b5c64f
+            ref: e65c0f6b883604cf7d76da3213bc8dbe24e69d9d
           - target: integrated
-            ref: 30dad3ea1a6a2ddd3469eacf208bba0d43c851a6
+            ref: 91a673c8454ccd262f42ea7e8ee3a2de9b3b88aa
           - target: fork
-            ref: 9f6cca4a0347a2eb660175fd68ee000ac021bc4d
+            ref: abd9422bafbd18d61d01859dafe83fcbd4e7c862
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
