@@ -17,3 +17,45 @@ jobs:
       - name: Native Windows observations
         shell: pwsh
         run: ./native-probe.ps1
+  focused:
+    name: Windows - ${{ matrix.slug }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - slug: crt-wide-copy
+            ref: c4e3e43f4414ff0a9930cc3e64b1797da480901d
+            tests: tools/tests/crt-wide-copy.test.ts
+          - slug: crt-wide-format
+            ref: 1360329a9925b001540cd2b5ce09047d701bd33d
+            tests: tools/tests/crt-wide-format.test.ts
+          - slug: crt-wide-path
+            ref: 7c2e0ca1682a7b288b1b023658c5332a4486cd02
+            tests: tools/tests/crt-wide-path.test.ts
+          - slug: gdi-brush-styles
+            ref: 60d474e4671730b77da0501e387ff46b36f85c6b
+            tests: tools/tests/gdi-brush-styles.test.ts
+          - slug: gdi-extent-cache
+            ref: 5801ec884fe08961e7458d79945551bfe3aca880
+            tests: tools/tests/gdi-whole-text-cache.test.ts
+          - slug: integrated
+            ref: bf14faf304884830196382bc6272c5f2b3d64a62
+            tests: tools/tests/crt-wide-copy.test.ts tools/tests/crt-wide-format.test.ts tools/tests/crt-wide-path.test.ts tools/tests/gdi-brush-styles.test.ts tools/tests/gdi-whole-text-cache.test.ts
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ matrix.ref }}
+          submodules: true
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version: 1.4.4
+      - name: Locked install
+        run: bun install --frozen-lockfile
+      - name: Record tested revision
+        run: git rev-parse HEAD
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Focused API flows
+        run: bun test ${{ matrix.tests }}
