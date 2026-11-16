@@ -1,3 +1,4 @@
+import { registerCrtWideIntegerExports } from "../../src/worker/modules/crt-wide-integer";
 import { registerCrtWidePathExports } from "../../src/worker/modules/crt-wide-path";
 import { registerCrtWideFormatExports } from "../../src/worker/modules/crt-wide-format";
 import { registerCrtWideCopyExports } from "../../src/worker/modules/crt-wide-copy";
@@ -92,6 +93,7 @@ describe("wide and secure CRT functions", () => {
         });
         registerCrtWidePathExports(exports, { readWString: readW, writeWString: writeW,
             malloc: alloc, setErrno: e => { errno = e; } });
+        registerCrtWideIntegerExports(exports, { setErrno: e => { errno = e; } });
         registerCrtConvExports(exports, {
             process: {} as any,
             readCString: readC,
