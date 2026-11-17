@@ -60,7 +60,10 @@ describe("wide and secure CRT functions", () => {
     /** A destination pre-filled with a marker, so "left empty" is distinguishable from "untouched". */
     const dest = (chars: number): number => { const p = alloc(chars * 2); writeW(p, "#".repeat(chars - 1)); return p; };
 
+    let originalProcess: ReturnType<typeof System.getInstance>["process"];
     beforeEach(() => {
+        originalProcess = System.getInstance().process;
+        System.getInstance().process = null;
         mem = new Uint8Array(0x40000);
         Mem.bind(() => mem);
         exports = {};
@@ -105,7 +108,7 @@ describe("wide and secure CRT functions", () => {
             caseUpperTableAddr: () => 0,
         });
     });
-    afterEach(() => { System.getInstance().fileSystem.currentDir = originalCwd; });
+    afterEach(() => { System.getInstance().fileSystem.currentDir = originalCwd; System.getInstance().process = originalProcess; });
 
     const call = (name: string, ...args: number[]): number => {
         const r = (exports[name] as any)(null, mem, args);
