@@ -11,14 +11,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - target: copy
+            ref: 7dc1911ca60fbb4bdf4b783f87f8399223cb20a4
+          - target: integer
+            ref: 2153ab2a7af0f73bcec1e7cf748cae82268b12bb
           - target: format
-            ref: e33f13210775401e7cde97295fd59417e53f11f1
+            ref: 4dbbe687bcec5f878576469f32a3272eda642f15
           - target: path
-            ref: 67c41f61e70a8e949325c27c9298af2954662271
+            ref: 8f4ae24ecac1ddee6ceb81a12edbabe4b615ced0
           - target: integrated
-            ref: c3ed90ab9179437c8dc751bad5aeba5157db80cd
+            ref: bcba77cc78a9cc1fad8a0768986adb5ba41052f2
           - target: fork
-            ref: 336bcec6503679ef543ec57040f952c4edf05175
+            ref: deb13450e1f33391ea34d98b8d75d145246db509
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
