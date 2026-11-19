@@ -72,6 +72,19 @@ describe('CRT binary integers and wide stdio', () => {
         }
     });
 
+    test('fclose commits a writable stream before returning to the guest', async () => {
+        const path = 'C:/checkpoint.bin';
+        const fp = crt.fopenPath(path, 'wb');
+        const payload = Uint8Array.of(0x1f, 0x8b, 8, 0);
+        mem.set(payload, 0x200);
+        expect(await result(crt.fwrite(0x200, 1, payload.length, fp))).toBe(payload.length);
+        expect(await result(crt.fclose(fp))).toBe(0);
+
+        const handle = await (vfs as any).overlay.getFileHandle(path, false);
+        const committed = await handle.getFile();
+        expect(new Uint8Array(await committed.arrayBuffer())).toEqual(payload);
+    });
+
     test('declarations are cdecl and use actual argument counts', () => {
         for (const [name, count] of Object.entries({ _getw: 1, _putw: 2, fgetwc: 1, fputwc: 2, ungetwc: 2, tmpfile: 0 })) {
             const f = msvcrtModule.functions.find(f => f.name === name)!;
