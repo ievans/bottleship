@@ -17,7 +17,7 @@
       "bytes": 5935
     },
     "public/unpack-buffered.wasm": {
-      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "sha256": "6fc6c8db009b8f8eeea0f1b516cc06fe42e58e02c7ff479588e0ce2f87cfd01f",
       "bytes": 225878
     },
     "public/unpack-streaming.wasm": {
@@ -25,8 +25,8 @@
       "bytes": 62365
     },
     "public/v86.wasm": {
-      "sha256": "1aaed1a0d7d67daf99ee5b98c69213b8876808f5da51aa94dc47fb7566af0196",
-      "bytes": 2745862
+      "sha256": "a7fdff71997aae7c478c27d1ec13fde314128c220034b7f872c72725ac1ecad4",
+      "bytes": 2745852
     },
     "public/video-decoder.wasm": {
       "sha256": "52a80088679e4dc42b0a5a164da9eca86003763312152d1224a31a179c0d9b74",
@@ -41,7 +41,7 @@
       "bytes": 7934
     },
     "tools/build-unpack-buffered/pkg-node/unpack_buffered_bg.wasm": {
-      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "sha256": "6fc6c8db009b8f8eeea0f1b516cc06fe42e58e02c7ff479588e0ce2f87cfd01f",
       "bytes": 225878
     },
     "tools/build-unpack-buffered/pkg-node/unpack_buffered_bg.wasm.d.ts": {
@@ -57,7 +57,7 @@
       "bytes": 11056
     },
     "tools/build-unpack-buffered/pkg/unpack_buffered_bg.wasm": {
-      "sha256": "8fb46ac69391602af0bed333f19626ed4a4d596d56dc178880fe16703d8d6f24",
+      "sha256": "6fc6c8db009b8f8eeea0f1b516cc06fe42e58e02c7ff479588e0ce2f87cfd01f",
       "bytes": 225878
     },
     "tools/build-unpack-buffered/pkg/unpack_buffered_bg.wasm.d.ts": {
