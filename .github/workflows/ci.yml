@@ -51,12 +51,24 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # Toolchains behind tools/build-wasm/wasm.lock.json: rustc from rust-toolchain.toml, clang 18.
+      # Toolchains behind tools/build-wasm/wasm.lock.json: rustc from rust-toolchain.toml, clang 18.1.8.
+      # Pinning the IMAGE (ubuntu-24.04 above) is not enough on its own: noble's own universe
+      # repo carries clang-18 at 1:18.1.3-1 — a different patch than the lock's 18.1.8 (a
+      # noble-proposed 18.1.8 backport existed briefly but was deleted upstream) — so the
+      # build's own clang-version guard (tools/build-wasm/build.ts) refuses every run here
+      # ("clang is 18.1.3 but the lock was produced with 18.1.8"). apt.llvm.org's own
+      # per-codename archive carries the exact 18.1.8 build instead; pin the package version so
+      # a later LLVM point release in that archive cannot silently re-introduce the same drift.
       - name: Install pinned wasm toolchain
         run: |
           rustup toolchain install
-          sudo apt-get install -y --no-install-recommends clang-18
+          wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+          codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+          echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/${codename}/ llvm-toolchain-${codename}-18 main" | sudo tee /etc/apt/sources.list.d/llvm18.list
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends --allow-downgrades "clang-18=1:18.1.8*"
           sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          clang --version
 
       - name: Cache wasm-bindgen CLI
         id: wasm-bindgen-cache
