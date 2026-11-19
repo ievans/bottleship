@@ -2186,10 +2186,9 @@ export function registerFastPathMessageFunctions(dispatcher: HleDispatcher): voi
                     return 1; // TRUE
                 }
             }
-            // No quit pending — keep flag set if paint/mouse still pending
-            hypercallDataManager.updateMessageQueueFlag(
-                system.windowManager.hasMessages(wMsgFilterMin, wMsgFilterMax, callerThreadId),
-            );
+            // WASM shares this flag across threads and message filters. A miss here
+            // cannot hide a message that a different poll could retrieve.
+            hypercallDataManager.updateMessageQueueFlag(system.windowManager.hasMessages());
             return 0;
         }
 
@@ -2217,8 +2216,7 @@ export function registerFastPathMessageFunctions(dispatcher: HleDispatcher): voi
             filterMax: wMsgFilterMax,
         });
 
-        // Update shared flag after dequeue (unfiltered check - any message means queue non-empty)
-        hypercallDataManager.updateMessageQueueFlag(system.windowManager.hasMessages(0, 0, callerThreadId));
+        hypercallDataManager.updateMessageQueueFlag(system.windowManager.hasMessages());
 
         return 1; // TRUE
     };
