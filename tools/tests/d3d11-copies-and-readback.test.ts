@@ -51,6 +51,37 @@ describe("D3D11Renderer.copyTextureRegion", () => {
     });
 });
 
+describe("D3D11Renderer NO_OVERWRITE uploads", () => {
+    const MAP_WRITE_NO_OVERWRITE = 5;
+
+    for (const sourceOffset of [0, 1]) {
+        test(`keeps word-aligned upload boundaries for source offset ${sourceOffset}`, () => {
+            Object.assign(globalThis, { GPUBufferUsage: { VERTEX: 1, INDEX: 2, UNIFORM: 4, COPY_DST: 8, COPY_SRC: 16 } });
+            const writes: Array<{ offset: number; bytes: number[] }> = [];
+            const device = {
+                createBuffer: () => ({}), createSampler: () => ({}),
+                queue: { writeBuffer: (_buffer: GPUBuffer, offset: number, bytes: Uint8Array, start = 0, size = bytes.length) => {
+                    writes.push({ offset, bytes: [...bytes.subarray(start, start + size)] });
+                } },
+            };
+            const renderer = new D3D11Renderer({ getDevice: () => device } as any);
+            const buffer = renderer.createBuffer(24, 0);
+            writes.length = 0;
+            const bytes = new Uint8Array(new ArrayBuffer(16 + sourceOffset), sourceOffset, 16);
+
+            renderer.updateBuffer(buffer, bytes, 4, MAP_WRITE_NO_OVERWRITE);
+            expect(writes).toEqual([]);
+            bytes[5] = 41;
+            bytes[9] = 42;
+            renderer.updateBuffer(buffer, bytes, 4, MAP_WRITE_NO_OVERWRITE);
+            expect(writes).toEqual([{ offset: 8, bytes: [0, 41, 0, 0, 0, 42, 0, 0] }]);
+            expect(buffer.shadow.subarray(4, 20)).toEqual(bytes);
+            renderer.updateBuffer(buffer, bytes, 4, MAP_WRITE_NO_OVERWRITE);
+            expect(writes).toHaveLength(1);
+        });
+    }
+});
+
 describe("D3D11Device CopySubresourceRegion, Map and Unmap", () => {
     let mem: Uint8Array;
     let calls: Array<[string, ...unknown[]]>;

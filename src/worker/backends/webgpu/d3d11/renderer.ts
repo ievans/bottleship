@@ -209,12 +209,22 @@ export class D3D11Renderer implements RenderActive {
         if (mapType === MAP_WRITE_NO_OVERWRITE) {
             // The caller promises not to touch bytes a pending draw reads, so the changed
             // span can be written where draws already look.
-            let lo = -1, hi = -1;
-            for (let i = 0; i < bytes.length; i++) {
-                if (bytes[i] !== buf.shadow[offset + i]) { if (lo < 0) lo = i; hi = i; }
-            }
-            if (lo < 0) return;
-            const start = lo & ~3, end = Math.min(bytes.length, (hi + 4) & ~3);
+            // Scan from the two ends in upload-sized words when the views are
+            // aligned. Everything between the first and last difference is copied
+            // anyway, so finding more differences there cannot narrow the upload.
+            const shadowOffset = buf.shadow.byteOffset + offset;
+            const wordAligned = ((bytes.byteOffset | shadowOffset | bytes.length) & 3) === 0;
+            const step = wordAligned ? 4 : 1;
+            const count = bytes.length / step;
+            const incoming = wordAligned ? new Uint32Array(bytes.buffer, bytes.byteOffset, count) : bytes;
+            const previous = wordAligned ? new Uint32Array(buf.shadow.buffer, shadowOffset, count) : buf.shadow.subarray(offset, offset + bytes.length);
+            let first = 0;
+            while (first < count && incoming[first] === previous[first]) first++;
+            if (first === count) return;
+            let last = count - 1;
+            while (last > first && incoming[last] === previous[last]) last--;
+            const start = (first * step) & ~3;
+            const end = Math.min(bytes.length, (last * step + 4) & ~3);
             buf.shadow.set(bytes.subarray(start, end), offset + start);
             this.device.queue.writeBuffer(buf.current.buffer, buf.current.offset + offset + start, buf.shadow, offset + start, end - start);
             return;
