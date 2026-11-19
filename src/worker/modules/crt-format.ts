@@ -70,6 +70,8 @@ export interface FormatCLazyOptions {
     readString?: (addr: number, wide: boolean, precision: number | null) => string;
     /** Reader for wide (UTF-16) guest strings; required for wide %s/%S resolution. */
     readWString?: (addr: number, maxChars: number) => string;
+    /** Position of a high byte emitted by a narrow character conversion. */
+    onNarrowByte?: (offset: number, byte: number) => void;
 }
 
 /**
@@ -293,18 +295,14 @@ export function formatCLazy(
             case "o":
                 result += formatInt(reader.nextUint32(), 8, false, false, width, precision, zeroPad, leftAlign, false, false, alt);
                 break;
-            case "c": {
-                // Wide context (or %lc/%wc) → 16-bit char; narrow → 8-bit.
-                const useWide = sIsWide(wideCtx);
-                const ch = String.fromCharCode(reader.nextUint32() & (useWide ? 0xFFFF : 0xFF));
-                result += pad(ch, width, leftAlign);
-                break;
-            }
+            case "c":
             case "C": {
-                // %C is the opposite char width of the family default.
-                const useWide = sIsWide(!wideCtx);
-                const ch = String.fromCharCode(reader.nextUint32() & (useWide ? 0xFFFF : 0xFF));
-                result += pad(ch, width, leftAlign);
+                const useWide = sIsWide(spec === "c" ? wideCtx : !wideCtx);
+                const ch = reader.nextUint32() & (useWide ? 0xffff : 0xff);
+                if (!useWide && ch >= 0x80) {
+                    opts?.onNarrowByte?.(result.length + (leftAlign ? 0 : Math.max(0, width - 1)), ch);
+                }
+                result += pad(String.fromCharCode(ch), width, leftAlign);
                 break;
             }
             case "p": {
@@ -327,6 +325,39 @@ export function formatCLazy(
         }
     }
     return result;
+}
+
+/** Format narrow printf output, keeping character arguments as single bytes. */
+export function formatCAnsi(
+    format: string,
+    reader: VaListReader | ArrayVaListReader,
+    readCString: (addr: number, maxLen: number) => string,
+): Uint8Array {
+    const narrowBytes: Array<{ offset: number; byte: number }> = [];
+    const text = formatCLazy(format, reader, readCString, {
+        onNarrowByte: (offset, byte) => narrowBytes.push({ offset, byte }),
+    });
+    if (narrowBytes.length === 0) return encodeAnsi(text);
+
+    // Encode the text around each raw byte. Even a lead byte in a multibyte
+    // code page is written unchanged when supplied as a narrow %c argument.
+    let start = 0;
+    const chunks = narrowBytes.map(({ offset, byte }) => {
+        const prefix = encodeAnsi(text.slice(start, offset));
+        start = offset + 1;
+        return { prefix, byte };
+    });
+    const tail = encodeAnsi(text.slice(start));
+    const length = chunks.reduce((total, { prefix }) => total + prefix.length + 1, tail.length);
+    const bytes = new Uint8Array(length);
+    let cursor = 0;
+    for (const { prefix, byte } of chunks) {
+        bytes.set(prefix, cursor);
+        cursor += prefix.length;
+        bytes[cursor++] = byte;
+    }
+    bytes.set(tail, cursor);
+    return bytes;
 }
 
 /**
