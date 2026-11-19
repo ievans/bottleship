@@ -18,7 +18,7 @@ import { System } from "../../src/worker/core/system";
 import { ThunkGenerator } from "../../src/worker/core/thunking/thunk-generator";
 import { LanNetwork, nodeToIpv4 } from "../../src/worker/net/lan-network";
 import { DN, decodeNativeProtocolFrame } from "../../src/worker/modules/dpnet/native-wire/frame-codec";
-import { PROTO_UDP, decodeDatagram, encodeDatagram } from "../../src/worker/net/netplay-wire";
+import { PROTO_UDP, PROTO_DIRECTPLAY, decodeDatagram, encodeDatagram, isBroadcastNode } from "../../src/worker/net/netplay-wire";
 import { decodeNativeEnumQuery, encodeNativeEnumResponse } from "../../src/worker/modules/dpnet/native-wire/discovery-codec";
 import type { Process } from "../../src/worker/core/process";
 import type { ThunkImplementation, ThunkResult, X86Context } from "../../src/worker/core/thunking/thunk-dispatcher";
@@ -507,6 +507,67 @@ test("DP8 Close waits for destroy callbacks and owner-safe finalization permits 
     const result = await pending; expect(result.value).toBe(0);
     expect(result.startCallbackChain?.({ esp: 0x9000, mem: ram })).toBe(false);
     expect(call("GetCaps", [0x3000, 0])).toBe(DPN.UNINITIALIZED); initialize();
+});
+
+test("a provider-only EnumHosts broadcasts and delivers a late response until canceled", async () => {
+    initialize();
+    const hostNet = new LanNetwork(Uint8Array.of(2, 0, 0, 0, 0, 2));
+    const host = new DirectPlay8Session(hostNet, "peer");
+    let requests = 0, reply: Uint8Array | undefined;
+    network.attach({ send(frame) {
+        const request = decodeDatagram(frame)!;
+        expect(request.proto).toBe(PROTO_DIRECTPLAY);
+        expect(isBroadcastNode(request.node)).toBe(true);
+        requests++;
+        hostNet.receiveFrame(encodeDatagram(request.proto, network.node, request.dstPort, request.srcPort, request.payload));
+        return true;
+    }, close() {} });
+    hostNet.attach({ send(frame) {
+        const packet = decodeDatagram(frame)!;
+        reply = encodeDatagram(packet.proto, hostNet.node, packet.dstPort, packet.srcPort, packet.payload);
+        return true;
+    }, close() {} });
+    try {
+        const app = "a".repeat(32);
+        expect(host.initialize()).toBe(DPN.OK);
+        expect(host.host({ application: app, instance: "0".repeat(32), maxPlayers: 4,
+            flags: 0, name: "Remote host", password: "", user: [0, 0, 0, 0], extended: { flags: 0, reserved: [], application: [] } })).toBe(DPN.OK);
+        const address = new DirectPlayAddress();
+        address.setGuid("provider", DP8_TCPIP);
+        const addressPtr = addresses.create(address);
+        write(0x4000, 72); ram.set(guidBytes(app), 0x4018);
+        const args = [0x4000, addressPtr, 0, 0, 0, 1, 1, 0xffffffff, 0x123, 0x4100];
+        expect(call("EnumHosts", [...args, 2])).toBe(DPN.INVALIDHOSTADDRESS);
+        expect(call("EnumHosts", [...args, 0])).toBe(DPN.PENDING);
+        const handle = read(0x4100);
+        await Bun.sleep(15);
+        expect(requests).toBe(1);
+        expect(reply).toBeDefined();
+        network.receiveFrame(reply!);
+        const messages: number[] = [];
+        callbacks((message, ptr) => {
+            messages.push(message);
+            expect(read(ptr + 24)).toBe(0x123);
+            expect(addresses.address(read(ptr + 4))!.dword("port")).toBe(host.engine.localAddress.port);
+            return 0;
+        });
+        expect(messages).toEqual([0xb]);
+
+        expect(call("CancelAsyncOperation", [handle, 0])).toBe(DPN.OK);
+        await Promise.resolve();
+        network.receiveFrame(reply!);
+        callbacks((message, ptr) => {
+            messages.push(message);
+            expect(read(ptr + 4)).toBe(handle);
+            expect(read(ptr + 12)).toBe(DPN.USERCANCEL);
+            return 0;
+        });
+        expect(messages).toEqual([0xb, 3]);
+    } finally {
+        host.dispose();
+        network.attach(null);
+        hostNet.attach(null);
+    }
 });
 
 test("guest EnumHosts uses native UDP for an external TCPIP host and packs callbacks only at the owner safe point", async () => {
