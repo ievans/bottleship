@@ -26,7 +26,10 @@ jobs:
   # is the one toolchain confirmed (by hand, matching this lock) to reproduce them.
   build-wasm-clang:
     name: Build wasm (clang/rustc targets)
-    runs-on: macos-14
+    # macos-14 was retired by GitHub on 2026-11-02; macos-15 is the current supported LTS-ish
+    # label. Pinned rather than macos-latest so an image bump needs a reviewed commit here,
+    # same as the ubuntu-24.04 pin below.
+    runs-on: macos-15
     timeout-minutes: 40
     env:
       # Must match the `=` pin in tools/build-unpack-buffered/Cargo.toml.
