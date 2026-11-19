@@ -55,6 +55,8 @@ export class DirectPlay8NetworkApi {
             state = { session: new DirectPlay8Session(this.network, role), generation: 0, nextHandle: 1,
                 operations: new Map(), connectOwners: new Set(), enumOwners: new Set(), enumResponses: new Set(), closing: false, pendingConnect: false, connectGeneration: 0, lobbyEvents: new WeakSet(), sends: null!, sendRecords: new Map(), caps: [20, 0, 200, 14, 25000], spcaps: new Map(), stats: new Map() };
             const owner = state;
+            // A guest can enqueue a burst of small reliable messages before the worker drains
+            // its next turn. The send queue also bounds the total bytes held by queued jobs.
             state.sends = new DirectPlaySendQueue((job, data, settled) => {
                 const record = owner.sendRecords.get(job.context);
                 return owner.session.send(job.to, record?.flags ?? 0, data, job.signal, metadata => record?.localOperation?.delivered(metadata), settled);
@@ -77,7 +79,7 @@ export class DirectPlay8NetworkApi {
                 }, () => { release(); }, release, record) ?? false;
                 if (accepted) owner.sendRecords.delete(completion.context);
                 return accepted;
-            });
+            }, undefined, { jobs: 4096 });
             state.session.onEvent = event => {
                 if (owner.lobby && !owner.closing && (event.type === 0xd || event.type === 0x16) && !owner.lobbyEvents.has(event)) {
                     if (!owner.lobby.tryPublish(event.type === 0x16 ? 3 : event.id === owner.session.localId ? 6 : 5)) return false;
