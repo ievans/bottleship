@@ -20,8 +20,13 @@ permissions:
   contents: read
 
 jobs:
+  # video-decoder.wasm is intentionally not built here: its reproducibility is already
+  # guaranteed a different way (a pinned Docker image digest, Linux-only), and no Linux
+  # clang-18 build — distro or apt.llvm.org — reproduces the OTHER targets' committed
+  # bytes even at an identical nominal clang version (see ci.yml's build-wasm-clang job
+  # for the long version). Homebrew's llvm@18 is the one confirmed-working toolchain.
   reproduce:
-    runs-on: ubuntu-24.04
+    runs-on: macos-15
     timeout-minutes: 120
     env:
       WASM_BINDGEN_VERSION: "0.2.123"
@@ -43,15 +48,15 @@ jobs:
 
       - name: Install pinned toolchain
         run: |
-          cd first/bottleship && rustup toolchain install
-          sudo apt-get install -y --no-install-recommends clang-18
-          sudo ln -sf /usr/bin/clang-18 /usr/local/bin/clang
+          cd first/bottleship && rustup toolchain install && cd -
+          brew install llvm@18
+          echo "$(brew --prefix llvm@18)/bin" >> "$GITHUB_PATH"
           cargo install wasm-bindgen-cli --locked --version "$WASM_BINDGEN_VERSION"
 
       - name: Build and verify (first path)
         working-directory: first/bottleship
-        run: bun tools/build-wasm/build.ts --force
+        run: clang --version && bun tools/build-wasm/build.ts --force dxt-kernel unpack-streaming unpack-buffered v86
 
       - name: Build and verify (second path)
         working-directory: second/checkout/bottleship
-        run: bun tools/build-wasm/build.ts --force
+        run: bun tools/build-wasm/build.ts --force dxt-kernel unpack-streaming unpack-buffered v86
