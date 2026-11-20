@@ -61,6 +61,17 @@ afterEach(async () => {
 });
 
 describe('CRT binary integers and wide stdio', () => {
+    test('fprintf writes narrow characters as single bytes in any active code page', async () => {
+        const format = 0x200;
+        mem.set(new TextEncoder().encode('%c%3c%-2c%hc'), format);
+        for (const codePage of [1252, 65001, 932]) {
+            EmulatorConfig.getInstance().ansiCodePage = codePage;
+            const fp = await open();
+            expect(crt.fprintf([fp, format, 0x1f, 0x8b, -1, 0])).toBe(7);
+            expect(contents(fp)).toEqual([0x1f, 0x20, 0x20, 0x8b, 0xff, 0x20, 0]);
+        }
+    });
+
     test('declarations are cdecl and use actual argument counts', () => {
         for (const [name, count] of Object.entries({ _getw: 1, _putw: 2, fgetwc: 1, fputwc: 2, ungetwc: 2, tmpfile: 0 })) {
             const f = msvcrtModule.functions.find(f => f.name === name)!;

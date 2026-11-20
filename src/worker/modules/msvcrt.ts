@@ -23,7 +23,7 @@ import {
 } from "../core/fpu-helper";
 import { getCPU, getMemory } from "../core/thunking/thunk-utils";
 import { Marshaler } from "../core/memory/marshaler";
-import { VaListReader, ArrayVaListReader, encodeAnsi, formatCLazy } from "./crt-format";
+import { VaListReader, ArrayVaListReader, encodeAnsi, formatCAnsi, formatCLazy } from "./crt-format";
 import { scanfCore } from "./crt-scanf";
 import { getCodePageDecoder } from "./codepage-utils";
 import { invalidateLocaleCache, retireLocaleStubTable } from "./kernel32/locale-data";
@@ -4155,11 +4155,11 @@ export class Msvcrt implements IModule {
         const stream = this.fileStreams.get(filePtr);
         if (!stream || !fmtPtr) return -1;
         const format = this.readCString(fmtPtr, 0x100000);
-        const text = formatCLazy(format, reader, (addr, maxLen) => this.readCString(addr, maxLen));
+        const bytes = formatCAnsi(format, reader, (addr, maxLen) => this.readCString(addr, maxLen));
         this.flushGetcBuffer(filePtr, stream.handle);
-        const written = System.getInstance().fileSystem.writeSync(stream.handle, encodeAnsi(text));
+        const written = System.getInstance().fileSystem.writeSync(stream.handle, bytes);
         if (written < 0) { stream.err = true; return -1; }
-        return text.length;
+        return bytes.length;
     }
 
     // ==================== Character classification ====================
