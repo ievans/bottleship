@@ -170,25 +170,59 @@ test("send admission preserves output handles under callback pressure and delive
     await host();
     const state = [...(api as unknown as { states: Map<number, {
         callbacks: { native(type: number, size: number): boolean };
-        sends: { pending: unknown[]; reservedJobs: number; pendingBytes: number };
+        sends: { pending: unknown[]; reservedJobs: number; pendingBytes: number; maxJobs: number };
         sendRecords: Map<number, unknown>;
     }> }).states.values()][0];
     let filled = 0; while (state.callbacks.native(2, 0)) { filled++; if (filled > 3000) throw Error("Callback queue admission is unbounded"); }
     expect(filled).toBeGreaterThan(256);
     ram.set([9], 0x3500); write(0x3400, 1); write(0x3404, 0x3500);
     const admitted: number[] = [];
-    for (let i = 0; i < 256; i++) {
+    for (let i = 0; i < state.sends.maxJobs; i++) {
         expect(call("SendTo", [0, 0x3400, 1, 0, i, 0x3600, 0x20])).toBe(DPN.PENDING); admitted.push(read(0x3600));
     }
     write(0x3600, 0xcccccccc); expect(call("SendTo", [0, 0x3400, 1, 0, 999, 0x3600, 0x20])).toBe(DPN.OUTOFMEMORY); expect(read(0x3600)).toBe(0xcccccccc);
     const deadline = Date.now() + 2000; while (state.sends.pending.length) { if (Date.now() >= deadline) throw Error("Queued sends did not complete"); await Bun.sleep(1); }
-    expect(state.sends.pendingBytes).toBe(0); expect(state.sends.reservedJobs).toBe(256); expect(state.sendRecords.size).toBe(256);
+    expect(state.sends.pendingBytes).toBe(0); expect(state.sends.reservedJobs).toBe(admitted.length); expect(state.sendRecords.size).toBe(admitted.length);
     const completed: number[] = [];
     callbacks((message, ptr) => { if (message === 2) return 0; expect(message).toBe(0x14); expect(read(ptr + 12)).toBe(0); completed.push(read(ptr + 4)); return 0; });
-    expect(completed).toEqual(admitted); expect(new Set(completed).size).toBe(256); expect(state.sendRecords.size).toBe(0); expect(state.sends.reservedJobs).toBe(0);
+    expect(completed).toEqual(admitted); expect(new Set(completed).size).toBe(admitted.length); expect(state.sendRecords.size).toBe(0); expect(state.sends.reservedJobs).toBe(0);
     await Bun.sleep(8); callbacks(() => { throw Error("Duplicated completion"); });
     expect(call("SendTo", [0, 0x3400, 1, 0, 1000, 0x3600, 0x20])).toBe(DPN.PENDING); await Bun.sleep(8); let last = 0;
     callbacks((message, ptr) => { expect(message).toBe(0x14); expect(read(ptr + 8)).toBe(1000); last++; return 0; }); expect(last).toBe(1);
+});
+
+test("DP8 admits and completes a burst of small guaranteed sends in order", async () => {
+    await host();
+    const packetCount = 1200;
+    const state = [...(api as unknown as { states: Map<number, { session: DirectPlay8Session; sends: { pending: unknown[] } }> }).states.values()][0];
+    const delivered: number[] = [];
+    state.session.send = (_to, flags, data) => {
+        expect(flags).toBe(0x128);
+        expect(data.length).toBe(259);
+        delivered.push(new DataView(data.buffer, data.byteOffset, data.byteLength).getUint32(0, true));
+        return DPN.OK;
+    };
+    write(0x3400, 259);
+    write(0x3404, 0x3500);
+    const expected = Array.from({ length: packetCount }, (_, i) => i);
+    for (const index of expected) {
+        write(0x3500, index);
+        expect(call("SendTo", [0, 0x3400, 1, 0, index, 0x3700, 0x128])).toBe(DPN.PENDING);
+    }
+    const deadline = Date.now() + 2000;
+    while (state.sends.pending.length) {
+        if (Date.now() >= deadline) throw Error("Queued sends did not complete");
+        await Bun.sleep(1);
+    }
+    const completed: number[] = [];
+    callbacks((message, ptr) => {
+        expect(message).toBe(0x14);
+        expect(read(ptr + 12)).toBe(DPN.OK);
+        completed.push(read(ptr + 8));
+        return DPN.OK;
+    });
+    expect(delivered).toEqual(expected);
+    expect(completed).toEqual(expected);
 });
 test("Close delivers blocked send completions while reset abandons the old lifetime before fresh initialization", async () => {
     for (const closing of [true, false]) {
