@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.8.5](https://github.com/ievans/bottleship/compare/v0.8.4...v0.8.5) (2026-11-20)
+
+
+### Bug Fixes
+
+* align compatibility contributions and regression coverage ([0b86a76](https://github.com/ievans/bottleship/commit/0b86a7667bc7f19ee7f26c550077bdf54fc6fd28))
+* **crt:** commit writable streams on fclose ([#111](https://github.com/ievans/bottleship/issues/111)) ([00fa237](https://github.com/ievans/bottleship/commit/00fa23713cb4d7cb2475e663f7c50b199c1752f3))
+* **crt:** preserve narrow fprintf character bytes ([#109](https://github.com/ievans/bottleship/issues/109)) ([5e70b90](https://github.com/ievans/bottleship/commit/5e70b90cddaa2cfe0647d7cb2186c5234c74273c))
+* **d3d8:** mirror buffer retirement review fixes ([220b753](https://github.com/ievans/bottleship/commit/220b7538f7884caa108e7be5697869c1dac919e7))
+* **dmusic:** complete default path tracking and released path cleanup ([a432b1a](https://github.com/ievans/bottleship/commit/a432b1aca6655e24de512d0c99d1e7eee9bdf705))
+* **dmusic:** preserve default path buffer support during implicit playback ([8bd1eec](https://github.com/ievans/bottleship/commit/8bd1eec4046ad4eb54877e1e0b077e2fab073734))
+* **dpnet:** admit bursts of small reliable sends ([#110](https://github.com/ievans/bottleship/issues/110)) ([a1b56b1](https://github.com/ievans/bottleship/commit/a1b56b1271d23c4cf2704f367fba9504d25a3f23))
+* **dpnet:** broadcast provider-only host enumerations ([#107](https://github.com/ievans/bottleship/issues/107)) ([83ed6e3](https://github.com/ievans/bottleship/commit/83ed6e3712bed30f4e3a8a47e1c5eb3d436b4a15))
+* **gdi32:** preserve existing font resources and reject unsupported hidden visibility ([fa35a63](https://github.com/ievans/bottleship/commit/fa35a63046f6af03ef9cce00538c0969a874e1dd))
+* **gdi32:** reject unsupported glyph rasterization flags ([d527511](https://github.com/ievans/bottleship/commit/d5275117f162f8603643d5b1a0f9c769bf36c118))
+* **kernel32:** retain DLL ownership when detach setup throws ([35ca983](https://github.com/ievans/bottleship/commit/35ca9838c1ad9fba87b10f8881bf5cfeaed8986a))
+* mirror focused upstream compatibility refinements ([a54c599](https://github.com/ievans/bottleship/commit/a54c59979aa9912bc457fe163f618c9e71b7c721))
+* mirror secure CRT and GDI contribution refinements ([5dc5cac](https://github.com/ievans/bottleship/commit/5dc5cac824b6ff1d2ddfbee2a1635c59996ca833))
+* mirror upstream CRT and registry review revisions ([0d3d90d](https://github.com/ievans/bottleship/commit/0d3d90d9f3bdb266c073dd78f160e317e6c8bb47))
+* mirror upstream review refinements ([3a40e6f](https://github.com/ievans/bottleship/commit/3a40e6f413c76320fb16620bdacd5c537baf1a92))
+* **msvcrt:** mirror checked input reads and precise CRT fault addresses ([abd9422](https://github.com/ievans/bottleship/commit/abd9422bafbd18d61d01859dafe83fcbd4e7c862))
+* **msvcrt:** mirror executable write publication and regressions ([b640773](https://github.com/ievans/bottleship/commit/b640773a3121d4139621967008e866dc3557f3e5))
+* **msvcrt:** mirror guest fault delivery for wide CRT exports ([9f6cca4](https://github.com/ievans/bottleship/commit/9f6cca4a0347a2eb660175fd68ee000ac021bc4d))
+* **msvcrt:** mirror production CRT user-pointer admission ([deb1345](https://github.com/ievans/bottleship/commit/deb13450e1f33391ea34d98b8d75d145246db509))
+* reconcile redundant dialog and wave rendering code ([f4cef79](https://github.com/ievans/bottleship/commit/f4cef79ee0547d6e1c39c1c89b395eaf562753b4))
+* scope Pointer Lock cursor resume to the session that claimed it ([#112](https://github.com/ievans/bottleship/issues/112)) ([ce9540e](https://github.com/ievans/bottleship/commit/ce9540eeed00fdaf2092fb2b0b50bea9162b47ac))
+* stop Pointer Lock from teleporting the cursor at a text field's edge ([#103](https://github.com/ievans/bottleship/issues/103)) ([350542c](https://github.com/ievans/bottleship/commit/350542c47b89a2d7e6a4f8496c84e63427cb78c4))
+* **user32:** preserve the shared PeekMessage queue flag ([#106](https://github.com/ievans/bottleship/issues/106)) ([971625d](https://github.com/ievans/bottleship/commit/971625d3cc4f53046a5f3ac165a2d05fa146e81a))
+
+
+### Performance Improvements
+
+* **d3d11:** narrow NO_OVERWRITE buffer scans ([#108](https://github.com/ievans/bottleship/issues/108)) ([8e8097a](https://github.com/ievans/bottleship/commit/8e8097adda304ac3dc319bbc0e77c33b81b99a79))
+
 ## [0.8.4](https://github.com/ievans/bottleship/compare/v0.8.3...v0.8.4) (2026-11-12)
 
 
