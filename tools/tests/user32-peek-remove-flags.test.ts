@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
+import { hypercallDataManager } from "../../src/worker/core/cpu/hypercall-data";
 import { System } from "../../src/worker/core/system";
 import { createMessageExports, registerFastPathMessageFunctions } from "../../src/worker/modules/user32/message";
 import { isSentinelWndProc } from "../../src/worker/modules/user32/dialog";
@@ -44,6 +45,31 @@ describe("PeekMessage removal flags on both tiers", () => {
                 }
             });
         }
+    }
+});
+
+test("a filtered PeekMessage miss leaves queued messages visible to the WASM tier", () => {
+    const manager = system.windowManager;
+    const poll = spyOn(system.inputManager, "poll").mockImplementation(() => {});
+    const sharedFlag = spyOn(hypercallDataManager, "updateMessageQueueFlag");
+    const message = 0x401;
+    const peek = (min: number, max: number) => {
+        const args = [out, 0, min, max, 1];
+        for (let i = 0; i < args.length; i++) view.setUint32(esp + 4 + i * 4, args[i], true);
+        return fastPaths.get("PeekMessageW")!(esp, view, memory);
+    };
+
+    try {
+        manager.postMessage(0, message, 7, 0);
+        expect(peek(0x113, 0x113)).toBe(0);
+        expect(sharedFlag).toHaveBeenLastCalledWith(true);
+        expect(peek(0, 0)).toBe(1);
+        expect(view.getUint32(out + 4, true)).toBe(message);
+        expect(sharedFlag).toHaveBeenLastCalledWith(false);
+    } finally {
+        manager.getMessage();
+        sharedFlag.mockRestore();
+        poll.mockRestore();
     }
 });
 
