@@ -3460,6 +3460,15 @@ export class Msvcrt implements IModule {
             );
         }
         if (!handleClosed) { this.setErrno(9); return -1; }
+        const writeAccess = 0x40000000 | 0x10000000 | 0x0002 | 0x0004;
+        if (stream.handle.source === "overlay" && (stream.handle.access & writeAccess) !== 0) {
+            // Buffered CRT writes are visible in memory, but OPFS stages them until the
+            // writable closes. Complete that commit before reporting a successful fclose.
+            return System.getInstance().fileSystem.flushFile(stream.handle.path).then(
+                () => ({ value: 0, stackCleanup: 0 }),
+                () => { this.setErrno(5); return { value: -1, stackCleanup: 0 }; },
+            );
+        }
         return 0;
     }
 
