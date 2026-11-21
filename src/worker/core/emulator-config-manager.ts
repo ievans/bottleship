@@ -386,6 +386,10 @@ export class EmulatorConfig {
     // RegistryStore.setRedirectsForImage.
     public registryRedirects: ExeRegistryRedirect[] = [];
 
+    // Extra process environment variables from the manifest, layered onto
+    // Process.setDefaultEnvironment()'s built-in set rather than replacing it.
+    public environment: Record<string, string> = {};
+
     // VFS paths to delete from CoW overlay on every boot
     public deleteOnBoot: string[] = [];
 
@@ -694,6 +698,15 @@ export class EmulatorConfig {
             );
         }
 
+        if (config.environment && Object.keys(config.environment).length > 0) {
+            this.environment = Object.fromEntries(
+                Object.entries(config.environment).filter(([k, v]) => k.length > 0 && typeof v === "string"));
+            Logger.log(
+                LogCategory.SYSTEM,
+                `EmulatorConfig: environment loaded: ${Object.keys(this.environment).join(", ")}`
+            );
+        }
+
         // Apply deleteOnBoot list
         if (config.deleteOnBoot && config.deleteOnBoot.length > 0) {
             this.deleteOnBoot = config.deleteOnBoot
@@ -773,6 +786,7 @@ export class EmulatorConfig {
         this.appDirDlls = [];
         this.crtBinding = "auto";
         this.registryRedirects = [];
+        this.environment = {};
         this.deleteOnBoot = [];
         this.writeFiles = [];
         this.createDirs = [];

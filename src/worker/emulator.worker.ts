@@ -2113,6 +2113,14 @@ const loadBundleImpl = async (payload: { data?: Uint8Array; url?: string; blob?:
     const emulatorConfig = EmulatorConfig.getInstance();
     emulatorConfig.reset();
     emulatorConfig.applyFromManifest(bundle.manifest);
+    // Layered onto setDefaultEnvironment()'s built-in set, not a replacement — a manifest
+    // entry stands in for what a real launcher (Steam, a mod manager) would have set
+    // before exec'ing the game, on top of the normal Windows environment, not instead of it.
+    if (system.process) {
+      for (const [key, value] of Object.entries(emulatorConfig.environment)) {
+        system.process.environment.set(key.toUpperCase(), value);
+      }
+    }
     // The AOT cache key includes manifest-controlled CPU flags such as relaxed FPU,
     // so prepare only after the current bundle config has been applied.
     //
@@ -2592,6 +2600,13 @@ const initV86 = async (canvas: OffscreenCanvas) => {
       // Initialize System singleton
       const system = System.getInstance();
       system.initialize(process);
+
+      // Layered onto setDefaultEnvironment()'s built-in set, not a replacement — a manifest
+      // entry stands in for what a real launcher (Steam, a mod manager) would have set
+      // before exec'ing the game, on top of the normal Windows environment, not instead of it.
+      for (const [key, value] of Object.entries(EmulatorConfig.getInstance().environment)) {
+        process.environment.set(key.toUpperCase(), value);
+      }
 
       // Static Library HLE manager — wire before PE load so on-load hooks work.
       libHleManager.initialize({
