@@ -118,6 +118,11 @@ export const GOG_GALAXY_API_EXPORTS = {
     apps: '?Apps@api@galaxy@@YAPAVIApps@12@XZ',
     stats: '?Stats@api@galaxy@@YAPAVIStats@12@XZ',
     utils: '?Utils@api@galaxy@@YAPAVIUtils@12@XZ',
+    friends: '?Friends@api@galaxy@@YAPAVIFriends@12@XZ',
+    networking: '?Networking@api@galaxy@@YAPAVINetworking@12@XZ',
+    matchmaking: '?Matchmaking@api@galaxy@@YAPAVIMatchmaking@12@XZ',
+    listenerRegistrar: '?ListenerRegistrar@api@galaxy@@YAPAVIListenerRegistrar@12@XZ',
+    getError: '?GetError@api@galaxy@@YAPBVIError@12@XZ',
 } as const;
 
 /**
@@ -399,10 +404,114 @@ const IAppsFacade = facadeIface('IAppsFacade', [
     [4, 'GetCurrentGameLanguageCodeCopy'],
 ]);
 
+/**
+ * The free-function generation's Friends/Networking/Matchmaking facades — unlike the four
+ * above, PROVENANCE here is GOG's own public SDK docs (docs.gog.com/galaxyapi), not a
+ * disassembly: IFriends.h / INetworking.h / IMatchmaking.h declare these as plain,
+ * single-inheritance abstract classes, so declaration order is vtable order and each
+ * method's pushed-arg count is its parameter count — EXCEPT `GalaxyID`, which has a
+ * user-declared copy constructor (GalaxyID.h) and is therefore passed BY INVISIBLE
+ * REFERENCE under the MSVC x86 ABI even when written as pass-by-value in the header: every
+ * `GalaxyID` parameter, by value or by reference, costs exactly one pushed pointer. A
+ * method that RETURNS `GalaxyID` by value is the same non-trivial-class rule applied to
+ * returns: MSVC passes a hidden sret buffer as slot 0, so its arity is its header
+ * parameter count PLUS one (`sret(8)`, matching GalaxyID's `#pragma pack(1)` 8-byte size).
+ *
+ * The header is a snapshot of the CURRENT sdk, not necessarily what this build's Galaxy.dll
+ * shipped with, so header-derived arity is corroborated — not merely asserted — against
+ * `bun tools/re/re.ts vtable <Galaxy.dll> <Class@api@galaxy@@>` run on THIS title's own
+ * Galaxy.dll (needs no Ghidra project, so it never contends with the shared RE service):
+ * INetworking, IMatchmaking and IListenerRegistrar's real vtables measure 10/34/3 slots —
+ * an exact match for the current header. IFriends measures 39, two short of the header's
+ * 41 (destructor + 40 methods); `FindUser` and `IsUserInTheSameGame` are the last two
+ * methods the header declares, so they are dropped below as the SDK's newest additions,
+ * consistent with vtables only ever growing by appending.
+ */
+const IFriendsFacade = facadeIface('IFriendsFacade', [
+    [1, 'Destructor'],
+    [0, 'GetDefaultAvatarCriteria'],
+    [1, 'SetDefaultAvatarCriteria'],
+    [3, 'RequestUserInformation'],
+    [1, 'IsUserInformationAvailable'],
+    [0, 'GetPersonaName', str('')],
+    [2, 'GetPersonaNameCopy'],
+    [0, 'GetPersonaState'],
+    [1, 'GetFriendPersonaName', str('')],
+    [3, 'GetFriendPersonaNameCopy'],
+    [1, 'GetFriendPersonaState'],
+    [2, 'GetFriendAvatarUrl', str('')],
+    [4, 'GetFriendAvatarUrlCopy'],
+    [2, 'GetFriendAvatarImageID'],
+    [4, 'GetFriendAvatarImageRGBA'],
+    [2, 'IsFriendAvatarImageRGBAAvailable'],
+    [1, 'RequestFriendList'],
+    [1, 'IsFriend'],
+    [0, 'GetFriendCount'],
+    [2, 'GetFriendByIndex', sret(8)],
+    [2, 'SendFriendInvitation'],
+    [1, 'RequestFriendInvitationList'],
+    [1, 'RequestSentFriendInvitationList'],
+    [0, 'GetFriendInvitationCount'],
+    [3, 'GetFriendInvitationByIndex'],
+    [3, 'RespondToFriendInvitation'],
+    [2, 'DeleteFriend'],
+    [3, 'SetRichPresence'],
+    [2, 'DeleteRichPresence'],
+    [1, 'ClearRichPresence'],
+    [2, 'RequestRichPresence'],
+    [2, 'GetRichPresence', str('')],
+    [4, 'GetRichPresenceCopy'],
+    [1, 'GetRichPresenceCount'],
+    [6, 'GetRichPresenceByIndex'],
+    [2, 'GetRichPresenceKeyByIndex', str('')],
+    [4, 'GetRichPresenceKeyByIndexCopy'],
+    [1, 'ShowOverlayInviteDialog'],
+    [3, 'SendInvitation'],
+]);
+/** galaxy::api::INetworking — 10 slots, exactly as the header declares (no GalaxyID-by-value returns, so plain `iface`). */
+const INetworkingFacade = iface('INetworkingFacade', [1, 5, 5, 2, 5, 1, 1, 0, 0, 1]);
+const IMatchmakingFacade = facadeIface('IMatchmakingFacade', [
+    [1, 'Destructor'],
+    [6, 'CreateLobby'],
+    [2, 'RequestLobbyList'],
+    [1, 'AddRequestLobbyListResultCountFilter'],
+    [3, 'AddRequestLobbyListStringFilter'],
+    [3, 'AddRequestLobbyListNumericalFilter'],
+    [2, 'AddRequestLobbyListNearValueFilter'],
+    [2, 'GetLobbyByIndex', sret(8)],
+    [2, 'JoinLobby'],
+    [2, 'LeaveLobby'],
+    [3, 'SetMaxNumLobbyMembers'],
+    [1, 'GetMaxNumLobbyMembers'],
+    [1, 'GetNumLobbyMembers'],
+    [3, 'GetLobbyMemberByIndex', sret(8)],
+    [3, 'SetLobbyType'],
+    [1, 'GetLobbyType'],
+    [3, 'SetLobbyJoinable'],
+    [1, 'IsLobbyJoinable'],
+    [2, 'RequestLobbyData'],
+    [2, 'GetLobbyData', str('')],
+    [4, 'GetLobbyDataCopy'],
+    [4, 'SetLobbyData'],
+    [1, 'GetLobbyDataCount'],
+    [6, 'GetLobbyDataByIndex'],
+    [3, 'DeleteLobbyData'],
+    [3, 'GetLobbyMemberData', str('')],
+    [5, 'GetLobbyMemberDataCopy'],
+    [4, 'SetLobbyMemberData'],
+    [2, 'GetLobbyMemberDataCount'],
+    [7, 'GetLobbyMemberDataByIndex'],
+    [3, 'DeleteLobbyMemberData'],
+    [2, 'GetLobbyOwner', sret(8)],
+    [3, 'SendLobbyMessage'],
+    [5, 'GetLobbyMessage'],
+]);
+
 const INTERFACES: readonly InterfaceDescriptor[] = [
     IGalaxy, IErrorManager, IError,
     IUser, IFriends, IMatchmaking, INetworking, IStats, IListenerRegistrar, IGalaxyUnknown,
     IUserFacade, IStatsFacade, IUtilsFacade, IAppsFacade,
+    IFriendsFacade, INetworkingFacade, IMatchmakingFacade,
 ];
 
 const gogGalaxyDescriptor: ModuleDescriptor = {
@@ -583,6 +692,18 @@ export function createGogGalaxyExports(process: Process): Record<string, ThunkIm
     exports[GOG_GALAXY_API_EXPORTS.apps] = apiGetter('IAppsFacade');
     exports[GOG_GALAXY_API_EXPORTS.stats] = apiGetter('IStatsFacade');
     exports[GOG_GALAXY_API_EXPORTS.utils] = apiGetter('IUtilsFacade');
+    exports[GOG_GALAXY_API_EXPORTS.friends] = apiGetter('IFriendsFacade');
+    exports[GOG_GALAXY_API_EXPORTS.networking] = apiGetter('INetworkingFacade');
+    exports[GOG_GALAXY_API_EXPORTS.matchmaking] = apiGetter('IMatchmakingFacade');
+    // IListenerRegistrar's shape doesn't depend on which generation reaches it (measured
+    // 3 slots either way — see IGALAXY_GETTERS above), so the free-function accessor shares
+    // the same singleton/vtable as the factory generation's GetListenerRegistrar.
+    exports[GOG_GALAXY_API_EXPORTS.listenerRegistrar] = apiGetter('IListenerRegistrar');
+    // GetError reports the last api:: call. Every free-function path above (Init validates
+    // then always succeeds; the facade getters are unconditional once initialised) leaves
+    // nothing that can fail, so this always answers "no error" — the one legitimate NULL
+    // in this whole API (Errors.h: "the error from the last call, or NULL if none").
+    exports[GOG_GALAXY_API_EXPORTS.getError] = () => 0;
 
     // …and the slots where 0 is not a value the real method can return. Installed AFTER
     // the blanket no-op loop above, which is what makes that loop's "answer 0" a decision
