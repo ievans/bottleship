@@ -65,7 +65,7 @@ const EXTRA_DLLS = [
     "advapi32", "comctl32", "comdlg32", "crypt32", "dbghelp", "dsound", "gdi32",
     "gdiplus", "hid", "imagehlp", "imm32", "iphlpapi", "kernel32", "mpr", "msacm32",
     "msi", "msimg32", "msvfw32", "netapi32", "ntdll", "ole32", "oleacc", "oleaut32",
-    "olepro32", "opengl32", "psapi", "rpcrt4", "setupapi", "shell32", "shlwapi",
+    "olepro32", "opengl32", "psapi", "rpcrt4", "sensapi", "setupapi", "shell32", "shlwapi",
     "user32", "userenv", "usp10", "uxtheme", "version", "wininet", "winmm",
     "winspool.drv", "wintrust", "ws2_32", "wsock32", "wtsapi32", "xinput1_3",
 ];

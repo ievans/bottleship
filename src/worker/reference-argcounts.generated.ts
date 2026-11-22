@@ -9293,6 +9293,11 @@ export const REFERENCE_ARG_COUNTS: ReferenceArgCountMap = {
     "uuidtostringa": 2,
     "uuidtostringw": 2
   },
+  "sensapi": {
+    "isdestinationreachablea": 2,
+    "isdestinationreachablew": 2,
+    "isnetworkalive": 1
+  },
   "setupapi": {
     "assertfail": 3,
     "captureandconvertansiarg": 2,
