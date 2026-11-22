@@ -27,6 +27,7 @@ export const setupapiModule: ModuleDescriptor = {
         makeFunc("SetupDiGetClassDevsW", 4),
         makeFunc("SetupDiEnumDeviceInfo", 3),
         makeFunc("SetupDiEnumDeviceInterfaces", 5),
+        makeFunc("SetupDiGetDeviceInterfaceAlias", 4),
         makeFunc("SetupDiGetDeviceInterfaceDetailA", 6),
         makeFunc("SetupDiGetDeviceInterfaceDetailW", 6),
         makeFunc("SetupDiGetDeviceRegistryPropertyA", 7),
