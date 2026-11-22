@@ -6,7 +6,7 @@ import {DMusic} from "../../src/worker/modules/dmusic";
 import {
     CLSID_DirectMusic, CLSID_DirectMusicPerformance, CLSID_DirectMusicSegment, CLSID_DirectMusicBand,
     CLSID_DirectMusicStyle, CLSID_DirectMusicCollection, CLSID_DirectMusicLoader, IID_IUnknown, IID_IPersistStream,
-    type DMusicObject, type PerformanceObject, type SegmentObject, type PortObject, type LoadableObject,
+    GraphObject, type DMusicObject, type PerformanceObject, type SegmentObject, type PortObject, type LoadableObject,
 } from "../../src/worker/modules/dmusic-objects";
 import {PerfSegment, Performance} from "../../src/worker/core/audio/directmusic/performance";
 import {DlsSynth} from "../../src/worker/core/audio/directmusic/synth";
@@ -266,6 +266,38 @@ describe("DirectMusic streams and COM lifetimes", () => {
         expect(Mem.readUint32(0x6a0)).toBe(graph);
         expect(call("IDirectMusicGraph_StampPMsg", [graph, 0x700])).toBe(0);
         expect(call("IDirectMusicGraph_GetTool", [graph, 0, 0x6a4]) >>> 0).toBe(0x88781161); // DMUS_E_NOT_FOUND
+    });
+
+    test("immediate wave tools get the playback time and decoded duration", () => {
+        const perf = make<PerformanceObject>(CLSID_DirectMusicPerformance).obj;
+        perf.engine = new Performance(new DlsSynth(22_050, 8));
+        const graph = new GraphObject();
+        objects.push(graph);
+        graph.tools.push(0x3000);
+        const segment = new PerfSegment();
+        segment.wave = { rate: 22_050, frames: 44_100, left: new Float32Array(44_100), right: new Float32Array(44_100) };
+        const state = perf.engine.playSegment(segment, 0x80);
+        const routine = internals.deliverWaveToTools(perf, graph, state);
+        let step = routine.next();
+        expect(step.value.tag).toEndWith("GetMsgDeliveryType");
+        Mem.writeUint32(step.value.args[1], 4);
+        step = routine.next(0);
+        expect(step.value.tag).toEndWith("GetMediaTypeArraySize");
+        Mem.writeUint32(step.value.args[1], 1);
+        step = routine.next(0);
+        expect(step.value.tag).toEndWith("GetMediaTypes");
+        Mem.writeUint32(Mem.readUint32(step.value.args[1])!, 12);
+        step = routine.next(0);
+        expect(step.value.tag).toEndWith("ProcessPMsg(wave)");
+        const message = new DataView(mem.buffer, step.value.args[2], 88);
+        expect(message.getUint32(0, true)).toBe(88);
+        expect(message.getUint32(20, true)).toBe(7);
+        expect(message.getUint32(32, true)).toBe(0x3000);
+        expect(message.getUint32(36, true)).toBeGreaterThan(0);
+        expect(message.getUint32(40, true)).toBe(12);
+        expect(message.getBigInt64(64, true)).toBe(20_000_000n);
+        expect(routine.next(0)).toEqual({ done: true, value: 0 });
+        expect(heap.size).toBe(0);
     });
 
     test("LoadObjectFromFile searches the current directory before its configured directory", () => {

@@ -192,10 +192,7 @@ export class AudioPathObject extends DMusicObject {
     sink: DirectSoundSink | null = null;
 }
 
-/**
- * A tool graph. It holds the application's tools in order and gives them their Init call,
- * but the performance here renders without routing messages through them.
- */
+/** An audio path’s ordered chain of guest DirectMusic tools. */
 export class GraphObject extends DMusicObject {
     readonly primaryVtable = "IDirectMusicGraph";
     readonly interfaces = { [IID_IDirectMusicGraph]: "IDirectMusicGraph" };
