@@ -118,6 +118,11 @@ function unwrapBitmapObj(hBitmap: number): BitmapUserObj | null {
     return null;
 }
 
+export function is32bppDibSection(hBitmap: number): boolean {
+    const obj = unwrapBitmapObj(hBitmap);
+    return !!obj?.bitsPtr && !!obj.dibStride && (obj.dibBpp ?? 32) === 32;
+}
+
 function pixelsValid(obj: BitmapUserObj): boolean {
     return bitmapPixelsPopulated(obj);
 }
@@ -404,6 +409,7 @@ export function writeBackDibSectionRect(
     hBitmap: number,
     ctx: OffscreenCanvasRenderingContext2D,
     x: number, y: number, width: number, height: number,
+    options?: { encodeGray8Coverage?: boolean },
 ): void {
     if (!hBitmap) return;
     const obj = unwrapBitmapObj(hBitmap);
@@ -442,9 +448,20 @@ export function writeBackDibSectionRect(
         let o = obj.bitsPtr + dibY * obj.dibStride + cx * 4;
         let si = ry * cw * 4;
         for (let rx = 0; rx < cw; rx++, o += 4, si += 4) {
-            mem[o] = src[si + 2];
-            mem[o + 1] = src[si + 1];
-            mem[o + 2] = src[si];
+            if (options?.encodeGray8Coverage) {
+                // Some GDI text-atlas builders read the blue byte as a GGO_GRAY8
+                // coverage sample (0..64). Canvas gives us 0..255 blended pixels.
+                // Keep the antialias coverage in the range the guest expects instead
+                // of letting its later *4 conversion wrap every 64 levels.
+                const coverage = Math.round(src[si + 2]! * 64 / 255);
+                mem[o] = coverage;
+                mem[o + 1] = coverage;
+                mem[o + 2] = coverage;
+            } else {
+                mem[o] = src[si + 2];
+                mem[o + 1] = src[si + 1];
+                mem[o + 2] = src[si];
+            }
         }
     }
 }

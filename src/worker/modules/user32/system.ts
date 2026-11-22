@@ -445,7 +445,10 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
                 nextInputDesktop,
                 openInputDesktops: [...openInputDesktops],
                 nextIconHandle,
-                spiSettings: [...spiSettings],
+                spiSettings: [
+                    ...spiSettings,
+                    [SPI_GETFONTSMOOTHING, Number(System.getInstance().gdiContext.fontSmoothingEnabled)],
+                ],
                 sysColors: [...sysColors],
                 sysColorBrushes: [...sysColorBrushes],
             };
@@ -462,7 +465,10 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
             for (const h of s.openInputDesktops) openInputDesktops.add(h);
             nextIconHandle = s.nextIconHandle;
             spiSettings.clear();
-            for (const [k, v] of s.spiSettings) spiSettings.set(k, v);
+            for (const [k, v] of s.spiSettings) {
+                if (k === SPI_GETFONTSMOOTHING) System.getInstance().gdiContext.fontSmoothingEnabled = v !== 0;
+                else spiSettings.set(k, v);
+            }
             sysColors.clear();
             for (const [k, v] of s.sysColors) sysColors.set(k, v);
             sysColorBrushes.clear();
@@ -1863,7 +1869,6 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
         [SPI_GETSHOWSOUNDS, 0],
         [SPI_GETKEYBOARDPREF, 0],
         [SPI_GETSCREENREADER, 0],
-        [SPI_GETFONTSMOOTHING, 0],
         [SPI_GETLOWPOWERTIMEOUT, 0],
         [SPI_GETPOWEROFFTIMEOUT, 0],
         [SPI_GETLOWPOWERACTIVE, 0],
@@ -1905,7 +1910,6 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
         [SPI_SETFASTTASKSWITCH, SPI_GETFASTTASKSWITCH],
         [SPI_SETDRAGFULLWINDOWS, SPI_GETDRAGFULLWINDOWS],
         [SPI_SETSHOWSOUNDS, SPI_GETSHOWSOUNDS],
-        [SPI_SETFONTSMOOTHING, SPI_GETFONTSMOOTHING],
         [SPI_SETMOUSEHOVERWIDTH, SPI_GETMOUSEHOVERWIDTH],
         [SPI_SETMOUSEHOVERHEIGHT, SPI_GETMOUSEHOVERHEIGHT],
         [SPI_SETMOUSEHOVERTIME, SPI_GETMOUSEHOVERTIME],
@@ -1943,6 +1947,14 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
             return 1;
         };
         const logFontSize = wide ? 92 : 60;
+
+        if (uiAction === SPI_GETFONTSMOOTHING) {
+            return putDword(Number(System.getInstance().gdiContext.fontSmoothingEnabled));
+        }
+        if (uiAction === SPI_SETFONTSMOOTHING) {
+            System.getInstance().gdiContext.fontSmoothingEnabled = uiParam !== 0;
+            return 1;
+        }
 
         // A scalar GET: pvParam is a DWORD out-param. Never report success without
         // writing it — the caller cannot tell an unwritten buffer from an answer.
