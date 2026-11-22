@@ -1876,6 +1876,17 @@ export class Advapi32 implements IModule {
             return { value: 1, stackCleanup: 16 };
         };
 
+        // IsValidSecurityDescriptor - structural validity check on an absolute SECURITY_DESCRIPTOR
+        // BOOL IsValidSecurityDescriptor(PSECURITY_DESCRIPTOR pSecurityDescriptor)
+        this.exports["IsValidSecurityDescriptor"] = (ctx, mem, args) => {
+            const pSecurityDescriptor = args[0] >>> 0;
+            if (!pSecurityDescriptor || !isValidAddress(mem, pSecurityDescriptor, SECURITY_DESCRIPTOR_MIN_LENGTH, "r")) {
+                return { value: 0, stackCleanup: 4 };
+            }
+            const revision = Mem.readUint8(pSecurityDescriptor);
+            return { value: revision === SECURITY_DESCRIPTOR_REVISION ? 1 : 0, stackCleanup: 4 };
+        };
+
         // AddAccessAllowedAce - add an access-allowed ACE to an ACL
         // BOOL AddAccessAllowedAce(PACL pAcl, DWORD dwAceRevision, DWORD AccessMask, PSID pSid)
         this.exports["AddAccessAllowedAce"] = (ctx, mem, args) => {

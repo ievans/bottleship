@@ -1801,6 +1801,21 @@ export const exports: Record<string, ThunkImplementation> = {
         const CONTEXT_INTEGER = 0x00010002;
         const CONTEXT_CONTROL = 0x00010001;
         const CONTEXT_SEGMENTS = 0x00010004;
+        const CONTEXT_DEBUG_REGISTERS = 0x00010010;
+
+        // No guest-settable hardware breakpoints exist in this model, so the faithful answer
+        // is always "none armed" — but CONTEXT_DEBUG_REGISTERS must still be ANSWERED (zeroed)
+        // rather than left alone: callers routinely read Dr0-Dr3/Dr7 straight out of an
+        // uninitialized CONTEXT to detect a debugger's hardware breakpoints, and an untouched
+        // buffer hands back whatever garbage was already on the guest's stack as "yes".
+        if (contextFlags & CONTEXT_DEBUG_REGISTERS) {
+            view.setUint32(lpContext + 4, 0, true);  // Dr0
+            view.setUint32(lpContext + 8, 0, true);  // Dr1
+            view.setUint32(lpContext + 12, 0, true); // Dr2
+            view.setUint32(lpContext + 16, 0, true); // Dr3
+            view.setUint32(lpContext + 20, 0, true); // Dr6
+            view.setUint32(lpContext + 24, 0, true); // Dr7
+        }
 
         if (contextFlags & CONTEXT_INTEGER) {
             view.setUint32(lpContext + 156, threadCtx.edi, true);
