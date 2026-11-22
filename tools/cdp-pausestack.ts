@@ -14,6 +14,9 @@
 //   bun tools/cdp-pausestack.ts       # while the worker is pinned
 //
 // Flags: --port <n> (default 9333), --top <n> stack frames (default 30).
+// Honors BS_TAB like every other harness tool — pauses ONLY that session's tab,
+// never a sibling agent's, since Debugger.pause freezes the whole page.
+import { sessionFromEnv, sessionOwnsUrl } from "../src/harness/session";
 const arg = (k: string, d: string) => {
   const i = process.argv.indexOf(k);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : d;
@@ -24,9 +27,10 @@ const T = <X>(p: Promise<X>, ms: number, t: string) =>
   Promise.race([p, new Promise<X>((_, j) => setTimeout(() => j(new Error("timeout:" + t)), ms))]);
 
 try {
+  const session = sessionFromEnv(process.env);
   const list: any[] = await (await fetch(`http://localhost:${PORT}/json/list`)).json();
-  const page = list.find((t) => t.type === "page" && String(t.url).includes("game=dev"));
-  if (!page) { console.log("no game=dev page (run `bun tools/harness.ts up`)"); process.exit(1); }
+  const page = list.find((t) => t.type === "page" && String(t.url).includes("game=dev") && sessionOwnsUrl(t.url, session));
+  if (!page) { console.log(`no game=dev page for BS_TAB='${session}' (run `+"`bun tools/harness.ts up`"+`)`); process.exit(1); }
   console.log("page: " + page.url);
 
   const ws = new WebSocket(page.webSocketDebuggerUrl);
