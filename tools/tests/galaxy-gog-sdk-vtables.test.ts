@@ -49,8 +49,34 @@ const API_LAYOUTS: Record<string, number[]> = {
     IAppsFacade: [1, 2, 3, 2, 4, 2, 4],
 };
 
+/**
+ * galaxy::api::Friends/Networking/Matchmaking — same free-function generation as
+ * API_LAYOUTS above, but this title's Galaxy.dll never names its own slots the way The
+ * Bard's Tale's facades do, so PROVENANCE differs: these are transcribed from GOG's public
+ * SDK docs (docs.gog.com/galaxyapi — IFriends.h/INetworking.h/IMatchmaking.h), not a
+ * disassembly, then corroborated against THIS title's own shipped Galaxy.dll with
+ * `bun tools/re/re.ts vtable <dll> <Class@api@galaxy@@>` — which needs no Ghidra project,
+ * so it never contends with the shared RE service — for TOTAL SLOT COUNT only (that tool
+ * can't measure per-slot arity here: every slot is an indirect tail-jump trampoline, not a
+ * self-contained `ret N`). INetworking/IMatchmaking/IListenerRegistrar measured 10/34/3,
+ * an exact match for the current header; IFriends measured 39, two short of the header's
+ * 41, so `FindUser` and `IsUserInTheSameGame` — the header's last two declarations — are
+ * dropped as this build's SDK predating them (vtables only ever grow by appending).
+ */
+const HEADER_LAYOUTS: Record<string, number[]> = {
+    IFriendsFacade: [
+        1, 0, 1, 3, 1, 0, 2, 0, 1, 3, 1, 2, 4, 2, 4, 2, 1, 1, 0, 2,
+        2, 1, 1, 0, 3, 3, 2, 3, 2, 1, 2, 2, 4, 1, 6, 2, 4, 1, 3,
+    ],
+    INetworkingFacade: [1, 5, 5, 2, 5, 1, 1, 0, 0, 1],
+    IMatchmakingFacade: [
+        1, 6, 2, 1, 3, 3, 2, 2, 2, 2, 3, 1, 1, 3, 3, 1, 3, 1, 2, 2,
+        4, 4, 1, 6, 3, 3, 5, 4, 2, 7, 3, 2, 3, 5,
+    ],
+};
+
 describe("GOG Galaxy vtable layouts", () => {
-    for (const [name, args] of Object.entries({ ...FACTORY_LAYOUTS, ...API_LAYOUTS })) {
+    for (const [name, args] of Object.entries({ ...FACTORY_LAYOUTS, ...API_LAYOUTS, ...HEADER_LAYOUTS })) {
         test(`${name} publishes ${args.length} slots with the measured arities`, () => {
             const published = GOG_GALAXY_INTERFACE_LAYOUTS[name];
             expect(published).toBeDefined();
@@ -61,7 +87,7 @@ describe("GOG Galaxy vtable layouts", () => {
 
     test("every published interface is pinned here", () => {
         expect(Object.keys(GOG_GALAXY_INTERFACE_LAYOUTS).sort())
-            .toEqual([...Object.keys(FACTORY_LAYOUTS), ...Object.keys(API_LAYOUTS)].sort());
+            .toEqual([...Object.keys(FACTORY_LAYOUTS), ...Object.keys(API_LAYOUTS), ...Object.keys(HEADER_LAYOUTS)].sort());
     });
 
     test("slot 0 is MSVC's scalar deleting destructor everywhere — one pushed flag", () => {
@@ -107,6 +133,20 @@ const POINTER_SLOTS: Record<string, { kind: string; text?: string; bytes?: numbe
     // site in the image, and this is it.
     IAppsFacade_GetCurrentGameLanguage: { kind: "str", text: "english" },
     IAppsFacade_GetCurrentGameLanguageCode: { kind: "str", text: "en-US" },
+    // Header-derived (see HEADER_LAYOUTS above): GalaxyID is non-trivial-for-calls (a
+    // user-declared copy constructor — GalaxyID.h), so MSVC returns it by value through the
+    // same hidden-sret-buffer mechanism as IUserFacade_GetGalaxyID, 8 bytes either way.
+    IFriendsFacade_GetPersonaName: { kind: "str", text: "" },
+    IFriendsFacade_GetFriendPersonaName: { kind: "str", text: "" },
+    IFriendsFacade_GetFriendAvatarUrl: { kind: "str", text: "" },
+    IFriendsFacade_GetFriendByIndex: { kind: "sret", bytes: 8 },
+    IFriendsFacade_GetRichPresence: { kind: "str", text: "" },
+    IFriendsFacade_GetRichPresenceKeyByIndex: { kind: "str", text: "" },
+    IMatchmakingFacade_GetLobbyByIndex: { kind: "sret", bytes: 8 },
+    IMatchmakingFacade_GetLobbyMemberByIndex: { kind: "sret", bytes: 8 },
+    IMatchmakingFacade_GetLobbyData: { kind: "str", text: "" },
+    IMatchmakingFacade_GetLobbyMemberData: { kind: "str", text: "" },
+    IMatchmakingFacade_GetLobbyOwner: { kind: "sret", bytes: 8 },
 };
 
 describe("GOG Galaxy slot return kinds", () => {
@@ -146,10 +186,15 @@ describe("GOG Galaxy slot return kinds", () => {
 describe("GOG Galaxy exports", () => {
     const declared = new Map(galaxyModule.functions.map((f) => [f.name, f]));
 
-    test("the 7 free-function names the api generation imports are declared", () => {
+    test("the 12 free-function names the api generation imports are declared", () => {
         expect(Object.values(GOG_GALAXY_API_EXPORTS).sort()).toEqual([
             "?Apps@api@galaxy@@YAPAVIApps@12@XZ",
+            "?Friends@api@galaxy@@YAPAVIFriends@12@XZ",
+            "?GetError@api@galaxy@@YAPBVIError@12@XZ",
             "?Init@api@galaxy@@YAXABUInitOptions@12@@Z",
+            "?ListenerRegistrar@api@galaxy@@YAPAVIListenerRegistrar@12@XZ",
+            "?Matchmaking@api@galaxy@@YAPAVIMatchmaking@12@XZ",
+            "?Networking@api@galaxy@@YAPAVINetworking@12@XZ",
             "?ProcessData@api@galaxy@@YAXXZ",
             "?Shutdown@api@galaxy@@YAXXZ",
             "?Stats@api@galaxy@@YAPAVIStats@12@XZ",
