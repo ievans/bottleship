@@ -1,0 +1,25 @@
+{
+  "source": "sensapi.h (Windows SDK) — IsNetworkAlive/IsDestinationReachableA/W prototypes (MSDN)",
+  "generated": "2026-11-21T00:00:00.000Z",
+  "module": "sensapi",
+  "functions": [
+    {
+      "name": "IsNetworkAlive",
+      "argCount": 1,
+      "signature": "BOOL IsNetworkAlive(LPDWORD lpdwFlags)",
+      "returnType": "BOOL"
+    },
+    {
+      "name": "IsDestinationReachableA",
+      "argCount": 2,
+      "signature": "BOOL IsDestinationReachableA(LPCSTR lpszDestination, LPQOCINFO lpQOCInfo)",
+      "returnType": "BOOL"
+    },
+    {
+      "name": "IsDestinationReachableW",
+      "argCount": 2,
+      "signature": "BOOL IsDestinationReachableW(LPCWSTR lpszDestination, LPQOCINFO lpQOCInfo)",
+      "returnType": "BOOL"
+    }
+  ]
+}
