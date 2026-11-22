@@ -161,6 +161,57 @@ BottleShip is the engine; you supply games you legally own. Three ways to get a 
    [`docs/gog-import.md`](gog-import.md).
 3. **`make-wgb`** from a game directory you already have, as above.
 
+### Steamworks with gbe_fork
+
+For compatible 32-bit games that import `steam_api.dll`, supply the regular x86 DLL from
+[gbe_fork][gbe-release] as a guest file beside the executable. Use a copy of the game
+files you own. Generate `steam_settings/steam_interfaces.txt` with gbe_fork's
+`generate_interfaces` tool using the game's original DLL, then put the game's
+app ID in `steam_settings/steam_appid.txt`. Keep the original DLL available for
+regenerating that configuration.
+
+For a new bundle, stage the DLL and settings beside the executable before
+packing, and pass `--app-dir-dlls steam_api` to `make-wgb`. The DLL imports
+Win32 APIs from BottleShip and runs inside the guest. Compatibility depends
+on the game and the APIs the guest DLL uses.
+
+#### Migrate a Rise of Nations v1.10 bundle
+
+This example assumes the store-only bundle has `rom/rise.exe` and
+`rom/steam_api.dll`. For a different entrypoint directory, adjust the archive
+paths to match. The tested release is
+[`release-2026_09_27`][gbe-release]. Its
+`emu-win-release-vs22.7z` has SHA-256
+`300186c34f49a9ea75b33ce2af299267cc1dad0225cf45e81a229578d4e11c85`.
+Supply the extracted `regular/x86/steam_api.dll` from that archive.
+
+```bash
+stage=$(mktemp -d)
+mkdir -p "$stage/steam_settings"
+bun tools/wgb.ts extract rise-of-nations.wgb rom/steam_api.dll "$stage/original.dll"
+
+# Recover the interface versions from the original RoN v1.10 DLL.
+LC_ALL=C strings -a "$stage/original.dll" |
+  LC_ALL=C grep -E '^(STEAM[A-Z_]+_VERSION[0-9]+|Steam[A-Za-z]+[0-9]{3})$' |
+  LC_ALL=C sort -u > "$stage/steam_settings/steam_interfaces.txt"
+test -s "$stage/steam_settings/steam_interfaces.txt" || exit 1
+rm "$stage/original.dll"
+printf '287450\n' > "$stage/steam_settings/steam_appid.txt"
+cp /path/to/release/regular/x86/steam_api.dll "$stage/steam_api.dll"
+
+cp rise-of-nations.wgb rise-of-nations-gbe.wgb
+bun tools/wgb.ts add-dir rise-of-nations-gbe.wgb rom "$stage"
+bun tools/wgb.ts patch-manifest rise-of-nations-gbe.wgb emulator.appDirDlls '["steam_api"]'
+```
+
+The last command assumes `emulator.appDirDlls` was absent. If the manifest
+already has DLL rules there, include those entries along with `steam_api`.
+The repack retains the bundle's `gameId`, so it uses the existing saves and
+settings. For concurrent tests, give each test copy its own `gameId` or run
+the guests in separate browser profiles so they have separate writable storage.
+
+[gbe-release]: https://github.com/Detanup01/gbe_fork/releases/tag/release-2026_09_27
+
 ## Other installer payloads
 
 `bun tools/msi-extract.ts installer.msi output-dir [--root INSTALLDIR] [--list]`
