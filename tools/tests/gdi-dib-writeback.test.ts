@@ -73,6 +73,21 @@ test("32bpp write-back preserves the reserved/alpha byte the app owns", () => {
     expect([...mem.subarray(BITS_PTR, BITS_PTR + 4)]).toEqual([0x30, 0x20, 0x10, 0x7f]);
 });
 
+test("32bpp text-mask write-back encodes antialias coverage as GGO_GRAY8 samples", () => {
+    const mem = new Uint8Array(BITS_PTR + 4);
+    mem[BITS_PTR + 3] = 0x7f;
+    installGuestMemory(mem);
+    const hBitmap = SystemResourceProvider.getInstance().registerUserObject({
+        type: "BITMAP", width: 1, height: 1,
+        bitsPtr: BITS_PTR, dibBpp: 32, dibStride: 4, dibTopDown: true,
+    } as never);
+    const pixels = new Uint8ClampedArray([128, 128, 128, 255]);
+
+    writeBackDibSectionRect(hBitmap, fakeContext(pixels, 1, 1), 0, 0, 1, 1, { encodeGray8Coverage: true });
+
+    expect([...mem.subarray(BITS_PTR, BITS_PTR + 4)]).toEqual([32, 32, 32, 0x7f]);
+});
+
 test("1bpp write-back quantizes to the colour table and leaves neighbours alone", () => {
     // 12 px wide: two bytes of pixels, padded to a DWORD like every Windows DIB row.
     const w = 12, h = 1, stride = 4;

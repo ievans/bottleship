@@ -358,6 +358,9 @@ export class GDIContext {
     /** System palette usage, one system-wide setting: SYSPAL_STATIC (1) until an app takes
      *  the static entries with SYSPAL_NOSTATIC (2) / SYSPAL_NOSTATIC256 (3). */
     systemPaletteUse = 1;
+    /** Desktop font smoothing for fonts that use the system default. */
+    // @participant(user32-system)
+    fontSmoothingEnabled = true;
     private overlayDirtyNotifyFn: (() => void) | null = null;
 
     /** After clearOverlayRect, repaint windows whose overlay pixels were cleared. */
@@ -2778,6 +2781,7 @@ export class GDIContext {
         this.nextHdc = 0x20000;
         this.nextHgdiobj = 0x30000;
         this.systemPaletteUse = 1;
+        this.fontSmoothingEnabled = true;
         this.clearOverlay();
         this.overlayDirty = false;
         this.overlayHasContent = false;

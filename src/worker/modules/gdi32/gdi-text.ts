@@ -7,7 +7,7 @@
  */
 import { Logger, LogCategory } from "../../core/logger";
 import { drawTextPrefixOptions, fillTextWithMnemonic, parseMnemonicText } from "../win32-text";
-import { refreshCanvasFromDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
+import { is32bppDibSection, refreshCanvasFromDibSectionRect, writeBackDibSectionRect } from "./bitmap-resolve";
 import type { GDIContext } from './context';
 import { fontBaselineDrop } from './text-extent-cache';
 import { measureVerticalMetrics } from "./text-metrics";
@@ -21,12 +21,30 @@ const TA_CENTER = 0x06;
 const TA_BOTTOM = 0x08;
 const TA_BASELINE = 0x18;
 
-/** Honor LOGFONT quality: DEFAULT/DRAFT/PROOF do not turn font smoothing off.
- *  Only NONANTIALIASED_QUALITY explicitly requests a hard-edged 1-bit glyph. */
-function wantsAliasedText(state: { fontQuality: number }): boolean {
-    // DEFAULT/DRAFT/PROOF quality guide font matching; they do not disable the
-    // system font smoother. Only NONANTIALIASED_QUALITY requests a 1-bit glyph.
-    return state.fontQuality === NONANTIALIASED_QUALITY;
+/** DEFAULT, DRAFT and PROOF follow SPI_SETFONTSMOOTHING; explicit qualities take precedence. */
+function wantsAliasedText(quality: number, smoothingEnabled: boolean): boolean {
+    return quality === NONANTIALIASED_QUALITY || (quality < NONANTIALIASED_QUALITY && smoothingEnabled === false);
+}
+
+function wantsGray8DibCoverage(
+    state: { hBitmap: number; fontQuality: number; textColorValue: number },
+    smoothingEnabled: boolean,
+    ctx: OffscreenCanvasRenderingContext2D,
+    text: string,
+): boolean {
+    return !smoothingEnabled && state.fontQuality !== NONANTIALIASED_QUALITY &&
+        state.textColorValue === 0x00ffffff && text.length === 1 &&
+        ctx.canvas.width === 256 && ctx.canvas.height === 256 && is32bppDibSection(state.hBitmap);
+}
+
+function writeBackTextDibSectionRect(
+    state: { hBitmap: number },
+    ctx: OffscreenCanvasRenderingContext2D,
+    x: number, y: number, width: number, height: number,
+    encodeGray8Coverage: boolean,
+): void {
+    writeBackDibSectionRect(state.hBitmap, ctx, x, y, width, height,
+        encodeGray8Coverage ? { encodeGray8Coverage: true } : undefined);
 }
 
 // @transient(host scratch canvas)
@@ -94,7 +112,7 @@ function fillTextAliased(
 }
 
 /**
- * fillText honoring the selected font's GDI quality (aliased for small/bitmap-era fonts).
+ * fillText honoring the effective GDI font smoothing setting.
  * `y` is the top of the GDI text cell; glyphs go on an integer alphabetic baseline tmAscent
  * below it: canvas' "top" baseline is the em-box top, not the cell top GDI measures from.
  */
@@ -103,10 +121,11 @@ function fillTextGdi(
     state: { fontQuality: number; fontSize: number; textColorValue: number },
     text: string,
     x: number,
-    y: number
+    y: number,
+    aliased: boolean,
 ): void {
     const ascent = mergedCellAscent(ctx, state.fontSize);
-    if (wantsAliasedText(state)) { fillTextAliased(ctx, state, text, x, y, ascent); return; }
+    if (aliased) { fillTextAliased(ctx, state, text, x, y, ascent); return; }
     const saved = ctx.textBaseline;
     ctx.textBaseline = 'alphabetic';
     ctx.fillText(text, x, y + ascent);
@@ -266,6 +285,8 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         Logger.warn(LogCategory.GDI32, `textOut: Invalid HDC 0x${hdc.toString(16)} or state`);
         return false;
     }
+    const gray8Coverage = wantsGray8DibCoverage(state, gdi.fontSmoothingEnabled, ctx, text);
+    const aliased = wantsAliasedText(state.fontQuality, gdi.fontSmoothingEnabled) && !gray8Coverage;
 
     // Mark overlay as dirty if we're drawing to it
     const isOverlay = ctx === gdi.overlayCtx;
@@ -354,12 +375,13 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
         }
 
         // Draw text at origin (0, 0) after rotation
-        ctx.fillText(text, 0, 0);
+        if (aliased) fillTextAliased(ctx, state, text, 0, 0, mergedCellAscent(ctx, state.fontSize));
+        else ctx.fillText(text, 0, 0);
 
         // Restore transform manually (doesn't reset font/fillStyle)
         ctx.setTransform(savedTransform);
         if (clipped) ctx.restore();
-        if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+        if (back) writeBackTextDibSectionRect(state, ctx, back.x, back.y, back.w, back.h, gray8Coverage);
     } else {
         // No rotation - draw normally
         // Only draw background if OPAQUE mode (bkMode=2)
@@ -375,9 +397,9 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
             state.appliedFillStyle = state.textColor;
         }
 
-        fillTextGdi(ctx, state, text, x, y);
+        fillTextGdi(ctx, state, text, x, y, aliased);
         if (clipped) ctx.restore();
-        if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+        if (back) writeBackTextDibSectionRect(state, ctx, back.x, back.y, back.w, back.h, gray8Coverage);
     }
 
     // Mark as dirty for ReleaseDC optimization
@@ -423,7 +445,8 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillRect(0, 0, metrics.width, state.fontSize);
                     bitmapCtx.fillStyle = state.textColor;
                 }
-                bitmapCtx.fillText(text, 0, 0);
+                if (aliased) fillTextAliased(bitmapCtx, state, text, 0, 0, mergedCellAscent(bitmapCtx, state.fontSize));
+                else bitmapCtx.fillText(text, 0, 0);
                 bitmapCtx.restore();
             } else {
                 if (state.bkMode === 2) {
@@ -432,7 +455,7 @@ export function textOut(gdi: GDIContext, hdc: number, x: number, y: number, text
                     bitmapCtx.fillRect(x, y, metrics.width, state.fontSize);
                     bitmapCtx.fillStyle = state.textColor;
                 }
-                fillTextGdi(bitmapCtx, state, text, x, y);
+                fillTextGdi(bitmapCtx, state, text, x, y, aliased);
             }
             if (mirrorClipped) bitmapCtx.restore();
         }
@@ -583,11 +606,10 @@ function drawLaidOutLine(
     x: number,
     y: number,
     opts: ReturnType<typeof drawTextPrefixOptions>,
+    aliased: boolean,
 ): void {
-    // DrawText and TextOut share the selected LOGFONT quality: explicitly
-    // non-antialiased fonts use the binary mask, all other qualities use smoothing.
     if (opts.drawText !== false && line.text) {
-        fillTextGdi(ctx, state, line.text, x, y);
+        fillTextGdi(ctx, state, line.text, x, y, aliased);
     }
 
     if (line.underline < 0 || !opts.drawUnderline) return;
@@ -631,6 +653,8 @@ export function drawText(
     const calcOnly = (f & DT_CALCRECT) !== 0;
     const wordBreak = (f & DT_WORDBREAK) !== 0 && !singleLine;
     const prefixOptions = drawTextPrefixOptions(format);
+    const gray8Coverage = wantsGray8DibCoverage(state, gdi.fontSmoothingEnabled, ctx, text);
+    const aliased = wantsAliasedText(state.fontQuality, gdi.fontSmoothingEnabled) && !gray8Coverage;
 
     // Font must be applied before anything is measured.
     if (state.appliedFont !== state.font) {
@@ -745,7 +769,7 @@ export function drawText(
             target.fillStyle = state.textColor;
         }
         for (let i = 0; i < lines.length; i++) {
-            drawLaidOutLine(target, state, lines[i], originX, originY + i * advance, prefixOptions);
+            drawLaidOutLine(target, state, lines[i], originX, originY + i * advance, prefixOptions, aliased);
         }
         if (clipped) target.restore();
         if (dcClipped) (target as OffscreenCanvasRenderingContext2D).restore();
@@ -767,7 +791,7 @@ export function drawText(
     paint(ctx);
     if (state.bkMode === 2) state.appliedFillStyle = state.textColor;
 
-    if (back) writeBackDibSectionRect(state.hBitmap, ctx, back.x, back.y, back.w, back.h);
+    if (back) writeBackTextDibSectionRect(state, ctx, back.x, back.y, back.w, back.h, gray8Coverage);
 
     // Mark as dirty for ReleaseDC optimization
     gdi.markDirty(hdc);
