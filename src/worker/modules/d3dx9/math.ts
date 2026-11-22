@@ -55,6 +55,25 @@ function writeVec3(addr: number, x: number, y: number, z: number): boolean {
         && Mem.writeFloat32(addr + 8, z);
 }
 
+/** x,y,z,w, in that field order (D3DXQUATERNION). */
+function readQuat(addr: number): [number, number, number, number] | null {
+    if (!addr) return null;
+    const x = Mem.readFloat32(addr);
+    const y = Mem.readFloat32(addr + 4);
+    const z = Mem.readFloat32(addr + 8);
+    const w = Mem.readFloat32(addr + 12);
+    if (x === null || y === null || z === null || w === null) return null;
+    return [x, y, z, w];
+}
+
+function writeQuat(addr: number, x: number, y: number, z: number, w: number): boolean {
+    if (!addr) return false;
+    return Mem.writeFloat32(addr, x)
+        && Mem.writeFloat32(addr + 4, y)
+        && Mem.writeFloat32(addr + 8, z)
+        && Mem.writeFloat32(addr + 12, w);
+}
+
 function multiplyMatrices(a: Float32Array, b: Float32Array): Float32Array {
     const out = new Float32Array(16);
     for (let row = 0; row < 4; row++) {
@@ -117,6 +136,78 @@ export function createMathExports(): Record<string, ThunkImplementation> {
             0, 0, 0, 1,
         ]);
         return writeMatrix(pOut, m) ? pOut : 0;
+    };
+
+    exports['D3DXMatrixRotationX'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const angle = u32AsFloat(args[1]);
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        const m = new Float32Array([
+            1, 0, 0, 0,
+            0, c, s, 0,
+            0, -s, c, 0,
+            0, 0, 0, 1,
+        ]);
+        return writeMatrix(pOut, m) ? pOut : 0;
+    };
+
+    exports['D3DXMatrixRotationZ'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const angle = u32AsFloat(args[1]);
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        const m = new Float32Array([
+            c, s, 0, 0,
+            -s, c, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1,
+        ]);
+        return writeMatrix(pOut, m) ? pOut : 0;
+    };
+
+    // Caller's axis need not be pre-normalized; D3DX normalizes it internally.
+    exports['D3DXMatrixRotationAxis'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const v = readVec3(args[1] >>> 0);
+        const angle = u32AsFloat(args[2]);
+        if (!v) return 0;
+        const len = Math.hypot(v[0], v[1], v[2]);
+        if (len === 0) return 0;
+        const x = v[0] / len, y = v[1] / len, z = v[2] / len;
+        const c = Math.cos(angle);
+        const s = Math.sin(angle);
+        const onec = 1 - c;
+        const m = new Float32Array([
+            x * x * onec + c, x * y * onec + z * s, x * z * onec - y * s, 0,
+            x * y * onec - z * s, y * y * onec + c, y * z * onec + x * s, 0,
+            x * z * onec + y * s, y * z * onec - x * s, z * z * onec + c, 0,
+            0, 0, 0, 1,
+        ]);
+        return writeMatrix(pOut, m) ? pOut : 0;
+    };
+
+    exports['D3DXMatrixRotationQuaternion'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const q = readQuat(args[1] >>> 0);
+        if (!q) return 0;
+        const [x, y, z, w] = q;
+        const m = new Float32Array([
+            1 - 2 * y * y - 2 * z * z, 2 * x * y + 2 * z * w, 2 * x * z - 2 * y * w, 0,
+            2 * x * y - 2 * z * w, 1 - 2 * x * x - 2 * z * z, 2 * y * z + 2 * x * w, 0,
+            2 * x * z + 2 * y * w, 2 * y * z - 2 * x * w, 1 - 2 * x * x - 2 * y * y, 0,
+            0, 0, 0, 1,
+        ]);
+        return writeMatrix(pOut, m) ? pOut : 0;
+    };
+
+    exports['D3DXQuaternionNormalize'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const q = readQuat(args[1] >>> 0);
+        if (!q) return 0;
+        const len = Math.hypot(q[0], q[1], q[2], q[3]);
+        if (len === 0) return 0;
+        return writeQuat(pOut, q[0] / len, q[1] / len, q[2] / len, q[3] / len) ? pOut : 0;
     };
 
     exports['D3DXMatrixPerspectiveFovLH'] = (_ctx, _mem, args) => {
@@ -222,6 +313,19 @@ export function createMathExports(): Record<string, ThunkImplementation> {
         const w = v[0] * m[3] + v[1] * m[7] + v[2] * m[11] + m[15];
         if (w === 0) return 0;
         return writeVec3(pOut, x / w, y / w, z / w) ? pOut : 0;
+    };
+
+    // Transforms a direction, not a position: drops the translation row and skips the
+    // homogeneous divide that D3DXVec3TransformCoord applies.
+    exports['D3DXVec3TransformNormal'] = (_ctx, _mem, args) => {
+        const pOut = args[0] >>> 0;
+        const v = readVec3(args[1] >>> 0);
+        const m = readMatrix(args[2] >>> 0);
+        if (!v || !m) return 0;
+        const x = v[0] * m[0] + v[1] * m[4] + v[2] * m[8];
+        const y = v[0] * m[1] + v[1] * m[5] + v[2] * m[9];
+        const z = v[0] * m[2] + v[1] * m[6] + v[2] * m[10];
+        return writeVec3(pOut, x, y, z) ? pOut : 0;
     };
 
     exports['D3DXPlaneIntersectLine'] = (_ctx, _mem, args) => {
