@@ -101,6 +101,7 @@ export const advapi32Module: ModuleDescriptor = {
         makeFunc("CryptDestroyHash", 1),
         makeFunc("CryptDestroyKey", 1),
         makeFunc("IsValidSid", 1),
+        makeFunc("IsValidSecurityDescriptor", 1),
         makeFunc("IsTextUnicode", 3),
         makeFunc("RegQueryValueW", 4, { onUnimplemented: "win32Status" }),
         makeFunc("RegEnumKeyW", 4, { onUnimplemented: "win32Status" }),

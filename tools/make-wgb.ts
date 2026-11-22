@@ -55,6 +55,11 @@
  *                         ships a wrapper/proxy DLL — an ASI loader, a Glide or ddraw
  *                         shim — which otherwise never executes. Example:
  *                         --app-dir-dlls "ddraw"
+ *   --env <NAME=VALUE>    Extra process environment variable, repeatable. Layered onto the
+ *                         built-in defaults (PATH, TEMP, PROCESSOR_*, ...), not a
+ *                         replacement — for a title whose real launcher (Steam, a mod
+ *                         manager) sets variables of its own before exec'ing the game.
+ *                         Example: --env "SteamAppId=2732960"
  *   --sdb <relpath>       Shim database (.sdb) in the game directory that the game's
  *                         installer registers with sdbinst, repeatable. Its VirtualRegistry
  *                         ADDREDIRECT rules become manifest registryRedirects, each bound to
@@ -307,6 +312,19 @@ const appDirDlls = (get('--app-dir-dlls') ?? '')
     .map((d) => d.trim())
     .filter((d) => d.length > 0);
 
+// Extra process environment variables, repeatable: --env "SteamAppId=2732960". Layered
+// onto the built-in defaults (PATH, TEMP, PROCESSOR_*, ...), not a replacement — for a
+// title whose real launcher (Steam, a mod manager) sets variables of its own before
+// exec'ing the game.
+const envVars = Object.fromEntries(getAll('--env').map((pair) => {
+    const eq = pair.indexOf('=');
+    if (eq <= 0) {
+        console.error(`Error: --env expects NAME=VALUE, got "${pair}"`);
+        process.exit(1);
+    }
+    return [pair.slice(0, eq), pair.slice(eq + 1)];
+}));
+
 // A re-release can ship a compatibility database instead of patching the binary. On Windows it
 // takes effect only once installed (sdbinst, run by the installer); a .sdb lying in the game
 // folder does nothing. So only the databases named with --sdb are applied; any other is reported.
@@ -412,6 +430,7 @@ const manifest: Record<string, unknown> = {
         ...(get('--lcid') ? { lcid: parseInt(get('--lcid')!, 16) } : {}),
         ...(createDirs.length > 0 ? { createDirs } : {}),
         ...(appDirDlls.length > 0 ? { appDirDlls } : {}),
+        ...(Object.keys(envVars).length > 0 ? { environment: envVars } : {}),
         ...(registryRedirects.length > 0 ? { registryRedirects } : {}),
         ...(cdPath ? { cdPath } : {}),
         ...(cdLabel ? { cdLabel } : {}),

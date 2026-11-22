@@ -8,6 +8,7 @@ import { type HleDispatcher, ThunkImplementation, ThunkResult, DeferredWrite } f
 import { Logger, LogCategory, LogLevel } from '../../core/logger';
 import { registerFileIoCommExports } from './file-io-comm';
 import { registerFileIoConsoleExports, ConsoleDeviceHandle, isConsoleDeviceHandle, isWindowsDevice } from './file-io-console';
+import { isSecdrvDevicePath, SecdrvDeviceHandle } from './file-io-secdrv';
 import { registerFileIoFindExports } from './file-io-find';
 import { registerFileIoVolumeExports } from './file-io-volume';
 import { registerFileIoPathExports } from './file-io-path';
@@ -519,6 +520,13 @@ const fileIoModule = (() => {
             const resourceProvider = System.getInstance().resourceProvider;
             const handleId = resourceProvider.registerFileHandle(consoleHandle);
             Logger.verbose(LogCategory.KERNEL32, `CreateFileA: opened console device handle 0x${handleId.toString(16)}`);
+            return handleId;
+        }
+
+        if (isSecdrvDevicePath(filename)) {
+            const resourceProvider = System.getInstance().resourceProvider;
+            const handleId = resourceProvider.registerFileHandle(new SecdrvDeviceHandle());
+            Logger.log(LogCategory.KERNEL32, `CreateFileA: opened SecDrv device "${filename}" handle=0x${handleId.toString(16)}`);
             return handleId;
         }
 

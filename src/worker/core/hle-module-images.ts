@@ -408,6 +408,13 @@ export function materializeHleModuleImages(process: any): void {
         built++;
     }
 
+    // The Windows loader maps ntdll.dll into every process before any user code runs,
+    // whether or not the exe's own import table ever binds to it — GetModuleHandleA must
+    // find it even for a process that only reaches it through a runtime
+    // GetModuleHandleA+GetProcAddress pair (common for Nt* native APIs, which rarely
+    // appear in an import table at all).
+    markHleModuleLoaded('ntdll');
+
     Logger.log(LogCategory.SYSTEM,
         `[HleImages] materialized ${built} module image(s) at 0x${MEM_HLE_IMAGE_BASE.toString(16)}` +
         ` (${HLE_IMAGE_SLOT_COUNT} slots of 0x${HLE_IMAGE_SLOT_SIZE.toString(16)})`);

@@ -162,7 +162,7 @@ describe("GetModuleHandle observes loaded HLE images without loading them", () =
         await call("LoadLibraryA", [writeName("dinput8.dll", false)]);
         const tls = System.getInstance().implicitTlsEntries;
         const saved = structuredClone(captureImages());
-        expect(saved.hleBound).toEqual(["ws2_32"]);
+        expect(saved.hleBound).toEqual(["ntdll", "ws2_32"]);
         process.resetGeneration++;
         materializeHleModuleImages(process);
         expect(isHleModuleLoaded("ws2_32")).toBe(false);
@@ -172,7 +172,7 @@ describe("GetModuleHandle observes loaded HLE images without loading them", () =
         expect(isHleModuleLoaded("dinput8")).toBe(false);
         expect(captureImages().hleBound).toEqual(saved.hleBound);
         markHleModuleLoaded("user32.dll");
-        expect(captureImages().hleBound).toEqual(["user32", "ws2_32"]);
+        expect(captureImages().hleBound).toEqual(["ntdll", "user32", "ws2_32"]);
     });
     test("the fast path declines an unloaded image without changing loader membership", () => {
         expect(fast("ws2_32.dll")).toBeNull();

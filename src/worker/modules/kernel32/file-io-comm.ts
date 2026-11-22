@@ -15,6 +15,7 @@ import { System } from '../../core/system';
 import { Mem } from '../../core/memory/mem-accessor';
 import { releaseSocketCompletionWait, socketCompletionWait } from './socket-completion-wait';
 import { completeWait, setWaitCompletionHandler } from '../../core/scheduler/wait-completion';
+import { isSecdrvDeviceHandle, answerSecdrvIoctl } from './file-io-secdrv';
 
 const ERROR_INVALID_FUNCTION = 1;
 const ERROR_INVALID_HANDLE = 6;
@@ -269,8 +270,31 @@ export function registerFileIoCommExports(exports: Record<string, ThunkImplement
     // BOOL DeviceIoControl(HANDLE, DWORD dwIoControlCode, LPVOID lpInBuffer, DWORD nInBufferSize,
     //   LPVOID lpOutBuffer, DWORD nOutBufferSize, LPDWORD lpBytesReturned, LPOVERLAPPED)
     exports['DeviceIoControl'] = (ctx, mem, args) => {
+        const hDevice = args[0] >>> 0;
         const dwIoControlCode = args[1];
+        const lpInBuffer = args[2] >>> 0;
+        const nInBufferSize = args[3] >>> 0;
+        const lpOutBuffer = args[4] >>> 0;
+        const nOutBufferSize = args[5] >>> 0;
         const lpBytesReturned = args[6];
+
+        const handle = System.getInstance().resourceProvider.getFileHandle(hDevice);
+        if (handle && isSecdrvDeviceHandle(handle)) {
+            const inBuf = lpInBuffer && nInBufferSize ? mem.subarray(lpInBuffer, lpInBuffer + nInBufferSize) : new Uint8Array(0);
+            const outBuf = lpOutBuffer && nOutBufferSize ? mem.subarray(lpOutBuffer, lpOutBuffer + nOutBufferSize) : new Uint8Array(0);
+            const bytesReturned = answerSecdrvIoctl(dwIoControlCode, inBuf, outBuf);
+            if (bytesReturned === null) {
+                Logger.warn(LogCategory.KERNEL32,
+                    `SecDrv: unanswered DeviceIoControl ioctl=0x${dwIoControlCode.toString(16)} inSize=${nInBufferSize} outSize=${nOutBufferSize}`);
+                if (lpBytesReturned) Mem.writeUint32(lpBytesReturned, 0);
+                System.getInstance().scheduler.setLastError(1); // ERROR_INVALID_FUNCTION
+                return 0;
+            }
+            if (lpBytesReturned) Mem.writeUint32(lpBytesReturned, bytesReturned);
+            System.getInstance().scheduler.setLastError(0);
+            return 1;
+        }
+
         Logger.warn(LogCategory.KERNEL32,
             `DeviceIoControl: ioctl=0x${dwIoControlCode.toString(16)} — stub`);
         if (lpBytesReturned) Mem.writeUint32(lpBytesReturned, 0);

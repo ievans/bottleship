@@ -231,6 +231,15 @@ export interface WgbManifest {
          * Example: { exe: "Game.exe", from: "HKLM\\SOFTWARE\\Vendor\\Game", to: "HKCU\\Software\\Vendor\\Game" }.
          */
         registryRedirects?: ExeRegistryRedirect[];
+        /**
+         * Extra process environment variables, set alongside the built-in defaults
+         * (PATH, TEMP, PROCESSOR_*, ...) rather than replacing them. For a title whose
+         * real launcher — Steam, a mod manager, a redistributable's wrapper — sets
+         * variables of its own before exec'ing the game (Steam sets SteamAppId/SteamGameId
+         * for every title it launches), so the game's own startup check sees the same
+         * environment it would under that launcher.
+         */
+        environment?: Record<string, string>;
         /** Glob patterns for files to eagerly prefetch during startup (e.g. ["*.dll", "data/sprites.vga"]) */
         prefetch?: string[];
         /** VFS paths to delete from CoW overlay on every boot (e.g. crash-sentinel files like Running.ini) */

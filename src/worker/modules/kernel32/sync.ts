@@ -756,6 +756,20 @@ const syncModule = (() => {
         return 0;
     };
 
+    // BOOL CheckRemoteDebuggerPresent(HANDLE hProcess, PBOOL pbDebuggerPresent)
+    // The function's own return value reports whether the CALL succeeded, not whether a
+    // debugger is attached — that answer goes through *pbDebuggerPresent. Left unimplemented,
+    // the generic unimplemented-export path only supplies a scalar return and never touches
+    // that out-param, so a caller reads whatever garbage was already on its stack as "debugger
+    // present" — exactly the false positive this answers.
+    exports['CheckRemoteDebuggerPresent'] = (ctx, mem, args) => {
+        const pbDebuggerPresent = args[1] >>> 0;
+        if (!pbDebuggerPresent || !Mem.writeUint32(pbDebuggerPresent, 0)) {
+            return { value: 0, stackCleanup: 8 };
+        }
+        return { value: 1, stackCleanup: 8 };
+    };
+
     // Singly Linked List (SList) support
     exports['InitializeSListHead'] = (ctx, mem, args) => {
         const ListHead = args[0];
