@@ -136,7 +136,13 @@ const NOTIFICATION_PMSG = {
     size: 88, mtTime: 16, flags: 20, type: 40, punkUser: 52, guid: 56, option: 72, field1: 76, field2: 80,
 } as const;
 const DMUS_PMSGT_NOTIFICATION = 7;
+const DMUS_PMSGF_REFTIME = 1;
 const DMUS_PMSGF_MUSICTIME = 2;
+const DMUS_PMSGF_TOOL_IMMEDIATE = 4;
+const DMUS_PMSGT_WAVE = 12;
+/** 32-bit DMUS_WAVE_PMSG layout. */
+const WAVE_PMSG = { size: 88, start: 8, musicTime: 16, flags: 20, tool: 32, graph: 36, type: 40, duration: 64 } as const;
+const MAX_TOOL_MEDIA_TYPES = 64;
 /** How long an uncollected notification is kept (the default rtMinimum). */
 const NOTIFICATION_LIFETIME_MS = 2000;
 
@@ -1151,6 +1157,65 @@ export class DMusic implements IModule {
         return engine;
     }
 
+    /** Deliver wave timing to audio-path tools that request immediate wave
+     * messages. PCM playback is owned by the performance renderer. */
+    private *deliverWaveToTools(perf: PerformanceObject, graph: GraphObject, state: PerfSegmentState): GuestRoutine {
+        const wave = state.segment.wave;
+        const engine = perf.engine;
+        if (!wave || !engine || !Number.isFinite(state.startTime)) return S_OK;
+
+        const memory = this.process.memory;
+        const scratch = memory.alloc(WAVE_PMSG.size + 4 + MAX_TOOL_MEDIA_TYPES * 4, "HEAP", "rw");
+        if (!scratch) return S_OK;
+        const out = scratch + WAVE_PMSG.size;
+        const media = out + 4;
+        const graphPtr = this.addressOf(graph, graph.primaryVtable);
+        const perfPtr = this.addressOf(perf, perf.primaryVtable);
+        const ahead = Math.max(0, state.startTime - engine.musicTime);
+        const start = Math.floor(TimeService.getInstance().nowMs() * 10_000 + ahead * 600_000_000 / (engine.currentTempo * 768));
+        const duration = Math.round(wave.frames * 10_000_000 / wave.rate);
+        const bytes = new Uint8Array(WAVE_PMSG.size);
+        const message = new DataView(bytes.buffer);
+        message.setUint32(0, WAVE_PMSG.size, true);
+        message.setBigInt64(WAVE_PMSG.start, BigInt(start), true);
+        message.setUint32(WAVE_PMSG.musicTime, Math.floor(state.startTime), true);
+        message.setUint32(WAVE_PMSG.flags, DMUS_PMSGF_REFTIME | DMUS_PMSGF_MUSICTIME | DMUS_PMSGF_TOOL_IMMEDIATE, true);
+        message.setUint32(WAVE_PMSG.graph, graphPtr, true);
+        message.setUint32(WAVE_PMSG.type, DMUS_PMSGT_WAVE, true);
+        message.setBigInt64(WAVE_PMSG.duration, BigInt(duration), true);
+
+        graph.addRef();
+        try {
+            for (const tool of [...graph.tools]) {
+                if (state.ended || !graph.tools.includes(tool)) continue;
+                Mem.writeUint32(out, 0);
+                const delivery = yield this.vcall(tool, 4, [out], "IDirectMusicTool::GetMsgDeliveryType");
+                if ((delivery | 0) < 0 || Mem.readUint32(out) !== DMUS_PMSGF_TOOL_IMMEDIATE || !graph.tools.includes(tool)) continue;
+                Mem.writeUint32(out, 0);
+                const size = yield this.vcall(tool, 5, [out], "IDirectMusicTool::GetMediaTypeArraySize");
+                const count = Mem.readUint32(out) ?? 0;
+                if ((size | 0) < 0 || !count || count > MAX_TOOL_MEDIA_TYPES || !graph.tools.includes(tool)) continue;
+                Mem.writeUint32(out, media);
+                const types = yield this.vcall(tool, 6, [out, count], "IDirectMusicTool::GetMediaTypes");
+                if ((types | 0) < 0 || state.ended || !graph.tools.includes(tool)) continue;
+                const list = Mem.readUint32(out) ?? 0;
+                if (!validPointer(list, count * 4, "r")) continue;
+                let acceptsWave = false;
+                for (let i = 0; i < count && !acceptsWave; i++) {
+                    acceptsWave = Mem.readUint32(list + i * 4) === DMUS_PMSGT_WAVE;
+                }
+                if (!acceptsWave) continue;
+                message.setUint32(WAVE_PMSG.tool, tool, true);
+                Mem.writeBytes(scratch, bytes);
+                yield this.vcall(tool, 7, [perfPtr, scratch], "IDirectMusicTool::ProcessPMsg(wave)");
+            }
+            return S_OK;
+        } finally {
+            graph.release();
+            memory.free(scratch);
+        }
+    }
+
     /** Hand a state object to the guest at `ppOut` (optional); the guest owns that reference. */
     private publishState(perf: PerformanceObject, state: PerfSegmentState | null, segment: SegmentObject | null, ppOut: number): number {
         if (!ppOut) return S_OK;
@@ -1437,7 +1502,7 @@ export class DMusic implements IModule {
 
         // HRESULT PlaySegment(IDirectMusicSegment *pSegment, DWORD dwFlags, __int64 i64StartTime,
         //                     IDirectMusicSegmentState **ppSegmentState)
-        const play = (perf: PerformanceObject | null, segPtr: number, flags: number, ppState: number, pathPtr = 0): number => {
+        const play = (ctx: X86Context, mem: Uint8Array, perf: PerformanceObject | null, segPtr: number, flags: number, ppState: number, pathPtr = 0) => {
             if (ppState && !validPointer(ppState, 4, "w")) return E_POINTER;
             if (ppState) Mem.writeUint32(ppState, 0);
             const seg = this.object<SegmentObject>(segPtr);
@@ -1446,15 +1511,23 @@ export class DMusic implements IModule {
             if (!seg.segment) return E_FAIL;
             const requestedPath = pathPtr ? this.object<AudioPathObject>(pathPtr) : null;
             const path = requestedPath instanceof AudioPathObject ? requestedPath : null;
+            const playbackPath = path ?? this.defaultAudioPath(perf);
             const state = perf.engine.playSegment(seg.segment, flags >>> 0);
-            if (state) state.audioPath = path ?? this.defaultAudioPath(perf);
-            if (state && seg.segment.wave && path instanceof AudioPathObject && this.ensurePathOutput(path)) state.output = path;
+            if (state) state.audioPath = playbackPath;
+            if (state && seg.segment.wave && this.ensurePathOutput(playbackPath)) state.output = playbackPath;
             if (state && savestatesEnabled()) this.holdStateSegment(this.stateObject(perf, state), seg);
-            return this.publishState(perf, state, seg, ppState);
+            const hr = this.publishState(perf, state, seg, ppState);
+            const graph = playbackPath.graph;
+            // A looping wave needs a new message at each iteration. A single
+            // duration here makes a tool report the wrong audio path lifetime.
+            if (hr === S_OK && state?.output === playbackPath && state.repeatsLeft === 0 && graph?.tools.length) {
+                return runGuestRoutine(ctx, mem, this.deliverWaveToTools(perf, graph, state), 40, "IDirectMusicPerformance8::PlaySegmentEx");
+            }
+            return hr;
         };
-        e["IDirectMusicPerformance8_PlaySegment"] = (_c, _m, a) => play(perfOf(a), a[1]!, a[2]!, a[5]! >>> 0);
+        e["IDirectMusicPerformance8_PlaySegment"] = (ctx, mem, a) => play(ctx, mem, perfOf(a), a[1]!, a[2]!, a[5]! >>> 0);
         // PlaySegmentEx(pSource, pwzSegmentName, pTransition, dwFlags, i64StartTime, ppSegmentState, pFrom, pAudioPath)
-        e["IDirectMusicPerformance8_PlaySegmentEx"] = (_c, _m, a) => play(perfOf(a), a[1]!, a[4]!, a[7]! >>> 0, a[9]! >>> 0);
+        e["IDirectMusicPerformance8_PlaySegmentEx"] = (ctx, mem, a) => play(ctx, mem, perfOf(a), a[1]!, a[4]!, a[7]! >>> 0, a[9]! >>> 0);
 
         // HRESULT Stop(IDirectMusicSegment *pSegment, IDirectMusicSegmentState *pSegmentState,
         //              MUSIC_TIME mtTime, DWORD dwFlags)
@@ -1990,6 +2063,25 @@ export class DMusic implements IModule {
 
     private registerAudioPathExports(): void {
         const e = this.exports;
+        const self = this;
+        e["IDirectMusicAudioPath_Release"] = (ctx, mem, a) => {
+            const path = this.object<AudioPathObject>(a[0]!);
+            if (!path) return 0;
+            if (path.refCount > 1) return path.release();
+            const graph = path.graph;
+            path.graph = null;
+            let tools: number[] = [];
+            if (graph) {
+                if (graph.refCount === 1) tools = graph.tools.splice(0);
+                graph.release();
+            }
+            const count = path.release();
+            if (!tools.length) return count;
+            return runGuestRoutine(ctx, mem, (function* (): GuestRoutine {
+                for (const tool of tools) yield self.vcall(tool, 2, [], "IDirectMusicTool::Release(audio path destroyed)");
+                return count;
+            })(), 4, "IDirectMusicAudioPath::Release");
+        };
         // GetObjectInPath(dwPChannel, dwStage, dwBuffer, guidObject, dwIndex, iidInterface, ppObject).
         // A path's own DirectSound buffer is the object asked for (to set its volume, pan or 3D
         // position); the stages inside the performance hold nothing a caller can use here.
@@ -2041,8 +2133,20 @@ export class DMusic implements IModule {
         const e = this.exports;
         const graphOf = (a: number[]): GraphObject | null => this.object<GraphObject>(a[0]!);
         const self = this;
-        // Messages are rendered without passing through the graph's tools.
+        // Wave playback delivers immediate messages directly to the audio-path tools.
         e["IDirectMusicGraph_StampPMsg"] = (_c, _m, a) => (a[1] ? S_OK : E_POINTER);
+        e["IDirectMusicGraph_Release"] = (ctx, mem, a) => {
+            const graph = graphOf(a);
+            if (!graph) return 0;
+            if (graph.refCount > 1) return graph.release();
+            const tools = graph.tools.splice(0);
+            const count = graph.release();
+            if (!tools.length) return count;
+            return runGuestRoutine(ctx, mem, (function* (): GuestRoutine {
+                for (const tool of tools) yield self.vcall(tool, 2, [], "IDirectMusicTool::Release(graph destroyed)");
+                return count;
+            })(), 4, "IDirectMusicGraph::Release");
+        };
         // HRESULT InsertTool(IDirectMusicTool *pTool, DWORD *pdwPChannels, DWORD cPChannels, LONG lIndex)
         e["IDirectMusicGraph_InsertTool"] = (ctx, mem, a) => {
             const graph = graphOf(a), tool = a[1]! >>> 0;
