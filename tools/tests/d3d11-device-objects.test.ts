@@ -1,10 +1,12 @@
 /** D3D11 device COM objects: reference counts, QueryInterface, failures, and per-subresource Map. */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { D3D11Device } from "../../src/worker/modules/d3d11/device";
 import { D3D11Renderer, type TextureRes } from "../../src/worker/backends/webgpu/d3d11/renderer";
 import { IID } from "../../src/worker/modules/d3d11/interfaces";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { resetComMemory } from "../../src/worker/core/com/com-memory";
+import { System } from "../../src/worker/core/system";
+import { windows, type WindowInfo } from "../../src/worker/modules/user32/shared-state";
 
 const S_OK = 0, E_INVALIDARG = 0x80070057, E_NOTIMPL = 0x80004001, E_NOINTERFACE = 0x80004002;
 const DXGI_ERROR_INVALID_CALL = 0x887a0001;
@@ -143,6 +145,49 @@ describe("D3D11Device objects", () => {
         expect(u32(0x800)).toBe(0);
         expect(call("GetBuffer", [chain, 0, 0, 0x800], "IDXGISwapChain")).toBe(S_OK);
         expect(u32(0x800)).toBe(tex);
+    });
+
+    test("ResizeTarget updates the client and zero-size ResizeBuffers uses it", () => {
+        const system = System.getInstance();
+        const resize = spyOn(system, "requestHostResize").mockImplementation(() => {});
+        const post = spyOn(system.windowManager, "postMessage").mockImplementation(() => {});
+        const hwnd = 0x30002;
+        const window = { handle: hwnd, x: 40, y: 30, width: 1024, height: 768, visible: false } as WindowInfo;
+        windows.set(hwnd, window);
+        try {
+            const swapDesc = new Uint8Array(60);
+            const desc = new DataView(swapDesc.buffer);
+            desc.setUint32(0, 1024, true);
+            desc.setUint32(4, 768, true);
+            desc.setUint32(16, 28, true);
+            desc.setUint32(44, hwnd, true);
+            desc.setUint32(48, 1, true);
+            const originalBuffer = createTex();
+            const chain = (device as any).create("IDXGISwapChain", { desc: swapDesc, backBuffer: originalBuffer });
+            (device as any).renderer.presentsExclusiveFullscreen = false;
+            const mode = 0x900;
+            dv().setUint32(mode, 1280, true);
+            dv().setUint32(mode + 4, 1024, true);
+
+            expect(call("ResizeTarget", [chain, 0], "IDXGISwapChain")).toBe(E_INVALIDARG);
+            expect(call("ResizeTarget", [chain, mode], "IDXGISwapChain")).toBe(S_OK);
+            expect(window).toMatchObject({ x: 40, y: 30, width: 1280, height: 1024, visible: false });
+            expect(post).toHaveBeenCalledWith(hwnd, 5, 0, (1024 << 16) | 1280);
+            expect(resize).toHaveBeenCalledWith(1280, 1024, { modeSet: false, refreshRate: undefined });
+            expect(desc.getUint32(0, true)).toBe(1024);
+            expect(call("GetBuffer", [chain, 0, 0, 0x800], "IDXGISwapChain")).toBe(S_OK);
+            expect(u32(0x800)).toBe(originalBuffer);
+            call("Release", [originalBuffer]);
+
+            expect(call("ResizeBuffers", [chain, 0, 0, 0, 0, 0], "IDXGISwapChain")).toBe(S_OK);
+            expect(desc.getUint32(0, true)).toBe(1280);
+            expect(desc.getUint32(4, true)).toBe(1024);
+            expect(resize).toHaveBeenLastCalledWith(1280, 1024, { modeSet: false });
+        } finally {
+            windows.delete(hwnd);
+            post.mockRestore();
+            resize.mockRestore();
+        }
     });
 
     test("Map lays out each mip by its own size, and Unmap writes that mip", () => {

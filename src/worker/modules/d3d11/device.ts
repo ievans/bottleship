@@ -18,6 +18,7 @@ import { allocateComObject, freeComObject } from "../../core/com/com-memory";
 import { Mem } from "../../core/memory/mem-accessor";
 import { Logger, LogCategory } from "../../core/logger";
 import { System } from "../../core/system";
+import { deviceWindowClientExtent, resizeDeviceWindowClient } from "../../runtime/windowing/fullscreen-window";
 import { INTERFACES, IID, iidName } from "./interfaces";
 import {
     D3D11Renderer, type BufferRes, type TextureRes, type ViewRes, type ShaderRes, type InputLayoutRes,
@@ -639,11 +640,32 @@ export class D3D11Device {
             if (a[1] !== 0 || !backBuffer) { Mem.writeUint32(a[3]!, 0); return DXGI_ERROR_INVALID_CALL; }
             return this.out(a[3]!, backBuffer);
         },
+        ResizeTarget(a) {
+            const swapChainDesc = this.objects.get(a[0]!)?.desc;
+            const modeDesc = readStruct(a[1]!, 28);
+            if (!swapChainDesc || !modeDesc) return E_INVALIDARG;
+            const chain = new DataView(swapChainDesc.buffer);
+            const mode = new DataView(modeDesc.buffer);
+            const hwnd = chain.getUint32(44, true);
+            const client = deviceWindowClientExtent(hwnd);
+            const width = mode.getUint32(0, true) || client?.width || chain.getUint32(0, true);
+            const height = mode.getUint32(4, true) || client?.height || chain.getUint32(4, true);
+            if (!width || !height) return DXGI_ERROR_INVALID_CALL;
+            const fullscreen = this.renderer.presentsExclusiveFullscreen;
+            const numerator = mode.getUint32(8, true), denominator = mode.getUint32(12, true);
+            const refreshRate = fullscreen && numerator && denominator ? Math.round(numerator / denominator) : undefined;
+            System.getInstance().requestHostResize(width, height, { modeSet: fullscreen, refreshRate });
+            resizeDeviceWindowClient(hwnd, width, height, "IDXGISwapChain::ResizeTarget", fullscreen);
+            return S_OK;
+        },
         ResizeBuffers(a) {
             const o = this.objects.get(a[0]!);
             if (!o?.desc) return E_INVALIDARG;
             const v = new DataView(o.desc.buffer);
-            const w = a[2] || v.getUint32(0, true), h = a[3] || v.getUint32(4, true), fmt = a[4] || v.getUint32(16, true);
+            const client = !a[2] || !a[3] ? deviceWindowClientExtent(v.getUint32(44, true)) : null;
+            const w = a[2] || client?.width || v.getUint32(0, true);
+            const h = a[3] || client?.height || v.getUint32(4, true);
+            const fmt = a[4] || v.getUint32(16, true);
             v.setUint32(0, w, true); v.setUint32(4, h, true); v.setUint32(16, fmt, true);
             if (o.backBuffer) this.release(o.backBuffer);
             o.backBuffer = this.backBuffer(w, h, fmt);

@@ -1,6 +1,6 @@
 /**
  * A fullscreen mode-set resizes the window it owns — one implementation for every API
- * that can perform one (DirectDraw SetDisplayMode, D3D8/D3D9 CreateDevice and Reset).
+ * that can perform one (DirectDraw, D3D8, D3D9 and DXGI).
  *
  * Faithful to real Windows: taking a window fullscreen puts its CLIENT area at the mode's
  * resolution and the app is then entitled to read that back. Engines do exactly that —
@@ -30,7 +30,7 @@ const HWND_TOP = 0;
  *
  * No-op for a window neither map knows — a mode-set for a window we never tracked has
  * nothing to resize, and posting WM_SIZE at it would invent a message no window can handle.
- * `source` names the caller in the log so the three mode-set paths stay distinguishable.
+ * `source` identifies the caller in the log.
  */
 export function resizeFullscreenWindowToMode(
     hwnd: number,
@@ -38,35 +38,49 @@ export function resizeFullscreenWindowToMode(
     height: number,
     source: string,
 ): void {
+    resizeDeviceWindowClient(hwnd, width, height, source, true);
+}
+
+/** Resize a graphics device window and post WM_SIZE. Fullscreen mode also moves and shows it. */
+export function resizeDeviceWindowClient(
+    hwnd: number,
+    width: number,
+    height: number,
+    source: string,
+    fullscreen: boolean,
+): void {
     if (!hwnd || width <= 0 || height <= 0) return;
     const system = System.getInstance();
 
     const winObj = system.windowManager?.getWindow(hwnd);
     if (winObj) {
-        winObj.rect.x = 0;
-        winObj.rect.y = 0;
+        if (fullscreen) {
+            winObj.rect.x = 0;
+            winObj.rect.y = 0;
+        }
         winObj.rect.w = width;
         winObj.rect.h = height;
     }
 
     const sharedWin = sharedWindows.get(hwnd);
     if (sharedWin) {
-        sharedWin.x = 0;
-        sharedWin.y = 0;
+        if (fullscreen) {
+            sharedWin.x = 0;
+            sharedWin.y = 0;
+        }
         sharedWin.width = width;
         sharedWin.height = height;
     }
 
     if (!winObj && !sharedWin) return;
 
-    showFullscreenWindow(hwnd, source);
+    if (fullscreen) showFullscreenWindow(hwnd, source);
 
-    // The app updates its viewport/projection from this, exactly as it does for a real
-    // fullscreen switch.
+    // Applications update their viewport or backbuffer when the client size changes.
     system.windowManager?.postMessage(hwnd, WM_SIZE, SIZE_RESTORED,
         ((width & 0xFFFF) | ((height & 0xFFFF) << 16)) >>> 0);
     Logger.log(LogCategory.SYSTEM,
-        `${source}: fullscreen window resize hwnd=0x${hwnd.toString(16)} -> ${width}x${height}`);
+        `${source}: ${fullscreen ? "fullscreen" : "windowed"} window resize hwnd=0x${hwnd.toString(16)} -> ${width}x${height}`);
 }
 
 /**
