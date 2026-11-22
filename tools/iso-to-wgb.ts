@@ -466,6 +466,10 @@ async function extractInstallerFromDisc(): Promise<{ files: Map<string, Uint8Arr
         // Bun has no `DecompressionStream("deflate-raw")`, which the InstallShield
         // reader defaults to; feed it node/bun's zlib raw-inflate instead.
         inflateRaw: (chunk) => new Uint8Array(inflateRawSync(chunk)),
+        // MSZIP cabinet folders (InstallShield .cab AND MSI Binary/_Streams cabinets) chain
+        // a 32 KiB DEFLATE preset dictionary across blocks within a folder — plain inflateRaw
+        // can't carry that state, so both extraction paths need this dictionary-capable one.
+        cabInflateBlock: (chunk, dictionary) => new Uint8Array(inflateRawSync(chunk, { dictionary })),
         // Some cabinets reference loose media files they don't pack (dataOffset=0) —
         // Max Payne's x_level{1,2,3}.ras sit loose in Disk1/Levels/ on the CD. Resolve
         // them straight off the disc by base name + expected size (read on demand, so
