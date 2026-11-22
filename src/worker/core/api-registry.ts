@@ -17,7 +17,6 @@ import { dpnetModule } from '../api/dpnet.api';
 import { dpnlobbyModule } from '../api/dpnlobby.api';
 import { d3dim700Module } from "../api/d3dim700.api";
 import { twitchsdkModule } from "../api/twitchsdk_32_release.api";
-import { steamApiModule } from "../api/steam_api.api";
 import { vc110CppExtras } from "../api/msvcp110.api";
 import { vc110Extras } from "../api/msvcr110.api";
 import { kernel32VistaSupplement } from "../api/kernel32-vista-supplement";
@@ -112,7 +111,6 @@ export class APIRegistry {
         this.registerModule(dpnlobbyModule);
         this.registerModule(d3dim700Module);
         this.registerModule(twitchsdkModule);
-        this.registerModule(steamApiModule);
 
         try {
             const apiModules = import.meta.glob('../api/*.api.ts', { eager: true });
