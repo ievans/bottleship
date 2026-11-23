@@ -186,7 +186,7 @@ export function resolveImportBinding(
     return { dllName, aliasTarget, isThunked };
 }
 
-const CRT_DLL = /^(msvcrt(d|20|40)?|msvcr\d+d?|ucrtbased?|crtdll|api-ms-win-crt-[a-z0-9-]+)$/;
+const CRT_DLL = /^(msvcrt(d|20|40)?|msvcr\d+d?|msvcirtd?|ucrtbased?|crtdll|api-ms-win-crt-[a-z0-9-]+)$/;
 
 export function bindTimeCallingConvention(dll: string, known: string | undefined, argCount: number | undefined): string | undefined {
     if (known !== undefined || argCount !== undefined) return known;
