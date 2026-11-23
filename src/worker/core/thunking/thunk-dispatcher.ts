@@ -7445,11 +7445,14 @@ export class ThunkDispatcher {
         // as — opcode 0x8B (load) or 0x89 (store), ModRM mod=01 (8-bit displacement, no SIB) —
         // are narrow and verifiable enough to skip safely: a store through a bad pointer simply
         // never happening is already correct (nothing to substitute), and a load substitutes 0
-        // (same "zero is safe" convention as the unimplemented-return default) — but ONLY when
-        // it loads into EAX specifically, because EAX is the one register this trap frame
-        // already has a proven-safe restore slot for (esp+4). Every other load destination, or
-        // any other encoding, is left to raise its fault rather than guess a write path into
-        // CPU state this fix hasn't verified.
+        // (same "zero is safe" convention as the unimplemented-return default). EAX goes through
+        // this trap frame's proven-safe restore slot (esp+4), since the trampoline that unwinds
+        // this frame POPs EAX from there — writing cpu.reg32 directly would just get overwritten
+        // by that later pop. Every OTHER general-purpose destination (ECX/EDX/EBX/ESI/EDI) is
+        // untouched by that trampoline — nothing pops it from the frame — so a direct register
+        // write persists through the IRET correctly. ESP/EBP are excluded: those ARE load-bearing
+        // for the trampoline's own unwind and the guest's stack frame, and zeroing either would
+        // be its own, worse corruption.
         if (faultAddr !== faultingEip && faultAddr < 0x1000 &&
             faultingEip + 3 <= this.memLength && faultingEip >= 0x1000) {
             const opcode = mem[faultingEip];
@@ -7457,17 +7460,22 @@ export class ThunkDispatcher {
             const mod = modrm >> 6;
             const rm = modrm & 7;
             const regField = (modrm >> 3) & 7;
-            // 0x8B (MOV r32,[r32+disp8]) reading into EAX specifically: substitute 0, same
-            // rationale as above. 0x89 (MOV [r32+disp8],r32) — the sibling store encoding, same
-            // 3-byte length — needs no register substitution at all: a write through the same
-            // bad pointer just never happens, which is what skipping it already means.
-            if (mod === 1 && rm !== 4 && ((opcode === 0x8b && regField === 0) || opcode === 0x89)) {
-                if (opcode === 0x8b) view.setUint32(esp + 4, 0, true); // EAX = 0
+            // 0x8B (MOV r32,[r32+disp8]) reading into a general-purpose register (not ESP/EBP):
+            // substitute 0. 0x89 (MOV [r32+disp8],r32) — the sibling store encoding, same 3-byte
+            // length — needs no register substitution at all: a write through the same bad
+            // pointer just never happens, which is what skipping it already means.
+            if (mod === 1 && rm !== 4 &&
+                ((opcode === 0x8b && regField !== 4 && regField !== 5) || opcode === 0x89)) {
+                if (opcode === 0x8b) {
+                    if (regField === 0) view.setUint32(esp + 4, 0, true); // EAX = 0, via the trap frame
+                    else cpuViews(cpu).reg32[regField] = 0; // every other GP register: direct write
+                }
                 view.setUint32(esp + 12, (faultingEip + 3) >>> 0, true); // IRET -> instruction after the MOV
+                const regNames = ["EAX", "ECX", "EDX", "EBX", "ESP", "EBP", "ESI", "EDI"];
                 Logger.warn(LogCategory.SYSTEM,
                     `Data ${isWrite ? "write to" : "read of"} 0x${faultAddr.toString(16)} at ` +
                     `EIP=0x${faultingEip.toString(16)} (MOV through a register holding a failure ` +
-                    `sentinel, not a real pointer) — ${opcode === 0x8b ? "substituting EAX=0 and " : ""}` +
+                    `sentinel, not a real pointer) — ${opcode === 0x8b ? `substituting ${regNames[regField]}=0 and ` : ""}` +
                     `resuming after the instruction instead of raising a fatal AV`);
                 return true;
             }
