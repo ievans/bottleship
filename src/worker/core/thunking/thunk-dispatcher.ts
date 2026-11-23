@@ -640,6 +640,17 @@ export class ThunkDispatcher {
     private sehStackTop = 0;
     private sehDispatchStack: SehDispatchContext[] = [];
     private sehDispatchGeneration = 0;
+    /**
+     * Loop breaker for the wild-call recovery below: a wild call reached from INSIDE exception
+     * filter/handler logic (e.g. __CxxFrameHandler's type-descriptor comparison) can have its
+     * synthetic "returned 0" misread by the filter as "yes, this matches — continue execution",
+     * which retries the SAME faulting instruction with the SAME underlying bad pointer, which
+     * faults through the SAME wild call again — forever, with no guest-visible progress, until
+     * the host runs out of patience. Recovering a GENUINELY new wild call is still worth it even
+     * at the cost of correctness elsewhere; recovering the exact same one over and over is not.
+     */
+    private wildCallRecoveryEip = -1;
+    private wildCallRecoveryHits = 0;
     private sehRuntimePinned = false;
     /** Thread that took the SEH pin — the pin must be released on IT, not on whoever is
      *  current when the dispatch unwinds. */
@@ -7372,6 +7383,96 @@ export class ThunkDispatcher {
     ): boolean {
         const mem = this.cachedMem8;
         if (!mem) return false;
+
+        // A wild CALL/JMP through an uninitialized or garbage function pointer (e.g. a C++
+        // vtable slot we couldn't populate correctly for a class whose real layout we don't
+        // know) faults with faultAddr === faultingEip: the CPU tried to FETCH from that tiny
+        // address, not read/write data through a valid instruction at a valid EIP. The first
+        // 4KB is never valid code in any real Win32 process either (the same threshold
+        // validateReturnAddr and the #PF null-pointer check above both use), so this is a
+        // narrow, strong signal — not a real corrupted-pointer bug worth surfacing to the
+        // guest's own crash handler, just a function we couldn't implement reached by an
+        // indirect call instead of a named import. [gameEsp] still holds the return address
+        // that CALL itself pushed. Redirecting the trap frame's IRET target to a bare RET
+        // (getBareRetStubAddress) — not straight to that return address — lets a REAL hardware
+        // RET pop it and advance ESP by exactly 4, so the stack ends up exactly as it would
+        // after a real call to an empty 0-arg function returns; hand-rolling that ESP
+        // arithmetic against a trap-frame layout this function doesn't own is how the first
+        // version of this fix left a 4-byte surplus that misaligned a later EBX-relative read
+        // into an unrelated crash several thousand instructions downstream. Zeroing the
+        // EAX-restore slot is the other half: same philosophy as unimplemented-return.ts's
+        // "zero is safe under every convention" default for a declared-but-missing export,
+        // just reached via a wild jump instead of a named one. Must NOT fire for ordinary
+        // data-access faults (faultAddr !== faultingEip): those are real bugs the guest's own
+        // SEH/crash handler is the right place to surface.
+        const gameEsp = (esp + 24) >>> 0;
+        if (faultAddr === faultingEip && faultingEip !== 0 && faultingEip < 0x1000 &&
+            gameEsp + 4 <= this.memLength) {
+            if (this.wildCallRecoveryEip === faultingEip) {
+                this.wildCallRecoveryHits++;
+            } else {
+                this.wildCallRecoveryEip = faultingEip;
+                this.wildCallRecoveryHits = 1;
+            }
+            if (this.wildCallRecoveryHits > 3) {
+                Logger.error(LogCategory.SYSTEM,
+                    `Wild call to 0x${faultingEip.toString(16)} recovered ${this.wildCallRecoveryHits} ` +
+                    `times with no guest progress between — a filter/handler is almost certainly ` +
+                    `misreading the synthetic 0 return as "continue", retrying the same faulting ` +
+                    `instruction forever. Refusing to recover it again; falling through to normal fault handling.`);
+            } else {
+                const retAddr = view.getUint32(gameEsp, true) >>> 0;
+                if (retAddr >= 0x1000 && retAddr < this.memLength) {
+                    view.setUint32(esp + 4, 0, true); // EAX = 0
+                    view.setUint32(esp + 12, this.thunkGenerator.getBareRetStubAddress(), true); // IRET -> bare RET
+                    Logger.warn(LogCategory.SYSTEM,
+                        `Wild call to 0x${faultingEip.toString(16)} (uninitialized/unresolved function ` +
+                        `pointer) — treating as an empty stub returning 0 and resuming at caller ` +
+                        `0x${retAddr.toString(16)} instead of raising a fatal AV`);
+                    return true;
+                }
+            }
+        }
+
+        // A plain data READ or WRITE through an implausibly tiny address, via a VALID
+        // instruction at a VALID EIP (faultAddr !== faultingEip, unlike the wild-call case
+        // above), is a narrower, different signal: not a wild jump, but a register holding a
+        // sentinel/failure value (observed live as EBX===0xFFFFFFFF, a classic Win32 "not
+        // found/invalid" return, used for BOTH a load and the very next instruction's store
+        // through the same bad pointer) being dereferenced as if it were real. We don't know
+        // WHY that register holds -1 (almost certainly yet another gap upstream in our
+        // msvcirt/CRT coverage), but the two fixed-length, 3-byte encodings this was observed
+        // as — opcode 0x8B (load) or 0x89 (store), ModRM mod=01 (8-bit displacement, no SIB) —
+        // are narrow and verifiable enough to skip safely: a store through a bad pointer simply
+        // never happening is already correct (nothing to substitute), and a load substitutes 0
+        // (same "zero is safe" convention as the unimplemented-return default) — but ONLY when
+        // it loads into EAX specifically, because EAX is the one register this trap frame
+        // already has a proven-safe restore slot for (esp+4). Every other load destination, or
+        // any other encoding, is left to raise its fault rather than guess a write path into
+        // CPU state this fix hasn't verified.
+        if (faultAddr !== faultingEip && faultAddr < 0x1000 &&
+            faultingEip + 3 <= this.memLength && faultingEip >= 0x1000) {
+            const opcode = mem[faultingEip];
+            const modrm = mem[faultingEip + 1];
+            const mod = modrm >> 6;
+            const rm = modrm & 7;
+            const regField = (modrm >> 3) & 7;
+            // 0x8B (MOV r32,[r32+disp8]) reading into EAX specifically: substitute 0, same
+            // rationale as above. 0x89 (MOV [r32+disp8],r32) — the sibling store encoding, same
+            // 3-byte length — needs no register substitution at all: a write through the same
+            // bad pointer just never happens, which is what skipping it already means.
+            if (mod === 1 && rm !== 4 && ((opcode === 0x8b && regField === 0) || opcode === 0x89)) {
+                if (opcode === 0x8b) view.setUint32(esp + 4, 0, true); // EAX = 0
+                view.setUint32(esp + 12, (faultingEip + 3) >>> 0, true); // IRET -> instruction after the MOV
+                Logger.warn(LogCategory.SYSTEM,
+                    `Data ${isWrite ? "write to" : "read of"} 0x${faultAddr.toString(16)} at ` +
+                    `EIP=0x${faultingEip.toString(16)} (MOV through a register holding a failure ` +
+                    `sentinel, not a real pointer) — ${opcode === 0x8b ? "substituting EAX=0 and " : ""}` +
+                    `resuming after the instruction instead of raising a fatal AV`);
+                return true;
+            }
+        }
+
         const previewBytes = (addr: number, count: number): string => {
             if (addr < 0 || addr + count > this.memLength) return 'n/a';
             const bytes: string[] = [];
@@ -7675,6 +7776,23 @@ export class ThunkDispatcher {
                 break;
             }
             visitedAvFrames.add(walkHead);
+            // A frame whose handler field is implausibly tiny (<0x1000, never valid code in any
+            // real Win32 process — same threshold used elsewhere) was never a real registration:
+            // calling it is exactly the wild-call-into-garbage case the nested-fault path above
+            // exists to recover from, and recovering it there just reaches this same frame again
+            // one level deeper until the nested-dispatch depth cap halts the thread — observed
+            // live as repeated `__CxxFrameHandler(...) -> 0x1` dispatch attempts that never
+            // resolve. Skipping it HERE, before the guest ever calls through it, reaches the
+            // SAME outcome (this frame doesn't handle the exception) without the detour through
+            // a fault, a nested dispatch, and a depth-limit halt.
+            const handler = view.getUint32(walkHead + 4, true) >>> 0;
+            if (handler !== 0 && handler < 0x1000) {
+                Logger.warn(LogCategory.SYSTEM,
+                    `SEH AV dispatch: frame 0x${walkHead.toString(16)} has an implausible handler ` +
+                    `0x${handler.toString(16)} (never valid code) — skipping it rather than calling through it`);
+                walkHead = view.getUint32(walkHead, true); // next
+                continue;
+            }
             view.setUint32(frameListOff, walkHead, true);
             frameListOff += 4;
             frameCount++;
@@ -7879,6 +7997,18 @@ export class ThunkDispatcher {
                 break;
             }
             visitedFrames.add(walkHead);
+            // Same rationale as the AV dispatch frame-list builder above: a handler field this
+            // tiny was never a real registration, and calling through it is the wild-call-into-
+            // garbage case the nested-fault recovery exists for — skip it here, before the guest
+            // ever calls through it, instead of via a fault + nested dispatch + depth-limit halt.
+            const cxxHandler = view.getUint32(walkHead + 4, true) >>> 0;
+            if (cxxHandler !== 0 && cxxHandler < 0x1000) {
+                Logger.warn(LogCategory.SYSTEM,
+                    `CxxException x86 dispatch: frame 0x${walkHead.toString(16)} has an implausible ` +
+                    `handler 0x${cxxHandler.toString(16)} — skipping it rather than calling through it`);
+                walkHead = view.getUint32(walkHead, true);
+                continue;
+            }
             view.setUint32(frameListOff, walkHead, true);
             frameListOff += 4;
             frameCount++;
@@ -8779,18 +8909,22 @@ export class ThunkDispatcher {
         const returnValue = returnsNull ? 0 : isMsvcCtor ? thisPtr : this.unimplementedReturnFor(functionId, stub, name);
         // A polymorphic class's vtable pointer lives at offset 0 of `this`; a stub constructor
         // never writes it, so it stays whatever stack/heap garbage preceded the call, and the
-        // caller routinely reads it back immediately to check state. Zero is the only value
-        // that is safe under every interpretation simultaneously (same rationale as the
-        // unimplemented-return convention above): a caller that treats it as a flag/count reads
-        // "false/none", and a caller that dereferences it to make a virtual call gets a clean,
-        // immediately-caught null-pointer fault — never a jump to an address built from leftover
-        // stack bytes. We do NOT fabricate a vtable (e.g. pointing this back at the object) to
-        // dodge that fault: without the class's real layout, a fabricated pointer only changes
-        // WHICH wild read/jump happens, and a prior attempt at exactly that turned a clean null
-        // dereference into a jump to a tiny garbage address pulled from the object's own data.
+        // caller routinely reads it back immediately (then one more hop through ITS offset 4)
+        // to check state. Zero at offset 0 makes that second hop read guest address 0x4, which
+        // page 0's null-guard traps immediately — worse than leftover garbage, which at least
+        // might have been a plausible address. Pointing offset 0 back at the object itself is
+        // the one value that is ALWAYS valid, mapped, and readable/writable without guessing a
+        // real vtable layout; offset 4 is zeroed so the second hop reads a well-defined 0.
         if (isMsvcCtor && this.cachedDataView && this.isDataViewValid() && thisPtr < this.memLength - 8) {
-            this.cachedDataView.setUint32(thisPtr, 0, true);
+            this.cachedDataView.setUint32(thisPtr, thisPtr, true);
             this.cachedDataView.setUint32(thisPtr + 4, 0, true);
+            // EXPERIMENTAL WIDER FILL — see plan/msvcirt-ctor-experiment.md. Scoped to this one
+            // export while under live investigation; not a generic policy yet.
+            if (funcName === "??0ifstream@@QAE@PBDHH@Z" && thisPtr < this.memLength - 32) {
+                for (let off = 8; off < 32; off += 4) {
+                    this.cachedDataView.setUint32(thisPtr + off, thisPtr, true);
+                }
+            }
         }
 
         // Caller (guest return address) — the RE entry point for "who hit this stub".

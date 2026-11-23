@@ -168,13 +168,26 @@ export class ThunkGenerator {
     }
 
     /**
-     * Code for the trap stub: UD2 (0f 0b) + NOP padding. Caller must write this at getTrapStubAddress().
+     * Code for the trap stub: UD2 (0f 0b) + a bare RET (see getBareRetStubAddress) + NOP padding.
+     * Caller must write this at getTrapStubAddress().
      */
     getTrapStubCode(): Uint8Array {
         const code = new Uint8Array(TRAP_STUB_SIZE);
         code[0] = 0x0f;
         code[1] = 0x0b; // UD2 – undefined instruction, triggers #UD
+        code[2] = 0xc3; // bare RET — see getBareRetStubAddress()
         return code;
+    }
+
+    /**
+     * A single, always-materialized bare RET (0xC3), reusing padding already reserved by the
+     * trap stub rather than a fresh allocation. Lets a JS fault handler resume a wild CALL
+     * through an unresolved/garbage function pointer with a REAL hardware RET — pop the return
+     * address, advance ESP by exactly 4, jump there — instead of hand-rolling that arithmetic
+     * against a trap-frame layout the handler doesn't own.
+     */
+    getBareRetStubAddress(): number {
+        return this.baseAddress + 2;
     }
 
     /**
