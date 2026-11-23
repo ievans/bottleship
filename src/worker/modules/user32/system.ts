@@ -1326,7 +1326,12 @@ export function createSystemExports(): Record<string, ThunkImplementation> {
                             ? (isBigS ? (modLong || modWide) : !(modShort && !modWide))
                             : (isBigS ? !(modShort || modWide) : (modLong || modWide));
                         const strAddr = args[argIndex++] >>> 0;
-                        if (strAddr) {
+                        // A nonzero but implausibly tiny pointer (<0x1000, never valid data in any
+                        // real Win32 process) is the same "never a real pointer" case as null —
+                        // see msvcrt.ts's readCString for the full rationale. wsprintfA has its
+                        // own, separate string-reading path from crt-format.ts's formatCLazy, so
+                        // it needs this guard independently.
+                        if (strAddr && strAddr >= 0x1000) {
                             const slen = guestStrLen(strAddr, srcWide, precision !== null ? precision : 0x7FFFFFFF);
                             if (width > slen) {
                                 for (let p = slen; p < width; p++) writeUnit(0x20);
