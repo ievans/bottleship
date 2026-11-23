@@ -7481,6 +7481,17 @@ export class ThunkDispatcher {
             }
         }
 
+        // NOTE: a broad "faultAddr < 0x1000 ⇒ treat as a wild call" fallback was tried here and
+        // reverted. Live evidence showed the actual shape was a LOOP reading through sequential
+        // small addresses (0x1c, 0x1d, 0x1e, 0x1f, 0x20, then wrapping to 0x11, 0x12, ...) — a
+        // buffer/string walk over a bad base pointer, not a function-pointer call. Treating each
+        // iteration as "jump to [gameEsp] instead" discards a different loop iteration's return
+        // address each time, scattering control flow across effectively arbitrary addresses; 50
+        // applications of it left the guest stuck executing garbage at 0x7FFF0002 afterward —
+        // worse than the fatal AV it was trying to avoid. The lesson: this class of fault needs
+        // the SAME instruction-level precision as the two checks above (decode what actually
+        // reads/writes, substitute only that), not a GUESS at what context produced it.
+
         const previewBytes = (addr: number, count: number): string => {
             if (addr < 0 || addr + count > this.memLength) return 'n/a';
             const bytes: string[] = [];
@@ -8926,13 +8937,6 @@ export class ThunkDispatcher {
         if (isMsvcCtor && this.cachedDataView && this.isDataViewValid() && thisPtr < this.memLength - 8) {
             this.cachedDataView.setUint32(thisPtr, thisPtr, true);
             this.cachedDataView.setUint32(thisPtr + 4, 0, true);
-            // EXPERIMENTAL WIDER FILL — see plan/msvcirt-ctor-experiment.md. Scoped to this one
-            // export while under live investigation; not a generic policy yet.
-            if (funcName === "??0ifstream@@QAE@PBDHH@Z" && thisPtr < this.memLength - 32) {
-                for (let off = 8; off < 32; off += 4) {
-                    this.cachedDataView.setUint32(thisPtr + off, thisPtr, true);
-                }
-            }
         }
 
         // Caller (guest return address) — the RE entry point for "who hit this stub".
