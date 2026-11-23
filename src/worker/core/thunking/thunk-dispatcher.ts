@@ -8767,7 +8767,31 @@ export class ThunkDispatcher {
         const isVideoCodec = dllNameLower.includes('smack') || dllNameLower.includes('bink');
         // A stub for a DLL we refuse to load answers "absent" (NULL) — see ThunkStub.absentDll.
         const returnsNull = isVideoCodec || stub?.absentDll === true;
-        const returnValue = returnsNull ? 0 : this.unimplementedReturnFor(functionId, stub, name);
+        // MSVC constructors (mangled "??0...") conventionally return `this` in EAX, under
+        // __thiscall still carried in ECX at this point since the trap stub never touches it.
+        // Answering 0 here hands the caller a NULL object identity it then dereferences through
+        // or chains off of — corrupting unrelated state far from this call — where honoring the
+        // ABI's own return convention (not the class's internal layout, which we don't know)
+        // keeps the constructed object's identity intact for the rest of its lifetime.
+        const funcName = stub?.functionName ?? name.slice(name.indexOf(":") + 1);
+        const isMsvcCtor = funcName.startsWith("??0");
+        const thisPtr = cpuViews(cpu).reg32[1] >>> 0;
+        const returnValue = returnsNull ? 0 : isMsvcCtor ? thisPtr : this.unimplementedReturnFor(functionId, stub, name);
+        // A polymorphic class's vtable pointer lives at offset 0 of `this`; a stub constructor
+        // never writes it, so it stays whatever stack/heap garbage preceded the call, and the
+        // caller routinely reads it back immediately to check state. Zero is the only value
+        // that is safe under every interpretation simultaneously (same rationale as the
+        // unimplemented-return convention above): a caller that treats it as a flag/count reads
+        // "false/none", and a caller that dereferences it to make a virtual call gets a clean,
+        // immediately-caught null-pointer fault — never a jump to an address built from leftover
+        // stack bytes. We do NOT fabricate a vtable (e.g. pointing this back at the object) to
+        // dodge that fault: without the class's real layout, a fabricated pointer only changes
+        // WHICH wild read/jump happens, and a prior attempt at exactly that turned a clean null
+        // dereference into a jump to a tiny garbage address pulled from the object's own data.
+        if (isMsvcCtor && this.cachedDataView && this.isDataViewValid() && thisPtr < this.memLength - 8) {
+            this.cachedDataView.setUint32(thisPtr, 0, true);
+            this.cachedDataView.setUint32(thisPtr + 4, 0, true);
+        }
 
         // Caller (guest return address) — the RE entry point for "who hit this stub".
         const caller = (this.cachedDataView && this.isDataViewValid() && esp < this.memLength - 4)
