@@ -6,5 +6,6 @@
 
 import './galaxy/patch-entry';
 import './ffmpeg/patch-entry';
+import './kernel32/safedisc-anti-debug-patch';
 
 export { runNativeModulePatchers } from '../core/hooks/native-module-patchers';
