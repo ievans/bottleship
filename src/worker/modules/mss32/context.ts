@@ -96,7 +96,7 @@ export interface MSSContext {
     insideAilServe: boolean;
     /** H3 Async: reentrancy depth of _AIL_serve (nested serve = possible stack/callback conflict) */
     serveDepth: number;
-    /** WAV format tag keyed by guest data-chunk pointer (set by AIL_WAV_info for ADPCM decode). */
+    /** Legacy ADPCM tags for AILSOUNDINFO records restored from older saves. */
     wavFormatByDataPtr: Map<number, number>;
     /**
      * The app's own file I/O for Miles (AIL_set_file_callbacks). A title whose

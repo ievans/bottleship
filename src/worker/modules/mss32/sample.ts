@@ -12,7 +12,7 @@ import {
 } from "./helpers";
 import {
     AILSOUNDINFO_SIZE, DIG_F_16BITS_MASK, DIG_F_ADPCM_MASK, DIG_F_STEREO_MASK,
-    convertToFloat, decodeAudioFile, readAilSoundInfo,
+    ailSoundInfoAdpcmTag, convertToFloat, decodeAudioFile, readAilSoundInfo,
 } from "./audio-decode";
 import { playSample, updateSamplePlayback, stopRingBuffer, resumeRingBuffer, seekRingBuffer, applySample3D } from "./playback-engine";
 import { System } from "../../core/system";
@@ -578,6 +578,11 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
                     `MSS32: _AIL_set_sample_file@12: unsupported image at 0x${filePtr.toString(16)} → 0`);
                 return 0;
             }
+            // Miles applies the WAV's rate when configuring the sample. A rate set
+            // before loading the image belongs to the previous/default format.
+            if (sampleObj.fileFormat === "wav") {
+                exports["_AIL_set_sample_playback_rate@8"]!(ctxThunk, mem, [sample, sampleObj.sampleRate]);
+            }
         }
         return 1;
     };
@@ -633,12 +638,6 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     // slices out of it never calls set_sample_file at all, so a missing set_sample_info
     // leaves the voice allocated, "configured" into nothing, and silent while every status
     // the guest can read says PLAYING.
-    //
-    // `format` is the DIG_F_* bitmask AIL_WAV_info emits (this module's own convention,
-    // and what _AIL_decompress_ADPCM@12 already reads); WAVE_FORMAT_IMA_ADPCM (17) is
-    // accepted too since it cannot collide with a DIG_F value (0..7). DIG_F says only
-    // "ADPCM or not" — which ADPCM flavour comes from the AIL_WAV_info that described
-    // this same buffer, exactly as decompress_ADPCM resolves it.
     const setSampleInfo: ThunkImplementation = (ctxThunk, mem, args) => {
         const handle = args[0];
         const infoPtr = args[1];
@@ -666,12 +665,11 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
             return 0;
         }
 
-        const isAdpcm = (info.format & DIG_F_ADPCM_MASK) !== 0 || info.format === 17;
+        const adpcmTag = ailSoundInfoAdpcmTag(info.format, info.bits, ctx.wavFormatByDataPtr.get(info.dataPtr));
+        const isAdpcm = adpcmTag !== undefined;
         const channels = info.channels > 0 ? info.channels : ((info.format & DIG_F_STEREO_MASK) ? 2 : 1);
         const bits = info.bits > 0 ? info.bits : (isAdpcm ? 4 : ((info.format & DIG_F_16BITS_MASK) ? 16 : 8));
-        const formatTag = isAdpcm
-            ? (ctx.wavFormatByDataPtr.get(info.dataPtr) ?? 17)
-            : (bits === 32 ? 3 : 1);
+        const formatTag = adpcmTag ?? (bits === 32 ? 3 : 1);
         // block_size describes an ADPCM block and is meaningless for PCM, where the frame
         // size is fixed by channels x bits. Apps leave it uninitialized on the PCM path —
         // GTA III's carries a leftover stack address — so reading it there turns a good

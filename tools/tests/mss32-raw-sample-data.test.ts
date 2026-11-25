@@ -4,6 +4,7 @@
  * mono/stereo) at the voice's rate, and a later AIL_set_sample_type re-interprets it.
  */
 import { describe, expect, test } from "bun:test";
+import { buildPcmWavImage } from "@bottleship/formats/audio";
 import { createSampleExports } from "../../src/worker/modules/mss32/sample";
 import { createSampleBufferExports } from "../../src/worker/modules/mss32/sample-buffers";
 import type { MSSContext } from "../../src/worker/modules/mss32/context";
@@ -89,6 +90,43 @@ describe("MSS32 raw PCM sound images", () => {
         expect(sample.fileFormat).toBe("wav");
         expect(sample.sampleRate).toBe(8000);
         expect(sample.decodedData).toHaveLength(4);
+    });
+
+    test("a cached stereo WAV keeps its source length and only reuses identical PCM", () => {
+        const pcm = new Uint8Array(64);
+        const wav = buildPcmWavImage(pcm, 2, 44100);
+        const { sample, call, memory } = setup(wav);
+        const assign = () => call("_AIL_set_sample_file@12", [HANDLE, IMAGE, 0]);
+        expect(assign()).toBe(1);
+        const first = sample.decodedData;
+        expect(assign()).toBe(1);
+        expect(sample.decodedData).toBe(first);
+        expect(sample.pcmBytes).toBe(64);
+        expect(sample.blockAlign).toBe(4);
+
+        // Same RIFF prefix, suffix and size. Change just the first PCM frame.
+        memory[IMAGE + 45] = 0x40;
+        expect(assign()).toBe(1);
+        expect(sample.decodedData).not.toBe(first);
+        expect(sample.decodedData![0]).toBeCloseTo(0.5, 5);
+    });
+
+    test("a new 3D WAV starts pitch calculation from its own sample rate", () => {
+        const wav = buildPcmWavImage(new Uint8Array(64), 1, 44100);
+        const { call } = setup(wav);
+        call("_AIL_set_3D_sample_playback_rate@8", [HANDLE, 12000]);
+        expect(call("_AIL_set_3D_sample_file@8", [HANDLE, IMAGE])).toBe(1);
+        expect(call("_AIL_3D_sample_playback_rate@4", [HANDLE])).toBe(44100);
+    });
+
+    test("setting a 2D WAV loads its rate and allows a later pitch change", () => {
+        const wav = buildPcmWavImage(new Uint8Array(64), 1, 44100);
+        const { call } = setup(wav);
+        call("_AIL_set_sample_playback_rate@8", [HANDLE, 22050]);
+        expect(call("_AIL_set_sample_file@12", [HANDLE, IMAGE, 0])).toBe(1);
+        expect(call("_AIL_sample_playback_rate@4", [HANDLE])).toBe(44100);
+        call("_AIL_set_sample_playback_rate@8", [HANDLE, 32000]);
+        expect(call("_AIL_sample_playback_rate@4", [HANDLE])).toBe(32000);
     });
 
     test("an unchanged image is decoded once and shared across voices and replays", () => {

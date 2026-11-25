@@ -4,13 +4,12 @@ import { MemoryGuard } from "../../core/memory/mem-guard";
 import { buildPcmWavImage } from "@bottleship/formats/audio";
 import { MSSContext } from "./context";
 import {
-    DIG_F_ADPCM_MASK,
     ailBitsForWav,
+    ailSoundInfoAdpcmTag,
     countWavSampleFrames,
     decodeAdpcmToS16,
     inspectWavImage,
     readAilSoundInfo,
-    wavFormatToDigF,
     writeAilSoundInfo,
 } from "./audio-decode";
 
@@ -31,12 +30,13 @@ export function createWavInfoExports(ctx: MSSContext): Record<string, ThunkImple
             return 0;
         }
 
-        const digFormat = wavFormatToDigF(wav.formatTag, wav.channels, wav.bitsPerSample);
         const blockSize = wav.blockAlign || (wav.channels * Math.max(1, wav.bitsPerSample >> 3));
         const samples = countWavSampleFrames(wav);
 
         writeAilSoundInfo(mem, infoPtr, {
-            format: digFormat,
+            // AILSOUNDINFO carries the RIFF format tag. Zero Hour uses this field
+            // to choose between PCM and ADPCM before it configures a sample.
+            format: wav.formatTag,
             dataPtr: wav.dataGuestPtr,
             dataLen: wav.dataChunkSize,
             rate: wav.sampleRate,
@@ -47,13 +47,9 @@ export function createWavInfoExports(ctx: MSSContext): Record<string, ThunkImple
             initialPtr: wav.dataGuestPtr,
         });
 
-        if (wav.formatTag === 17 || wav.formatTag === 2) {
-            ctx.wavFormatByDataPtr.set(wav.dataGuestPtr, wav.formatTag);
-        }
-
         Logger.log(
             LogCategory.SYSTEM,
-            `MSS32: _AIL_WAV_info@8: wav=0x${wavPtr.toString(16)} fmt=${digFormat} tag=${wav.formatTag} ` +
+            `MSS32: _AIL_WAV_info@8: wav=0x${wavPtr.toString(16)} tag=${wav.formatTag} ` +
             `${wav.channels}ch ${wav.sampleRate}Hz data=0x${wav.dataGuestPtr.toString(16)} len=${wav.dataChunkSize} samples=${samples}`
         );
         return 1;
@@ -72,7 +68,8 @@ export function createWavInfoExports(ctx: MSSContext): Record<string, ThunkImple
             Logger.warn(LogCategory.SYSTEM, "MSS32: _AIL_decompress_ADPCM@12: invalid arguments");
             return 0;
         }
-        if ((info.format & DIG_F_ADPCM_MASK) === 0) {
+        const formatTag = ailSoundInfoAdpcmTag(info.format, info.bits, ctx.wavFormatByDataPtr.get(info.dataPtr));
+        if (formatTag === undefined) {
             Logger.warn(LogCategory.SYSTEM, `MSS32: _AIL_decompress_ADPCM@12: not ADPCM format=${info.format}`);
             return 0;
         }
@@ -89,7 +86,6 @@ export function createWavInfoExports(ctx: MSSContext): Record<string, ThunkImple
             return 0;
         }
 
-        const formatTag = ctx.wavFormatByDataPtr.get(info.dataPtr) ?? 17;
         const channels = Math.max(1, info.channels);
         const blockAlign = info.blockSize || (channels * 4);
         const compressed = mem.subarray(info.dataPtr, info.dataPtr + info.dataLen);
