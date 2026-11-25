@@ -160,7 +160,10 @@ export class AudioEngine {
   private sampleMeta: Map<number, SampleMeta> = new Map();
   onEnded: ((id: number) => void) | null = null;
   onStatusChange: ((id: number, status: "started" | "error", error?: string) => void) | null = null;
-  onPosition: ((id: number, positionFrames: number) => void) | null = null;
+  /** loopsRemaining is omitted for an infinitely-looping source (Miles' AIL_stream_loop_count
+   *  has nothing finite to report); otherwise it is EncodedSource.loopsRemaining as of this
+   *  report, for the caller to expose via that export. */
+  onPosition: ((id: number, positionFrames: number, loopsRemaining?: number) => void) | null = null;
 
   private ensureContext(): AudioContext {
     if (!this.context) {
@@ -840,7 +843,8 @@ export class AudioEngine {
       if (source && source.startTime > 0 && !source.startApplied) return;
       const rate = source?.sampleRate ?? this.context?.sampleRate ?? 44100;
       if (this.onPosition && Number.isFinite(element.currentTime)) {
-        this.onPosition(payload.id, Math.floor(element.currentTime * rate));
+        const loopsRemaining = source && source.loopsRemaining !== Infinity ? source.loopsRemaining : undefined;
+        this.onPosition(payload.id, Math.floor(element.currentTime * rate), loopsRemaining);
       }
       // A "play to" boundary inside the stream is the end of playback as far as
       // the caller is concerned — the element itself would keep going.
