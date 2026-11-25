@@ -34,7 +34,7 @@ const mb = (b: number | undefined | null): number | null => (typeof b === "numbe
 const WASM_TABLE_OFFSET = 1024;
 const WASM_TABLE_SIZE = 900;
 
-export function collectFootprint(opts: { verify?: boolean; repair?: boolean } = {}): Record<string, unknown> {
+export async function collectFootprint(opts: { verify?: boolean; repair?: boolean } = {}): Promise<Record<string, unknown>> {
     const process = System.getInstance().process;
     const v86 = process?.v86 as unknown as { cpu?: any; v86?: { cpu?: any } } | undefined;
     const cpu = v86?.cpu ?? v86?.v86?.cpu;
@@ -106,13 +106,33 @@ export function collectFootprint(opts: { verify?: boolean; repair?: boolean } = 
     const sab = sharedBufferCensus();
     const gpu = gpuMemoryCensus();
     // Legacy D3D/DDraw geometry rings (grow on demand, see RingBufferManager).
+    // D3D8 shares the same DDrawWebGPUExecutor/RingBufferManager as DDraw, but reaches it
+    // through its own per-device `devices` map (src/worker/modules/d3d8/shared-state.ts)
+    // rather than ddraw's context.executor path, so both are tried.
     let ddrawRings: unknown = null;
+    let renderStats: unknown = null;
     try {
         const dd = process?.getModule?.("ddraw") as { context?: { executor?: { ringBufferManager?: { getGeometryRingStats?: () => {
-            vertexSizes: number[]; indexSizes: number[]; growths: unknown; retired: number } } } } } | undefined;
+            vertexSizes: number[]; indexSizes: number[]; growths: unknown; retired: number }; flushGeometryCalls?: number }; getRenderStats?: () => unknown } } } | undefined;
         const s = dd?.context?.executor?.ringBufferManager?.getGeometryRingStats?.();
-        if (s) ddrawRings = { vertexMB: s.vertexSizes.map(mb), indexMB: s.indexSizes.map(mb), growths: s.growths, retired: s.retired };
+        if (s) ddrawRings = { vertexMB: s.vertexSizes.map(mb), indexMB: s.indexSizes.map(mb), growths: s.growths, retired: s.retired,
+            flushGeometryCalls: dd?.context?.executor?.ringBufferManager?.flushGeometryCalls };
+        const rs = dd?.context?.executor?.getRenderStats?.();
+        if (rs) renderStats = { ...rs };
     } catch { /* no ddraw executor */ }
+    if (!ddrawRings) {
+        try {
+            const d3d8Shared = await import("../../modules/d3d8/shared-state");
+            const dev = [...d3d8Shared.devices.values()][0] as { renderer?: { ringBufferManager?: { getGeometryRingStats?: () => {
+                vertexSizes: number[]; indexSizes: number[]; growths: unknown; retired: number }; flushGeometryCalls?: number }; getRenderStats?: () => unknown };
+                getCounters?: () => Record<string, number> } | undefined;
+            const s = dev?.renderer?.ringBufferManager?.getGeometryRingStats?.();
+            if (s) ddrawRings = { vertexMB: s.vertexSizes.map(mb), indexMB: s.indexSizes.map(mb), growths: s.growths, retired: s.retired,
+                flushGeometryCalls: dev?.renderer?.ringBufferManager?.flushGeometryCalls };
+            const rs = dev?.renderer?.getRenderStats?.();
+            if (rs) renderStats = { ...(rs as object), presents: dev?.getCounters?.()?.presents };
+        } catch { /* no d3d8 device */ }
+    }
     const perfMemory = (performance as unknown as { memory?: { usedJSHeapSize: number; totalJSHeapSize: number } }).memory;
 
     // The rough "what we hold" sum: guest pages that may be resident + SABs + JS caches.
@@ -132,7 +152,7 @@ export function collectFootprint(opts: { verify?: boolean; repair?: boolean } = 
             created: { buffers: gpu.createdBuffers, textures: gpu.createdTextures },
             destroyed: { buffers: gpu.destroyedBuffers, textures: gpu.destroyedTextures },
             largeBuffers: gpu.largeBuffers.map((b) => ({ label: b.label, mb: mb(b.bytes), usage: '0x' + b.usage.toString(16) })),
-            ddrawRings },
+            ddrawRings, renderStats },
         jsCaches,
         jsHeap: perfMemory ? { usedMB: mb(perfMemory.usedJSHeapSize), totalMB: mb(perfMemory.totalJSHeapSize) } : null,
         jit,
@@ -144,5 +164,5 @@ export function registerFootprintCommands(svc: HarnessService): void {
     // The aot `compileReset` verb restarts it; the census then counts from there.
     const g = globalThis as { __jitCompileStats?: { count: number; bytes: number } };
     g.__jitCompileStats ??= { count: 0, bytes: 0 };
-    svc.register("footprint", (args) => collectFootprint((args[0] ?? {}) as { verify?: boolean; repair?: boolean }));
+    svc.register("footprint", async (args) => collectFootprint((args[0] ?? {}) as { verify?: boolean; repair?: boolean }));
 }
