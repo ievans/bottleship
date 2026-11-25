@@ -342,8 +342,13 @@ export class RingBufferManager {
         return this.uniformRingBuffers[this.currentFrameIndex];
     }
 
+    /** Diagnostic census: real calls to flushGeometry(), regardless of caller. Read via the
+     *  `flushGeometryCensus` harness command. */
+    public flushGeometryCalls = 0;
+
     /** Publish staged vertex/index ranges before the encoder that consumes them is submitted. */
     flushGeometry(): void {
+        this.flushGeometryCalls++;
         const fi = this.currentFrameIndex;
         this.vertexUploadWindows[fi].flush(this.queue, this.vertexRingBuffers[fi], this.vertexRingOffsets[fi]);
         this.indexUploadWindows[fi].flush(this.queue, this.indexRingBuffers[fi], this.indexRingOffsets[fi]);
