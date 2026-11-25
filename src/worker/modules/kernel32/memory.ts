@@ -21,6 +21,8 @@ import { profiler } from '../../core/profiler';
 import { GUEST_PROCESSOR_TYPE, GUEST_PROCESSOR_LEVEL, GUEST_PROCESSOR_REVISION } from '../../core/guest-cpu-identity';
 import { hypercallDataManager } from '../../core/cpu/hypercall-data';
 import { toPlainGuestMemory } from '../../core/memory/guest-memory';
+import { EmulatorConfig, VER_PLATFORM_WIN32_WINDOWS } from '../../core/emulator-config-manager';
+import { isNullGuardActive, NULL_GUARD_SIZE_BYTES } from '../../core/memory/page-table-manager';
 import {
     MEM_HEAP_BASE,
     MEM_THUNK_DATA_BASE,
@@ -3150,6 +3152,16 @@ export const exports: Record<string, ThunkImplementation> = (() => {
      * crash reporter did exactly that for 144 million calls without terminating.
      */
     const rangeHasPerms = (addr: number, size: number, perms: RegionPerms): boolean => {
+        // The region map's LOW_MEM entry spans 0x0-0x100000 with broad rw perms — it has no
+        // notion of the page-table-level null guard (PageTableManager clears the Present bit
+        // for 0x0-0x7000 on any non-Win9x title), so on its own this answers "readable" for an
+        // address that would fault for real. That false "safe" answer is exactly what a crash
+        // reporter's own `IsBadReadPtr` check exists to prevent before it dereferences a bad
+        // pointer — see the RA3 precedent above for the other direction of the same class of
+        // bug (walking garbage because the answer was too permissive).
+        const win9x = EmulatorConfig.getInstance().osVersion.platformId === VER_PLATFORM_WIN32_WINDOWS;
+        const forceNullGuard = (globalThis as Record<string, unknown>).__forceNullGuard === true;
+        if (isNullGuardActive(win9x, forceNullGuard) && addr < NULL_GUARD_SIZE_BYTES) return false;
         const space = System.getInstance().process?.addressSpace;
         // No address space yet (very early boot): nothing to answer from, so do not refuse.
         if (!space) return true;
