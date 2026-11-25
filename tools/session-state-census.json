@@ -759,6 +759,7 @@
     "KNOWN_A3D_IIDS"
   ],
   "src/worker/modules/audio-stats-sab.ts": [
+    "captureSab",
     "masterStatsSab",
     "statsSab"
   ],
