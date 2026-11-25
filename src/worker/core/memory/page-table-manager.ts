@@ -33,6 +33,25 @@ const ENTRIES_PER_TABLE = 1024;
 const PAGES_PER_TABLE = 1024; // Each PT covers 4MB
 const FULL_PD_ENTRIES = 1024; // Always map full 4GB
 
+/** Number of low pages whose Present bit `initialize()` clears below — the single source of
+ *  truth for both the paging setup and `isNullGuardActive`/`NULL_GUARD_SIZE_BYTES`, so a
+ *  caller outside this module (e.g. IsBadReadPtr) can answer "would dereferencing this address
+ *  fault" without hand-rolling a second copy of the guard's extent. */
+const NULL_GUARD_PAGES = 7;
+
+/** Byte size of the null guard when active (0-0x7000) — see NULL_GUARD_PAGES. */
+export const NULL_GUARD_SIZE_BYTES = NULL_GUARD_PAGES * PAGE_SIZE;
+
+/** Mirrors the exact condition `initialize()` uses to decide whether the guard is cleared.
+ *  A region-map-based check (kernel32 IsBadReadPtr/IsBadWritePtr's `rangeHasPerms`) answers
+ *  from the LOW_MEM region's broad perms, which say nothing about this page-table-level
+ *  guard — so on its own it reports a NULL-guarded address as readable, which is exactly the
+ *  false "safe to read" answer that lets a guest crash-report stack walker dereference it for
+ *  real right after asking. */
+export function isNullGuardActive(win9x: boolean, forceNullGuard: boolean): boolean {
+    return !(win9x && !forceNullGuard);
+}
+
 // PTE/PDE flags
 const PTE_PRESENT = 0x01;
 const PTE_RW = 0x02;
@@ -117,16 +136,16 @@ export class PageTableManager {
         // call site long gone. Forcing it converts that into a fault at the offending
         // instruction with the caller's frame still on the stack.
         const forceNullGuard = (globalThis as Record<string, unknown>).__forceNullGuard === true;
-        const NULL_GUARD_PAGES = (win9x && !forceNullGuard) ? 0 : 7;
+        const activeGuardPages = isNullGuardActive(win9x, forceNullGuard) ? NULL_GUARD_PAGES : 0;
         const pt0Base = PAGE_TABLES_ADDR; // First page table covers 0x00000000-0x003FFFFF
-        for (let i = 0; i < NULL_GUARD_PAGES; i++) {
+        for (let i = 0; i < activeGuardPages; i++) {
             view.setUint32(pt0Base + i * 4, 0, true); // Clear Present bit
         }
 
         const ptRegionSize = FULL_PD_ENTRIES * PAGE_SIZE + PAGE_SIZE; // PD + PTs
         Logger.log(LogCategory.SYSTEM,
             `[PageTableManager] Initialized: ${FULL_PD_ENTRIES} page tables (4GB identity-mapped), ` +
-            `null guard 0x0-0x${(NULL_GUARD_PAGES * PAGE_SIZE).toString(16)}, ` +
+            `null guard 0x0-0x${(activeGuardPages * PAGE_SIZE).toString(16)}, ` +
             `PT region 0x${PAGE_DIR_ADDR.toString(16)}-0x${(PAGE_DIR_ADDR + ptRegionSize).toString(16)} ` +
             `(${(ptRegionSize / 1024).toFixed(0)}KB), guest memory=${(totalMemoryBytes / (1024 * 1024)).toFixed(0)}MB`);
     }
