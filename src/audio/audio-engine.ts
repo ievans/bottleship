@@ -83,6 +83,8 @@ type EncodedSource = {
   gainNode: GainNode;
   panNode: StereoPannerNode;
   loopsRemaining: number;
+  /** This source has started and the guest wants playback. The browser may still pause it. */
+  recoverOnGesture?: boolean;
   /** Multiplier applied to element time for position reports (payload.positionRateHz,
    *  else the decoded sample rate — i.e. frames). */
   sampleRate?: number;
@@ -202,6 +204,13 @@ export class AudioEngine {
     this.autoResumeArmed = true;
     const onGesture = () => {
       if (this.userPaused) return;
+      // Chrome can pause an HTMLAudioElement while leaving the AudioContext running.
+      // Retry on a gesture so browser autoplay policy has an activation to work with.
+      for (const [id, source] of this.encodedSources) {
+        if (!source.recoverOnGesture || !source.element.paused || source.element.ended
+            || this.pausedEncodedSources.has(id)) continue;
+        this.tryResumeEncodedSource(id, source);
+      }
       if (this.context && this.context.state === "running") return;
       void this.resumeIfNotPaused();
     };
@@ -580,8 +589,10 @@ export class AudioEngine {
 
   pauseSource(id: number): void {
     const encoded = this.encodedSources.get(id);
-    if (encoded && !encoded.element.paused) {
-      encoded.element.pause();
+    if (encoded) {
+      encoded.recoverOnGesture = false;
+      this.pausedEncodedSources.delete(id);
+      if (!encoded.element.paused) encoded.element.pause();
     }
     if (this.node) {
       this.node.port.postMessage({ type: "pause", id });
@@ -590,8 +601,13 @@ export class AudioEngine {
 
   resumeSource(id: number): void {
     const encoded = this.encodedSources.get(id);
-    if (encoded && encoded.element.paused) {
-      void encoded.element.play();
+    if (encoded) {
+      encoded.recoverOnGesture = true;
+      if (this.userPaused) {
+        this.pausedEncodedSources.add(id);
+      } else if (encoded.element.paused) {
+        this.tryResumeEncodedSource(id, encoded);
+      }
     }
     if (this.node) {
       this.node.port.postMessage({ type: "resume", id });
@@ -604,6 +620,14 @@ export class AudioEngine {
       encoded.element.currentTime = timeMs / 1000;
       encoded.positionHandler?.();
     }
+  }
+
+  private tryResumeEncodedSource(id: number, source: EncodedSource): void {
+    void source.element.play().catch((error: unknown) => {
+      if (this.encodedSources.get(id) === source && source.recoverOnGesture && !this.userPaused) {
+        console.debug("BottleShip: Media playback resume deferred", { id, error });
+      }
+    });
   }
 
   async pause(): Promise<void> {
@@ -853,7 +877,7 @@ export class AudioEngine {
       }
     };
 
-    this.encodedSources.set(payload.id, {
+    const source: EncodedSource = {
       element,
       url,
       sourceNode,
@@ -865,7 +889,8 @@ export class AudioEngine {
       startTime,
       loopTime: typeof payload.loopRestartMs === "number" ? Math.max(0, payload.loopRestartMs / 1000) : startTime,
       endTime,
-    });
+    };
+    this.encodedSources.set(payload.id, source);
 
     element.addEventListener("ended", () => {
       this.handleEncodedEnded(payload.id);
@@ -918,6 +943,7 @@ export class AudioEngine {
 
     try {
       await element.play();
+      source.recoverOnGesture ??= true;
       // Note: onStatusChange will be called from playEncoded wrapper
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
