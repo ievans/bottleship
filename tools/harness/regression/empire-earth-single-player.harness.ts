@@ -29,6 +29,37 @@ if (!wgb) throw new Error("WGB must point to the repacked Empire Earth bundle (a
 const EE_ROOT = process.env.EE_ROOT ?? "C:/EMPIRE EARTH";
 const SAVE_NAME = "0bsregress";
 const SAVE_PATH = `${EE_ROOT}/data/Saved Games/${SAVE_NAME}.ees`;
+// The setup the docs verified: the game's own Bink and Miles must outrank our HLE modules.
+// A bundle without it still boots, but the result says nothing about the verified path.
+const VERIFIED_DLLS = ["binkw32.dll", "mss32.dll"];
+const VERIFIED_SETUP = { os: "5.1", ramMB: 1536, width: 1024, height: 768, bpp: 32 };
+
+async function unverifiedSetup(bundle: string): Promise<string[]> {
+    const proc = Bun.spawn(["bun", resolve(import.meta.dir, "../../wgb.ts"), "manifest", bundle],
+        { stdout: "pipe", stderr: "pipe" });
+    const [text, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    if (code !== 0) return [`could not read the bundle manifest (wgb.ts exit ${code})`];
+    const emu = (JSON.parse(text).emulator ?? {}) as Record<string, any>;
+    const problems: string[] = [];
+    const have = new Set<string>((emu.appDirDlls ?? []).map((d: string) => d.toLowerCase()));
+    const missing = VERIFIED_DLLS.filter((d) => !have.has(d) && !have.has(d.replace(/\.dll$/, "")));
+    if (missing.length) problems.push(`appDirDlls lacks ${missing.join(", ")} (make-wgb --app-dir-dlls)`);
+    const v = emu.osVersion ?? {};
+    if (`${v.major}.${v.minor}` !== VERIFIED_SETUP.os) problems.push(`OS is ${v.major}.${v.minor}, verified ${VERIFIED_SETUP.os} (--os winxp)`);
+    const ramMB = (emu.memory?.ram ?? 0) / (1024 * 1024);
+    if (ramMB < VERIFIED_SETUP.ramMB) problems.push(`RAM is ${ramMB} MB, verified ${VERIFIED_SETUP.ramMB} (--ram)`);
+    const r = emu.screenResolution ?? {};
+    if (r.width !== VERIFIED_SETUP.width || r.height !== VERIFIED_SETUP.height || r.bpp !== VERIFIED_SETUP.bpp)
+        problems.push(`resolution is ${r.width}x${r.height}x${r.bpp}, verified ${VERIFIED_SETUP.width}x${VERIFIED_SETUP.height}x${VERIFIED_SETUP.bpp} (--width/--height/--bpp)`);
+    return problems;
+}
+
+const setupProblems = await unverifiedSetup(wgb);
+if (setupProblems.length) {
+    const bar = "!".repeat(72);
+    console.warn(`\n${bar}\n!! USING UNVERIFIED SETUP — this bundle differs from the verified one:\n${
+        setupProblems.map((p) => `!!   - ${p}`).join("\n")}\n!! A pass or failure here does not speak for the verified path (docs/compatibility.md).\n${bar}\n`);
+}
 const out = resolve("logs", process.env.BS_TAB ?? "empire-earth-sp", "empire-earth-sp");
 mkdirSync(out, { recursive: true });
 
