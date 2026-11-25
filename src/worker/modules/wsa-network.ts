@@ -93,6 +93,12 @@ interface SocketState {
 interface Binding { port: number; proto: number; endpoint: LanEndpoint; sockets: Set<number>; }
 export const FD_READ = 1, FD_WRITE = 2, FD_OOB = 4, FD_ACCEPT = 8, FD_CONNECT = 16, FD_CLOSE = 32;
 
+/** Diagnostic census: real attempts to send() to a broadcast address, and whether SO_BROADCAST
+ *  was set on that socket at the time. `blockedNoFlag` incrementing means the game sent to a
+ *  broadcast address without ever enabling SO_BROADCAST on this socket — the send fails with
+ *  WSAEACCES before reaching LanNetwork at all. Read via the `sendBroadcastCensus` harness command. */
+export const sendBroadcastCensus: { attempts: number; allowed: number; blockedNoFlag: number; lastCall?: unknown } = { attempts: 0, allowed: 0, blockedNoFlag: 0 };
+
 export interface WsaOpenForSavestate { count: number; open: string[]; nextHandle: number; }
 export function describeWsaSocket(handle: number, s: { af: number; type: number; state: string; local: WsaAddress | null }): string {
     const kind = s.af === 6 ? "IPX" : s.type === 1 ? "TCP" : s.type === 2 ? "UDP" : "RAW";
@@ -797,6 +803,7 @@ export class WsaSocketTable {
     }
     send(sid: number, bytes: Uint8Array | number, to?: WsaAddress, flags = 0): number {
         const s = this.get(sid);
+        try { sendBroadcastCensus.lastCall = `type=${s.type} broadcast=${s.broadcast} to=${to ? JSON.stringify(to) : "null"} peer=${s.peer ? JSON.stringify(s.peer) : "null"}`; } catch { /* diagnostic only */ }
         if (typeof bytes === "number") fail(WSA.EFAULT);
         if (flags & ~5) fail(WSA.EOPNOTSUPP);
         if (s.writeShutdown) fail(WSA.ESHUTDOWN);
@@ -812,6 +819,10 @@ export class WsaSocketTable {
             const canonical = this.wireAddress(s, dst);
             const maximum = s.type === 2 && canonical.family === 2 ? UDP_MAX_PAYLOAD : this.maxMessageSize(sid);
             if (bytes.length > maximum) fail(WSA.EMSGSIZE);
+            if (broadcast(dst.node)) {
+                sendBroadcastCensus.attempts++;
+                if (s.broadcast) sendBroadcastCensus.allowed++; else sendBroadcastCensus.blockedNoFlag++;
+            }
             if (broadcast(dst.node) && !s.broadcast) fail(WSA.EACCES);
             if (s.type !== 3 && !dst.port) fail(WSA.EADDRNOTAVAIL);
             if (s.type === 3 && s.af === 2 && multicast4(dst.ip)) fail(WSA.EOPNOTSUPP);

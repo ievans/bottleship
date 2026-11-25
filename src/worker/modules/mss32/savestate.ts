@@ -54,7 +54,7 @@ export const MSS_SAMPLE_FIELDS = {
 export const MSS_STREAM_FIELDS = {
     id: 'save', handle: 'save', fileData: 'derive', decodedData: 'derive', filename: 'save', fileFormat: 'save', sampleRate: 'save',
     channels: 'save', bitsPerSample: 'save', formatTag: 'save', blockAlign: 'save', streamMemory: 'save', volume: 'save', pan: 'save',
-    playbackRate: 'save', playbackRateHz: 'save', loopCount: 'save', pcmBytes: 'save', streamDummyBuffer: 'save', isPlaying: 'save',
+    playbackRate: 'save', playbackRateHz: 'save', loopCount: 'save', loopsRemaining: 'save', pcmBytes: 'save', streamDummyBuffer: 'save', isPlaying: 'save',
     isPaused: 'save', position: 'save', pendingStart: 'save', startTime: 'derive', lastAudioPositionTime: 'transient',
     lastAudioPositionBytes: 'transient', encodedDurationMs: 'save', source: 'derive',
 } as const satisfies Record<keyof MSSStream, FieldPolicy>;

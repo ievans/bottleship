@@ -1,3 +1,9 @@
+/** Diagnostic census: real queue.writeBuffer calls issued across every window instance.
+ *  Read via the `flushCensus` harness command — the sanctioned way to check whether
+ *  staging is actually coalescing many draws into one submit, per CLAUDE.md's
+ *  "thousands of small D3D draws become one queue.writeBuffer range per ring" design. */
+export const flushCensus = { calls: 0, bytes: 0 };
+
 /** CPU staging for one monotonically allocated GPU ring between queue submissions. */
 export class GeometryUploadWindow {
     private bytes = new Uint8Array(0);
@@ -18,7 +24,10 @@ export class GeometryUploadWindow {
 
     flush(queue: GPUQueue, buffer: GPUBuffer, endOffset: number): void {
         if (endOffset <= this.dirtyOffset) return;
-        queue.writeBuffer(buffer, this.dirtyOffset, this.bytes.buffer, 0, endOffset - this.dirtyOffset);
+        const len = endOffset - this.dirtyOffset;
+        queue.writeBuffer(buffer, this.dirtyOffset, this.bytes.buffer, 0, len);
+        flushCensus.calls++;
+        flushCensus.bytes += len;
         this.dirtyOffset = endOffset;
     }
 

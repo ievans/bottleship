@@ -314,6 +314,19 @@ export class RootNetworkNamespace implements ProcessNetworkNamespace {
     private finishing:Promise<void>|null=null;
     private actorRequestId=0;
     private readonly actorRequests=new Map<number,{resolve:()=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>;reply:string}>();
+    /** Diagnostic-only: the socket actor worker owns a SEPARATE LanNetwork instance (see
+     *  wsa-actor-worker.ts) from any singleton a caller in this realm might import, so its
+     *  `.stats` is not otherwise observable from here. */
+    private readonly actorStatsRequests=new Map<number,{resolve:(stats:{sent:number;received:number;dropped:number})=>void;reject:(error:Error)=>void;timer:ReturnType<typeof setTimeout>}>();
+    queryActorStats():Promise<{sent:number;received:number;dropped:number}>{
+        if(this.closed||this.actorFailure||!this.actor)return Promise.reject(this.actorFailure??new Error("Socket actor unavailable"));
+        const id=++this.actorRequestId;
+        return new Promise((resolve,reject)=>{
+            const timer=setTimeout(()=>{this.actorStatsRequests.delete(id);reject(new Error("Socket actor stats query timed out"));},5000);
+            this.actorStatsRequests.set(id,{resolve,reject,timer});
+            this.actor!.control.postMessage({type:"debugStats",id});
+        });
+    }
     constructor(readonly network: LanNetwork, capacity = 256,readonly pid=1234) {
         if(!Number.isInteger(pid)||pid<1||pid>0x7fffffff)throw new Error("Invalid root namespace PID");
         this.ports = AtomicPorts.create(network.node, capacity,pid);
@@ -362,7 +375,13 @@ export class RootNetworkNamespace implements ProcessNetworkNamespace {
         const stopped=new Promise<void>(resolve=>worker.addEventListener("close",()=>resolve(),{once:true}));
         this.actor={worker,control:control.port1,lease,stopped,terminated:false};
         control.port1.onmessage=event=>{
-            const message=event.data,pending=this.actorRequests.get(message?.id);
+            const message=event.data;
+            if(message?.type==="debugStatsDone"){
+                const statsPending=this.actorStatsRequests.get(message.id);
+                if(statsPending){this.actorStatsRequests.delete(message.id);clearTimeout(statsPending.timer);statsPending.resolve(message.stats);}
+                return;
+            }
+            const pending=this.actorRequests.get(message?.id);
             if(!pending||message.type!==pending.reply)return;
             this.actorRequests.delete(message.id);clearTimeout(pending.timer);
             if(message.error)pending.reject(new Error(message.error));else pending.resolve();

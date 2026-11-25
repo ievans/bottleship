@@ -206,7 +206,7 @@ export class MSS32 implements IModule {
         }
     }
 
-    handleAudioPosition(id: number, positionFrames: number): void {
+    handleAudioPosition(id: number, positionFrames: number, loopsRemaining?: number): void {
         if (!Number.isFinite(positionFrames) || positionFrames < 0) return;
         const ctx = this.ctx;
 
@@ -242,6 +242,7 @@ export class MSS32 implements IModule {
         // must not stamp SMP_PLAYING back over the SMP_STOPPED pause published for it)
         const stream = ctx.streamsById.get(id);
         if (stream && stream.isPlaying && !stream.isPaused) {
+            if (loopsRemaining !== undefined) stream.loopsRemaining = loopsRemaining;
             const channels = Math.max(1, stream.channels || 1);
             const bytesPerSample = Math.max(1, (stream.bitsPerSample || 16) >> 3);
             const blockAlign = stream.blockAlign || channels * bytesPerSample;
