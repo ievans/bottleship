@@ -236,3 +236,39 @@ test("gesture unlock listens for activation-triggering touch ends and only resum
         if (hadWindow) g.window = previous; else delete g.window;
     }
 });
+
+test("a gesture resumes interrupted media on a running context and respects deliberate pauses", async () => {
+    const listeners = new Map<string, () => void>();
+    const g = globalThis as { window?: unknown };
+    const previous = Object.getOwnPropertyDescriptor(g, "window");
+    g.window = { addEventListener: (type: string, fn: () => void) => { listeners.set(type, fn); } };
+    const { engine } = mockedEngine("running");
+    const element = () => ({
+        paused: true, ended: false, plays: 0,
+        async play() { this.paused = false; this.plays++; },
+        pause() { this.paused = true; },
+    });
+    const interrupted = element(), guestPaused = element();
+    Object.assign(engine, {
+        encodedSources: new Map([
+            [1, { element: interrupted, recoverOnGesture: true }],
+            [2, { element: guestPaused, recoverOnGesture: true }],
+        ]),
+    });
+    try {
+        engine.armAutoResume();
+        engine.pauseSource(2);
+        listeners.get("pointerup")!();
+        assert.equal(interrupted.plays, 1);
+        assert.equal(guestPaused.plays, 0);
+
+        await engine.pause();
+        listeners.get("pointerup")!();
+        assert.equal(interrupted.plays, 1);
+        await engine.resume();
+        assert.equal(interrupted.plays, 2);
+        assert.equal(guestPaused.plays, 0);
+    } finally {
+        if (previous) Object.defineProperty(g, "window", previous); else delete g.window;
+    }
+});

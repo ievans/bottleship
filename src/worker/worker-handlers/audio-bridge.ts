@@ -112,6 +112,7 @@ export function handleAudioBridgeMessage(message: any): boolean {
     const mss32 = system.process?.getModule("mss32") as MSS32 | undefined;
     const id = Number(message.id) || 0;
     const frames = Number(message.positionFrames) || 0;
+    const loopsRemaining = Number.isFinite(message.loopsRemaining) ? Number(message.loopsRemaining) : undefined;
     if (id && Number.isFinite(frames)) {
       const st = noteHost(id);
       st.positions++;
@@ -122,7 +123,7 @@ export function handleAudioBridgeMessage(message: any): boolean {
     // CD segments declare positionRateHz=1000, so their "frames" arrive as milliseconds.
     if (id && Number.isFinite(frames) && virtualCd().handleAudioPosition(id, frames)) return true;
     if (id && Number.isFinite(frames) && mss32?.handleAudioPosition) {
-      mss32.handleAudioPosition(id, frames);
+      mss32.handleAudioPosition(id, frames, loopsRemaining);
     }
     const quartz = system.process?.getModule("quartz") as Quartz | undefined;
     if (id && Number.isFinite(frames) && quartz?.handleAudioPosition) {

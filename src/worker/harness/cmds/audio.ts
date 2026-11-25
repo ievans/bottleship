@@ -15,7 +15,11 @@ import { probeAudio } from "@bottleship/formats/audio";
 import { BufferSource } from "@bottleship/formats/unpack/source";
 import { sys, getModule, symbolize } from "../serialize";
 import { getHostAudioStats, resetHostAudioStats } from "../../worker-handlers/audio-bridge";
-import { CTRL_BLOCK_BYTES } from "../../../audio/audio-ring-buffer";
+import { CTRL_BLOCK_BYTES, CAPTURE_CTRL_CAPTURING, CAPTURE_CTRL_WRITTEN, CAPTURE_CTRL_CAPACITY,
+    CAPTURE_CTRL_SLOTS, CAPTURE_CHANNELS, CAPTURE_CAPACITY_FRAMES } from "../../../audio/audio-ring-buffer";
+import { ensureAudioCaptureSab } from "../../modules/audio-stats-sab";
+import { bytesToBase64 } from "./screen";
+import { sessionLogPath } from "../../../harness/session";
 
 interface PumpSnapshot {
     tMs: number;
@@ -277,6 +281,71 @@ export function registerAudioCommands(svc: HarnessService): void {
         }
 
         return { worklet, host: getHostAudioStats(), buffers };
+    });
+
+    /** audioCapture({seconds?, name?}) — a real, listenable WAV of what the master
+     *  processor actually sent to destination (post-mix, post-limiter — the exact
+     *  signal audioSignal's `worklet.master` telemetry describes but cannot play
+     *  back). Every other audio verb here answers "is there a plausible signal";
+     *  this one hands a human the audio itself, which is the only way to settle
+     *  "does this actually sound right" once the numbers alone stop being enough.
+     *
+     *  Arms the capture SAB, waits for it to fill (or `seconds`, whichever is
+     *  shorter), then base64-encodes a 16-bit PCM WAV and drops it under
+     *  logs/[<session>/]debug/<name>.wav via the same debug-dump channel
+     *  dumpSurface/textures use for PNGs. Returns the path plus the captured
+     *  window's own peak/clip so a mismatch between "the file sounds fine" and
+     *  "the telemetry says it clipped" is itself diagnostic. */
+    svc.register("audioCapture", async (args) => {
+        const opts = (args[0] ?? {}) as { seconds?: number; name?: string };
+        const seconds = Math.min(Math.max(opts.seconds ?? 5, 0.5), CAPTURE_CAPACITY_FRAMES / 48000);
+        const sab = ensureAudioCaptureSab();
+        const ctrl = new Int32Array(sab, 0, CAPTURE_CTRL_SLOTS);
+        // Registration is a worker->main-thread->worklet round trip; give it a head
+        // start before arming so the first captured frames aren't silently dropped
+        // (or, on a stale registration, missed entirely — see ensureAudioCaptureSab).
+        await new Promise((r) => setTimeout(r, 150));
+        const capacity = Math.round(seconds * 48000);
+        Atomics.store(ctrl, CAPTURE_CTRL_CAPACITY, Math.min(capacity, CAPTURE_CAPACITY_FRAMES));
+        Atomics.store(ctrl, CAPTURE_CTRL_WRITTEN, 0);
+        Atomics.store(ctrl, CAPTURE_CTRL_CAPTURING, 1);
+
+        const deadline = Date.now() + seconds * 1000 + 1000;
+        while (Date.now() < deadline && Atomics.load(ctrl, CAPTURE_CTRL_CAPTURING) === 1) {
+            await new Promise((r) => setTimeout(r, 50));
+        }
+        Atomics.store(ctrl, CAPTURE_CTRL_CAPTURING, 0);
+        const written = Atomics.load(ctrl, CAPTURE_CTRL_WRITTEN);
+        if (written === 0) return { error: "no frames captured — is the master worklet node registered?" };
+
+        const pcm = new Float32Array(sab, CAPTURE_CTRL_SLOTS * 4, written * CAPTURE_CHANNELS);
+        let peak = 0, clip = 0;
+        const sampleRate = 48000;
+        const bytes = new Uint8Array(44 + pcm.length * 2);
+        const view = new DataView(bytes.buffer);
+        const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) bytes[off + i] = s.charCodeAt(i); };
+        writeStr(0, "RIFF"); view.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, "WAVE");
+        writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+        view.setUint16(22, CAPTURE_CHANNELS, true); view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * CAPTURE_CHANNELS * 2, true); view.setUint16(32, CAPTURE_CHANNELS * 2, true);
+        view.setUint16(34, 16, true);
+        writeStr(36, "data"); view.setUint32(40, pcm.length * 2, true);
+        for (let i = 0; i < pcm.length; i++) {
+            const s = pcm[i]!;
+            const a = Math.abs(s);
+            if (a > peak) peak = a;
+            if (a > 1) clip++;
+            const clamped = Math.max(-1, Math.min(1, s));
+            view.setInt16(44 + i * 2, Math.round(clamped * 32767), true);
+        }
+
+        const name = (opts.name ?? `capture-${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, "_");
+        const base64 = bytesToBase64(bytes);
+        (self as unknown as Worker).postMessage({ type: "debug_audio_dump", name, base64 });
+        return {
+            path: sessionLogPath(`debug/${name}.wav`, (globalThis as any).__bsSession ?? ""),
+            frames: written, seconds: written / sampleRate, peak, clip,
+        };
     });
 
     /** mssStreams() — the Miles stream engine's own state, per HSTREAM.

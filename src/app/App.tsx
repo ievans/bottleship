@@ -1319,9 +1319,9 @@ export default function App() {
         }
       }
     };
-    audioEngine.onPosition = (id: number, positionFrames: number) => {
+    audioEngine.onPosition = (id: number, positionFrames: number, loopsRemaining?: number) => {
       if (globalWorker) {
-        globalWorker.postMessage({ type: "audio_position", id, positionFrames });
+        globalWorker.postMessage({ type: "audio_position", id, positionFrames, loopsRemaining });
       }
     };
 
@@ -1443,6 +1443,15 @@ export default function App() {
           const rel = `debug/${name}.png`;
           const ok = writeDebugFileBase64(rel, base64);
           console.log(`BottleShip: debug PNG ${ok ? "saved" : "NOT saved (log server?)"} -> ${logArtifactPath(rel)}`);
+        }
+      } else if (event.data?.type === "debug_audio_dump") {
+        // Worker-side audio capture for listening tests: base64 WAV -> logs/[<session>/]debug/<name>.wav
+        const name = typeof event.data?.name === "string" ? event.data.name : "capture";
+        const base64 = typeof event.data?.base64 === "string" ? event.data.base64 : "";
+        if (base64) {
+          const rel = `debug/${name}.wav`;
+          const ok = writeDebugFileBase64(rel, base64);
+          console.log(`BottleShip: debug WAV ${ok ? "saved" : "NOT saved (log server?)"} -> ${logArtifactPath(rel)}`);
         }
       }
 
@@ -1706,6 +1715,10 @@ export default function App() {
       if (event.data?.type === "audio_master_stats_sab") {
         const sab = event.data?.payload?.sab as SharedArrayBuffer | undefined;
         if (sab) audioEngine?.registerMasterStatsSab(sab);
+      }
+      if (event.data?.type === "audio_capture_sab") {
+        const sab = event.data?.payload?.sab as SharedArrayBuffer | undefined;
+        if (sab) audioEngine?.registerCaptureSab(sab);
       }
       // video_frame and video_end are handled in the worker via WebGPU compositor (smackw32.ts → backend.composite)
       if (event.data?.type === "cursor_visibility") {

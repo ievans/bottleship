@@ -398,6 +398,24 @@ const awaitSessionNetwork = async (): Promise<void> => {
     if (revision === networkRevision) return;
   }
 };
+/** Boot-path wrapper: a previously-configured multiplayer relay that is now unreachable
+ *  must not fail the whole load (this runs for every load, single-player included — a
+ *  stale/dead relay address is the common case, not an edge case: the user tried
+ *  multiplayer once, the relay isn't running today). On failure this also tears the
+ *  dead config down (applySessionNetwork(null)) rather than merely swallowing the
+ *  error: RelayLink's socket.io client auto-reconnects (reconnection:true) by design,
+ *  so leaving `active` in place after a failed connect leaves that retry loop running
+ *  against a dead endpoint for the rest of the session, burning worker-thread CPU the
+ *  game needs every frame. Network failures still surface via postNetworkState
+ *  (wired in applySessionNetwork), which the UI can show without blocking the game. */
+const awaitSessionNetworkOrOffline = async (): Promise<void> => {
+  try { await awaitSessionNetwork(); }
+  catch (error) {
+    Logger.warn(LogCategory.SYSTEM,
+      `Session network unavailable, continuing offline: ${error instanceof Error ? error.message : String(error)}`);
+    applySessionNetwork(null);
+  }
+};
 lanNetwork.onStateChange(state => {
   const enabled = EmulatorConfig.getInstance().network !== null;
   postNetworkState({
@@ -1220,7 +1238,7 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false): Promi
   }
 
   try {
-    await awaitSessionNetwork();
+    await awaitSessionNetworkOrOffline();
     const module = await system.process.loader.loadExecutable(peData);
     Logger.log(LogCategory.SYSTEM, `Loaded PE. Entry point: 0x${module.entryPoint.toString(16)}, base: 0x${module.baseAddress.toString(16)}`);
 
@@ -1434,10 +1452,10 @@ const loadPeData = async (peData: Uint8Array, skipReset: boolean = false): Promi
       framePacer.start();
       gameSessionActive = true;
     };
-    await awaitSessionNetwork();
+    await awaitSessionNetworkOrOffline();
     if (childStartupGate && !childStartupGate.isPrepared) {
       childStartupGate.prepare(async preparation => {
-        await awaitSessionNetwork();
+        await awaitSessionNetworkOrOffline();
         // Preserve the existing guest-image preparation in the CHILD address space.
         const imageEnd = module.baseAddress + module.size;
         for (const patch of preparation?.imagePatches ?? []) {
