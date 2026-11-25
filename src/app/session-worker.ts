@@ -26,7 +26,7 @@ export class SessionWorker extends EventTarget implements Worker {
         if (source === null) {
             if (data?.type === 'audio_register') this.rootPresentation.set(`audio:${data.payload.id}`, data);
             else if (data?.type === 'audio_unregister') this.rootPresentation.delete(`audio:${data.payload.id}`);
-            else if (['audio_listener_sab', 'audio_stats_sab', 'audio_master_stats_sab',
+            else if (['audio_listener_sab', 'audio_stats_sab', 'audio_master_stats_sab', 'audio_capture_sab',
                 'window_title', 'cursor_visibility', 'cursor_image'].includes(data?.type)) {
                 this.rootPresentation.set(data.type, data);
             }

@@ -293,6 +293,28 @@ export function createMasterStatsSab(): SharedArrayBuffer {
     return createStatsSab();
 }
 
+// ─── Capture SAB — raw post-limiter PCM, what the user actually hears ──────
+//
+// Lets a harness verb hand a human a real WAV of the master mix, rather than
+// asking them to trust telemetry for "does this sound right" — see
+// BottleShipMasterProcessor's capture handling in bottleship-audio-worklet.ts.
+
+/** [0]=capturing flag, [1]=frames written so far, [2]=capacity in frames, [3]=sampleRate. */
+export const CAPTURE_CTRL_CAPTURING = 0;
+export const CAPTURE_CTRL_WRITTEN = 1;
+export const CAPTURE_CTRL_CAPACITY = 2;
+export const CAPTURE_CTRL_SAMPLE_RATE = 3;
+export const CAPTURE_CTRL_SLOTS = 4;
+export const CAPTURE_CTRL_BYTES = CAPTURE_CTRL_SLOTS * 4;
+
+export const CAPTURE_CHANNELS = 2;
+/** 10s @ 48kHz stereo — generous enough for any one SFX plus its surrounding mix. */
+export const CAPTURE_CAPACITY_FRAMES = 10 * 48000;
+
+export function createCaptureSab(): SharedArrayBuffer {
+    return new SharedArrayBuffer(CAPTURE_CTRL_BYTES + CAPTURE_CAPACITY_FRAMES * CAPTURE_CHANNELS * 4);
+}
+
 // ─── Audio format descriptor (passed to createAudioRingBuffer) ───────────────
 
 export interface AudioRingFormat {
