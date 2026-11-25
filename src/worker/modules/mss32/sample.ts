@@ -1013,9 +1013,26 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     exports["_AIL_3D_sample_status@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_sample_status@4"]!(ctxThunk, mem, args);
 
-    exports["_AIL_set_3D_sample_volume@8"] = (ctxThunk, mem, args) =>
-        exports["_AIL_set_sample_volume@8"]!(ctxThunk, mem, args);
+    // AIL_set_3D_sample_volume(H3DSAMPLE, F32 volume) — mss.h declares this F32 0.0..1.0,
+    // NOT the 2D API's S32 0-127 (AIL_set_sample_volume_pan is the other F32 one; see
+    // volume-levels.ts). Every other 3D_sample_* export here can delegate straight to its
+    // 2D counterpart because both sides agree on the type (playback_rate/loop_count/offset
+    // are all plain ints in mss.h) — this is the one where they don't. Delegating directly
+    // reinterpreted the raw float bits as an integer: a 0.0-1.0 float's bit pattern is
+    // essentially always > 127, so Math.min(127, ...) in the 2D setter clamped EVERY 3D
+    // sample to max volume regardless of what the game actually asked for. With several
+    // positional sounds at once (ambient fire, explosions) all pinned to max, the mix
+    // clips — audible as short bursts of garbled/distorted sound rather than silence.
+    exports["_AIL_set_3D_sample_volume@8"] = (ctxThunk, mem, args) => {
+        const volume127 = Math.round(clampLevel(f32Arg(args[1])) * 127);
+        return exports["_AIL_set_sample_volume@8"]!(ctxThunk, mem, [args[0], volume127]);
+    };
 
+    // AIL_3D_sample_volume(H3DSAMPLE) also returns F32 (mss.h), via ST(0) under __stdcall —
+    // a register this thunk layer has no mechanism to populate (see sample 2's setter
+    // comment above for why that return convention matters). Returning the raw 0-127 int
+    // through EAX, as before, is at least no worse than the 2D getter it now matches —
+    // flagged here because a caller that actually reads ST(0) still gets nothing for it.
     exports["_AIL_3D_sample_volume@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_sample_volume@4"]!(ctxThunk, mem, args);
 
