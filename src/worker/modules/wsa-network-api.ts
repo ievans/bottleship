@@ -201,10 +201,23 @@ function adapt(counter: Counter, setError: WsaErrorSetter,
 function mapPrepared<T>(result: T | Promise<T>, prepare: (value: T) => Prepared): Prepared | Promise<Prepared> {
     return result instanceof Promise ? result.then(prepare) : prepare(result);
 }
+/** Diagnostic census: real calls into socket()/WSASocket*, regardless of caller or
+ *  success/failure. Read via the `socketCallCensus` harness command — the sanctioned
+ *  way to check whether guest code reaches this export at all, since breakpoint
+ *  tooling against these call sites has been unreliable. */
+export const socketCallCensus = { calls: 0, errors: 0, lastArgs: [] as number[] };
+
+/** Diagnostic census: real calls into send()/sendto(), regardless of caller or destination.
+ *  Distinguishes "the game never attempts to send" from "it sends but LanNetwork drops/never
+ *  receives it" — read via the `sendCallCensus` harness command. */
+export const sendCallCensus: { calls: number; lastHandle?: { handle: number; valid: boolean; error?: string } } = { calls: 0 };
+
 export function makeNetworkSocketExports(table: WsaSocketTable, setError: WsaErrorSetter, counter: Counter,
     validate: (af: number, type: number, protocol: number) => number, process?: Process): Record<string, ThunkImplementation> {
     const api: Record<string, ThunkImplementation> = {};
     const create = (args: number[], fromProtocolInfo = false, wide = false): Prepared => {
+        socketCallCensus.calls++;
+        socketCallCensus.lastArgs = args.slice();
         let [af, type, protocol] = args.map(v => v | 0);
         if (fromProtocolInfo && args[3]) {
             guard(args[3], protocolInfoSize(wide));
@@ -440,14 +453,29 @@ export function makeNetworkSocketExports(table: WsaSocketTable, setError: WsaErr
         } catch (error) { return failure(error); }
     };
     const send = (a: number[], to: boolean): Prepared | Promise<Prepared> => {
-        const s = table.get(a[0]);
+        sendCallCensus.calls++;
+        let s: ReturnType<typeof table.get>;
+        try { s = table.get(a[0]); sendCallCensus.lastHandle = { handle: a[0], valid: true }; }
+        catch (error) { sendCallCensus.lastHandle = { handle: a[0], valid: false, error: error instanceof Error ? error.message : String(error) }; throw error; }
         const length = a[2] | 0;
+        sendCallCensus.lastHandle = { handle: a[0], valid: true, error: `pre-checks: type=${s.type} length=${length} flags=${a[3]} to=${to} maxMsg=${table.maxMessageSize(s.id)}` };
         if (length < 0) fail(WSA.EINVAL);
         if (s.type !== 1 && length > table.maxMessageSize(s.id)) fail(WSA.EMSGSIZE);
         if (a[3] & ~5) fail(WSA.EOPNOTSUPP);
         const data = bytes(a[1], s.type === 1 ? Math.min(length, 16384) : length);
         const dst = to && a[4] ? address(a[4], a[5] | 0) : undefined;
-        return mapPrepared(waitOperation(table, a[0], () => table.send(a[0], data, dst, a[3]), s.sendTimeout, true),
+        sendCallCensus.lastHandle.error += ` reachedWaitOperation=true`;
+        const wrappedAttempt = () => {
+            try {
+                const r = table.send(a[0], data, dst, a[3]);
+                sendCallCensus.lastHandle!.error += ` tableSendOk=${r}`;
+                return r;
+            } catch (error) {
+                sendCallCensus.lastHandle!.error += ` tableSendThrew=${error instanceof Error ? error.message : String(error)}`;
+                throw error;
+            }
+        };
+        return mapPrepared(waitOperation(table, a[0], wrappedAttempt, s.sendTimeout, true),
             value => ({ value, error: 0 }));
     };
     api.send = adapt(counter, setError, a => send(a, false));

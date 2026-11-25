@@ -49,6 +49,16 @@ function start(network: NetworkNamespaceBoot, control: MessagePort): void {
         Atomics.store(header, 1, bytes.length); Atomics.store(header, 0, status); Atomics.notify(header, 0);
     };
     control.onmessage = async ({ data }) => {
+        // Diagnostic: this worker's `lan` is a SEPARATE LanNetwork instance from the main
+        // emulator worker's `lanNetwork` singleton (see CLAUDE.md evalWorker-style pitfalls —
+        // this is the same class of trap, but architectural rather than a dynamic-import
+        // artifact). Harness code reading `lanNetwork.stats` from the main worker can never
+        // see traffic that actually flows through here; this query exists so it can ask this
+        // worker directly instead of guessing from the wrong realm.
+        if (data?.type === "debugStats" && Number.isInteger(data.id)) {
+            control.postMessage({ type: "debugStatsDone", id: data.id, stats: { ...lan.stats } });
+            return;
+        }
         if(data?.type==="shutdown"&&Number.isInteger(data.id)) {
             if(closing)return;
             closing=true;
