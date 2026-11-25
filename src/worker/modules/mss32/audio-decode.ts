@@ -8,16 +8,26 @@ import { MSSSample, MSSStream } from "./types";
 import { applyEncodedPcmLength, inspectEncodedAudio, isMp3, isOgg, refreshSampleLenDone, refreshStreamLenDone } from "./helpers";
 import { playSample, playStream } from "./playback-engine";
 
-// Decoded audio cache - avoids re-decoding same WAV files (significant perf win)
+interface CachedWav {
+    image: Uint8Array;
+    data: Float32Array;
+    sampleRate: number;
+    channels: number;
+    bitsPerSample: number;
+    formatTag: number;
+    blockAlign: number;
+    pcmBytes: number;
+}
+
 // @transient(decode cache keyed by the image bytes; a miss decodes again)
-let decodedCache = new Map<string, { data: Float32Array; sampleRate: number; channels: number }>();
+let decodedCache = new Map<string, CachedWav>();
 // @transient(size of the decode cache)
 let cacheBytes = 0;
 const MAX_CACHE_BYTES = 32 * 1024 * 1024; // 32MB max
 
 /**
  * Compute fast hash key for audio data caching.
- * Uses first 32 bytes + last 16 bytes + length for quick uniqueness check.
+ * Uses first 32 bytes + last 16 bytes + length to find a candidate.
  */
 function computeCacheKey(data: Uint8Array): string {
     let hash = data.byteLength;
@@ -34,20 +44,32 @@ function computeCacheKey(data: Uint8Array): string {
     return `${hash.toString(16)}_${data.byteLength}`;
 }
 
-function addToCache(key: string, data: Float32Array, sampleRate: number, channels: number): void {
-    const dataBytes = data.byteLength;
-    if (dataBytes > MAX_CACHE_BYTES) return;
-    while (cacheBytes + dataBytes > MAX_CACHE_BYTES && decodedCache.size > 0) {
+function findCachedWav(key: string, image: Uint8Array): CachedWav | undefined {
+    const cached = decodedCache.get(key);
+    if (cached?.image === image || cached?.image.every((byte, index) => byte === image[index])) return cached;
+    return undefined;
+}
+
+function addToCache(key: string, image: Uint8Array, parsed: NonNullable<ReturnType<typeof parseWav>>, data: Float32Array): void {
+    const size = image.byteLength + data.byteLength;
+    if (size > MAX_CACHE_BYTES) return;
+    const previous = decodedCache.get(key);
+    if (previous) {
+        cacheBytes -= previous.image.byteLength + previous.data.byteLength;
+        decodedCache.delete(key);
+    }
+    while (cacheBytes + size > MAX_CACHE_BYTES && decodedCache.size > 0) {
         const firstKey = decodedCache.keys().next().value;
         if (!firstKey) break;
         const evicted = decodedCache.get(firstKey);
         if (evicted) {
-            cacheBytes -= evicted.data.byteLength;
+            cacheBytes -= evicted.image.byteLength + evicted.data.byteLength;
         }
         decodedCache.delete(firstKey);
     }
-    decodedCache.set(key, { data, sampleRate, channels });
-    cacheBytes += dataBytes;
+    const { sampleRate, channels, bitsPerSample, formatTag, blockAlign } = parsed;
+    decodedCache.set(key, { image, data, sampleRate, channels, bitsPerSample, formatTag, blockAlign, pcmBytes: parsed.data.byteLength });
+    cacheBytes += size;
 }
 
 /**
@@ -106,16 +128,16 @@ export function decodeAudioFile(ctx: MSSContext, sample: MSSSample, formatHint?:
     }
 
     const cacheKey = computeCacheKey(sample.fileData);
-    const cached = decodedCache.get(cacheKey);
+    const cached = findCachedWav(cacheKey, sample.fileData);
     if (cached) {
         sample.fileFormat = "wav";
         sample.decodedData = cached.data;
         sample.sampleRate = cached.sampleRate;
         sample.channels = cached.channels;
-        sample.pcmBytes = (cached.data.length / cached.channels) * 2;
-        sample.bitsPerSample = 16;
-        sample.formatTag = 1;
-        sample.blockAlign = cached.channels * 2;
+        sample.pcmBytes = cached.pcmBytes;
+        sample.bitsPerSample = cached.bitsPerSample;
+        sample.formatTag = cached.formatTag;
+        sample.blockAlign = cached.blockAlign;
 
         refreshSampleLenDone(ctx, sample);
         if (sample.pendingStart && sample.decodedData.length > 0) {
@@ -135,10 +157,11 @@ export function decodeAudioFile(ctx: MSSContext, sample: MSSSample, formatHint?:
         sample.formatTag = parsed.formatTag;
         sample.blockAlign = parsed.blockAlign;
 
-        addToCache(cacheKey, sample.decodedData, parsed.sampleRate, parsed.channels);
+        addToCache(cacheKey, sample.fileData, parsed, sample.decodedData);
 
         refreshSampleLenDone(ctx, sample);
-        const fmtName = parsed.formatTag === 17 ? 'IMA_ADPCM' : parsed.formatTag === 1 ? 'PCM' : `tag${parsed.formatTag}`;
+        const fmtName = parsed.formatTag === 17 ? 'IMA_ADPCM' : parsed.formatTag === 2 ? 'MS_ADPCM'
+            : parsed.formatTag === 1 ? 'PCM' : `tag${parsed.formatTag}`;
         Logger.log(LogCategory.SYSTEM, `MSS32: Decoded WAV: ${fmtName} ${sample.channels}ch ${sample.sampleRate}Hz ${sample.decodedData.length} float samples (src ${sample.fileData.length}B) addr=0x${(sample.fileDataAddress ?? 0).toString(16)}`);
         if (sample.pendingStart && sample.decodedData.length > 0) {
             playSample(ctx, sample);
@@ -195,16 +218,16 @@ export function decodeStreamFile(ctx: MSSContext, stream: MSSStream): boolean {
     }
 
     const cacheKey = computeCacheKey(stream.fileData);
-    const cached = decodedCache.get(cacheKey);
+    const cached = findCachedWav(cacheKey, stream.fileData);
     if (cached) {
         stream.fileFormat = "wav";
         stream.decodedData = cached.data;
         stream.sampleRate = cached.sampleRate;
         stream.channels = cached.channels;
-        stream.pcmBytes = (cached.data.length / cached.channels) * 2;
-        stream.bitsPerSample = 16;
-        stream.formatTag = 1;
-        stream.blockAlign = cached.channels * 2;
+        stream.pcmBytes = cached.pcmBytes;
+        stream.bitsPerSample = cached.bitsPerSample;
+        stream.formatTag = cached.formatTag;
+        stream.blockAlign = cached.blockAlign;
         Logger.log(LogCategory.SYSTEM, `MSS32: Stream loaded from cache: "${stream.filename}" (${stream.pcmBytes} bytes)`);
         refreshStreamLenDone(ctx, stream);
         if (stream.pendingStart) {
@@ -224,7 +247,7 @@ export function decodeStreamFile(ctx: MSSContext, stream: MSSStream): boolean {
         stream.formatTag = parsed.formatTag;
         stream.blockAlign = parsed.blockAlign;
 
-        addToCache(cacheKey, stream.decodedData, stream.sampleRate, stream.channels);
+        addToCache(cacheKey, stream.fileData, parsed, stream.decodedData);
 
         Logger.log(LogCategory.SYSTEM,
             `MSS32: Stream decoded: "${stream.filename ?? '(memory)'}" (${stream.decodedData.length} samples, ${stream.channels} ch, ${stream.sampleRate} Hz)`);
@@ -303,15 +326,13 @@ export function inspectWavImage(mem: Uint8Array, wavPtr: number): (WavChunkInfo 
     };
 }
 
-export function wavFormatToDigF(formatTag: number, channels: number, bitsPerSample: number): number {
-    const stereo = channels >= 2;
-    if (formatTag === 17 || formatTag === 2) {
-        return stereo ? DIG_F_ADPCM_STEREO_16 : DIG_F_ADPCM_MONO_16;
+export function ailSoundInfoAdpcmTag(format: number, bits: number, legacyTag?: number): number | undefined {
+    if (format === 17 || (format === 2 && (bits === 4 || bits === 0))) return format;
+    // Guest memory restored from an older save may contain a DIG_F description.
+    if ((format === DIG_F_ADPCM_MONO_16 || format === DIG_F_ADPCM_STEREO_16) && legacyTag !== undefined) {
+        return legacyTag;
     }
-    if (bitsPerSample === 16 || formatTag === 3) {
-        return stereo ? DIG_F_STEREO_16 : DIG_F_MONO_16;
-    }
-    return stereo ? DIG_F_STEREO_8 : DIG_F_MONO_8;
+    return undefined;
 }
 
 export function ailBitsForWav(formatTag: number, bitsPerSample: number): number {
@@ -325,12 +346,10 @@ export function countWavSampleFrames(info: WavChunkInfo): number {
         return countImaAdpcmFrames(dataChunkSize, blockAlign, channels);
     }
     if (formatTag === 2) {
-        // MS ADPCM: 2 samples in 7-byte mono header, then 2 bits per sample in remainder
-        const header = channels >= 2 ? 14 : 7;
-        const samplesPerBlock = channels >= 2 ? 7 : 3;
-        const extra = Math.max(0, blockAlign - header);
-        const perBlock = samplesPerBlock + extra * 2;
-        return Math.floor(dataChunkSize / blockAlign) * perBlock;
+        const perBlock = countMsAdpcmBlockFrames(blockAlign, channels);
+        if (!perBlock) return 0;
+        return Math.floor(dataChunkSize / blockAlign) * perBlock
+            + countMsAdpcmBlockFrames(dataChunkSize % blockAlign, channels);
     }
     const bytesPerFrame = channels * Math.max(1, (bitsPerSample || 16) >> 3);
     return bytesPerFrame > 0 ? Math.floor(dataChunkSize / bytesPerFrame) : 0;
@@ -378,9 +397,8 @@ export function decodeImaAdpcmToS16(data: Uint8Array, channels: number, blockAli
  * so the standard one every MS ADPCM encoder writes is used.
  */
 function decodeMsAdpcmToS16(data: Uint8Array, channels: number, blockAlign: number): Int16Array {
-    if (blockAlign < 7 * channels) return new Int16Array(0);
-    // 7 header bytes per channel, two samples per remaining byte, plus the header's two.
-    const perBlock = Math.floor(((blockAlign - 7 * channels) * 2) / channels) + 2;
+    const perBlock = countMsAdpcmBlockFrames(blockAlign, channels);
+    if (!perBlock) return new Int16Array(0);
     const out = new Int16Array(Math.ceil(data.length / blockAlign) * perBlock * channels);
     let frames = 0;
     for (let at = 0; at < data.length; at += blockAlign) {
@@ -390,6 +408,11 @@ function decodeMsAdpcmToS16(data: Uint8Array, channels: number, blockAlign: numb
         frames += got;
     }
     return out.slice(0, frames * channels);
+}
+
+function countMsAdpcmBlockFrames(blockBytes: number, channels: number): number {
+    if ((channels !== 1 && channels !== 2) || blockBytes < 7 * channels) return 0;
+    return Math.floor(((blockBytes - 7 * channels) * 2) / channels) + 2;
 }
 
 export function writeAilSoundInfo(
@@ -463,13 +486,16 @@ export function parseWav(data: Uint8Array): { data: Uint8Array; channels: number
         return null;
     }
 
-    if (info.formatTag !== 1 && info.formatTag !== 17 && !(info.formatTag === 3 && info.bitsPerSample === 32)) {
+    if (info.formatTag !== 1 && info.formatTag !== 2 && info.formatTag !== 17
+        && !(info.formatTag === 3 && info.bitsPerSample === 32)) {
         Logger.warn(LogCategory.SYSTEM, `MSS32: Unsupported WAV format tag ${info.formatTag}`);
         return null;
     }
 
     if (info.formatTag === 17) {
         Logger.log(LogCategory.SYSTEM, `MSS32: IMA ADPCM detected (tag 17) - attempting decode`);
+    } else if (info.formatTag === 2) {
+        Logger.log(LogCategory.SYSTEM, `MSS32: MS ADPCM detected (tag 2) - attempting decode`);
     }
 
     const audioData = data.slice(info.dataChunkOffset, info.dataChunkOffset + info.dataChunkSize);
@@ -490,6 +516,20 @@ export function convertToFloat(data: Uint8Array, channels: number, bitsPerSample
     // Format tag 17 = IMA ADPCM - decode to PCM first
     if (formatTag === 17) {
         return decodeImaAdpcm(data, channels, blockAlign);
+    }
+
+    // Format tag 2 = MS ADPCM. parseWav used to reject this outright (every bit-depth
+    // fast path below skips bitsPerSample===4, so it fell through to "value stays 0" —
+    // total silence, not a decode error). decodeMsAdpcmToS16 already existed and was
+    // already correct (wav-info.ts's AIL_WAV_info path uses it) but nothing wired it into
+    // the actual sample-playback decode path; countWavSampleFrames already
+    // anticipated tag 2, so this was the one missing piece.
+    if (formatTag === 2) {
+        const pcm16 = decodeMsAdpcmToS16(data, channels, blockAlign);
+        const floats = new Float32Array(pcm16.length);
+        const scale = 1 / 32768;
+        for (let i = 0; i < pcm16.length; i++) floats[i] = pcm16[i]! * scale;
+        return floats;
     }
 
     const bytesPerSample = Math.max(1, bitsPerSample >> 3);

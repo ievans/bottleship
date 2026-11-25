@@ -4,7 +4,7 @@ import { MemoryGuard } from "../../core/memory/mem-guard";
 import { MSSContext, SMP_FREE } from "./context";
 import { MSSWaveOut } from "./types";
 import { ensureDriverHandle, reinitDriverFields, stopHeartbeat, makeView, MSS_SAMPLE_STRUCT_SIZE } from "./helpers";
-import { stopRingBuffer } from "./playback-engine";
+import { releaseSamplePlayback } from "./playback-engine";
 
 export function createWaveOutExports(ctx: MSSContext): Record<string, ThunkImplementation> {
     const exports: Record<string, ThunkImplementation> = {};
@@ -92,16 +92,9 @@ export function createWaveOutExports(ctx: MSSContext): Record<string, ThunkImple
         const driverAddr = args[0];
         Logger.log(LogCategory.SYSTEM, `MSS32: _AIL_waveOutClose@4 called: handle=0x${driverAddr.toString(16)}`);
 
-        // 1. Stop all playing samples
-        for (const sample of ctx.samples.values()) {
-            if (sample.isPlaying || sample.isStopped) {
-                if (!stopRingBuffer(sample.id)) {
-                    self.postMessage({ type: "audio_stop", payload: { id: sample.id } });
-                }
-                sample.isPlaying = false;
-                sample.isStopped = false;
-            }
-        }
+        // 1. Release every sample, including inactive rings still registered on the host.
+        for (const sample of ctx.samples.values()) releaseSamplePlayback(sample);
+        ctx.pendingEOSCallbacks.length = 0;
 
         // 2. Reset sample array slots → all back to free (status=SMP_FREE at +0x08)
         if (ctx.driverSampleArray) {

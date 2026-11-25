@@ -112,6 +112,29 @@ describe("MSS32 volume ABI", () => {
         expect(ctx.pendingStreamCallbacks).toHaveLength(1);
     });
 
+    test("_AIL_set_3D_sample_volume@8 takes F32 0.0-1.0, not the 2D API's S32 0-127", () => {
+        // mss.h: void AIL_set_3D_sample_volume(H3DSAMPLE sample, F32 volume) — every other
+        // 3D_sample_* export here can delegate straight to its 2D counterpart because both
+        // sides agree on the type (playback_rate/loop_count/offset are all plain ints), but
+        // volume is the one where they don't. Delegating directly reinterpreted the raw F32
+        // bits as an S32 and clamped to 127: every 3D sample played at max volume regardless
+        // of what the game asked for, and several playing at once clipped the mix.
+        const memory = new Uint8Array(0x2000);
+        Mem.bind(() => memory);
+        const ctx = context(memory);
+        ctx.samples.set(SAMPLE, { id: 1, handle: SAMPLE, volume: 127, pan: 64, is3D: true } as never);
+        const exports = createSampleExports(ctx);
+
+        exports["_AIL_set_3D_sample_volume@8"]!({} as never, memory, [SAMPLE, f32Bits(0.25)]);
+        expect(ctx.samples.get(SAMPLE)!.volume).toBe(32);
+
+        exports["_AIL_set_3D_sample_volume@8"]!({} as never, memory, [SAMPLE, f32Bits(1.0)]);
+        expect(ctx.samples.get(SAMPLE)!.volume).toBe(127);
+
+        exports["_AIL_set_3D_sample_volume@8"]!({} as never, memory, [SAMPLE, f32Bits(0.0)]);
+        expect(ctx.samples.get(SAMPLE)!.volume).toBe(0);
+    });
+
     test("_AIL_sample_user_data@8 reads the slot the setter wrote", () => {
         const memory = new Uint8Array(0x2000);
         Mem.bind(() => memory);
