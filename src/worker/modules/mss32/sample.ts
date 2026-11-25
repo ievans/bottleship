@@ -981,6 +981,10 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     exports["_AIL_release_3D_sample_handle@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_release_sample_handle@4"]!(ctxThunk, mem, args);
 
+    // Both callback types take the sample handle. Positional voices share the same
+    // sample struct and completion path, including the callback slot.
+    exports["_AIL_register_3D_EOS_callback@8"] = exports["_AIL_register_EOS_callback@8"];
+
     // _AIL_set_3D_sample_file@8(S3D, file_image) — WAV in guest memory, parses RIFF size itself
     exports["_AIL_set_3D_sample_file@8"] = (ctxThunk, mem, args) =>
         exports["_AIL_set_sample_file@12"]!(ctxThunk, mem, [args[0], args[1], 0]);

@@ -195,6 +195,7 @@ export const mss32Module: ModuleDescriptor = {
         makeFunc("_AIL_set_3D_sample_info@8", 2),
         makeFunc("_AIL_start_3D_sample@4", 1),
         makeFunc("_AIL_stop_3D_sample@4", 1),
+        makeFunc("_AIL_register_3D_EOS_callback@8", 2),
         makeFunc("_AIL_set_3D_position@16", 4),
         makeFunc("_AIL_set_3D_velocity@20", 5),
         makeFunc("_AIL_set_3D_velocity_vector@16", 4),

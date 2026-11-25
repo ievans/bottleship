@@ -87,8 +87,10 @@ export interface MSSContext {
     memAllocatedByMss: Set<number>;
     /** Queue of pending timer callbacks - processed during _AIL_serve to avoid corrupting CPU state */
     pendingTimerCallbacks: Array<{ callback: number; user: number; handle?: number }>;
-    /** Queue of pending EOS callbacks - processed during _AIL_serve to avoid corrupting CPU state */
-    pendingEOSCallbacks: Array<{ callback: number; handle: number; user: number }>;
+    /** Queue of pending EOS callbacks - processed during _AIL_serve to avoid corrupting CPU state.
+     *  One arg, HSAMPLE (mss.h: AIL_sample_callback is `void(__stdcall*)(HSAMPLE)`) — a callback
+     *  that wants its registration-time context reads it back itself via AIL_sample_user_data. */
+    pendingEOSCallbacks: Array<{ callback: number; handle: number }>;
     /** Stream callbacks (AIL_register_stream_callback) an incremental stream hit the end
      *  of source on. One arg, HSTREAM — drained in _AIL_serve like the EOS queue. */
     pendingStreamCallbacks: Array<{ callback: number; handle: number }>;

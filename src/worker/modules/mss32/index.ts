@@ -9,7 +9,7 @@ import { TimeService } from "../../runtime/time";
 import { MSSContext, createMSSContext, SMP_DONE, SMP_PLAYING } from "./context";
 import { finishSamplePlayback, getBytesPerSecond, getPlaybackLengthBytes, setSampleStatus, setStreamStatus, writeSamplePosition, writeStreamPosition, startHeartbeat, stopHeartbeat } from "./helpers";
 import { updateEmulatorState, playSample, appendDecodedChunk, resetMssRingBuffers } from "./playback-engine";
-import { invokeEOSCallback } from "./callbacks";
+import { invokeEOSCallback, serviceAudioCallbacks } from "./callbacks";
 import { pumpVfsStreams, serveIncrementalStreams } from "./stream-engine";
 import { mss32Module } from "../../api/mss32.api";
 import { convertToFloat } from "./audio-decode";
@@ -66,6 +66,14 @@ export class MSS32 implements IModule {
         // busy-spinning guest thread starves host macrotasks, freezing sample completion
         // → MSS32 voice-pool saturation hang (mac). startHeartbeat re-arms it whenever a
         // digital driver is (re)opened; closing one stops it.
+        //
+        // This fires from the raw scheduler timer wheel, NOT from inside a guest thunk call,
+        // so it must never invoke a callback directly (confirmed by crashing one: a guest
+        // corrupted to EIP≈0 — "Scheduler fatal guard" — the first time this tried it).
+        // updateEmulatorState() only QUEUES a finished sample's EOS callback; the actual
+        // invocation is drained opportunistically from inside real mss32 thunk calls (see
+        // serviceAudioCallbacks, wired into every export below by installStreamServicePoints),
+        // which is a genuine thunk-dispatch safe point the same way _AIL_serve@0's handler is.
         this.ctx.heartbeatTick = () => { pumpVfsStreams(this.ctx); updateEmulatorState(this.ctx); };
         const ctx = this.ctx;
         setTimerHandler(TimerKind.MSS_HEARTBEAT, () => ctx.heartbeatTick?.());
@@ -123,8 +131,11 @@ export class MSS32 implements IModule {
             const serviced: ThunkImplementation = (thunkCtx, mem, args) => {
                 const result = impl(thunkCtx, mem, args);
                 if (typeof result !== "number") return result;
-                return serveIncrementalStreams(
-                    this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result) ?? result;
+                // One thunk to park, one service action per call: a queued EOS/stream/timer
+                // callback (see serviceAudioCallbacks) takes priority over a stream refill.
+                return serviceAudioCallbacks(this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result)
+                    ?? serveIncrementalStreams(this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result)
+                    ?? result;
             };
             this.exports[name] = serviced;
         }

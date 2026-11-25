@@ -23,12 +23,13 @@ import {
     CTRL_PAN,
     CTRL_FREQUENCY,
     CTRL_DATA_LENGTH,
+    CTRL_CHANNELS,
+    CTRL_SAMPLE_RATE,
     CTRL_BITS_PER_SAMPLE,
     CTRL_BLOCK_ALIGN,
     STATE_PLAYING,
     STATE_STOPPED,
     CTRL_BLOCK_BYTES,
-    CTRL_STOP_REQUESTED,
     CTRL_RESERVED,
     CTRL_WRITE_CURSOR,
     CTRL_FLAGS,
@@ -61,10 +62,14 @@ const RING_CURSOR_STALE_MS = 250;
 function ensureRingBuffer(id: number, channels: number, sampleRate: number, bitsPerSample: number, dataBytes: number): SharedArrayBuffer {
     const entry = ringBuffers.get(id);
     if (entry) {
-        // Reuse if big enough, otherwise release and reallocate
-        if (entry.sab.byteLength >= CTRL_BLOCK_BYTES + dataBytes) {
+        const sab = entry.sab;
+        if (sab.byteLength >= CTRL_BLOCK_BYTES + dataBytes
+            && getCtrl(sab, CTRL_CHANNELS) === channels
+            && getCtrl(sab, CTRL_SAMPLE_RATE) === sampleRate
+            && getCtrl(sab, CTRL_BITS_PER_SAMPLE) === bitsPerSample) {
             return entry.sab;
         }
+        setCtrl(sab, CTRL_STATE, STATE_STOPPED);
         releaseRingBuffer(id);
     }
 
@@ -473,6 +478,7 @@ export function playSample(ctx: MSSContext, sample: MSSSample): void {
     setCtrl(sab, CTRL_FREQUENCY, freqHz);
     setCtrl(sab, CTRL_LOOP_MODE, loopCountToMode(sample.loopCount));
     writeLoopBlock(sab, sample);
+    setCtrl(sab, CTRL_PLAY_CURSOR, 0);
     setCtrl(sab, CTRL_RESERVED, 1); // signal worklet to reset position & loopsCompleted
     if (sample.is3D) applySample3D(sample); // write CTRL_3D_* before the worklet starts mixing
     setCtrl(sab, CTRL_STATE, STATE_PLAYING);
@@ -559,11 +565,12 @@ export function appendDecodedChunk(ctx: MSSContext, sample: MSSSample, chunk: Fl
 
 // ==================== Stop / Resume (shared by samples and streams) ====================
 
-/** Stop playback via ring buffer Atomics. Returns true if handled. */
+/** Stop playback immediately, retaining the cursor for Miles' resume APIs. */
 export function stopRingBuffer(id: number): boolean {
     const entry = ringBuffers.get(id);
     if (!entry) return false;
-    setCtrl(entry.sab, CTRL_STOP_REQUESTED, 1);
+    // A deferred stop can land after a new start on the same handle and mute it.
+    setCtrl(entry.sab, CTRL_STATE, STATE_STOPPED);
     return true;
 }
 

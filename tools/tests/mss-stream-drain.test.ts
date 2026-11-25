@@ -7,9 +7,9 @@ import {
 import {
     ensureStreamingRing, appendStreamingRing, startStreamingRing,
     incrementalStreamFinished, incrementalStreamPosition, finishIncrementalStream, resetMssRingBuffers,
-    playStream,
+    playStream, restorePcmRing, playSample, stopRingBuffer, resumeRingBuffer, pcmRingPlayFrame,
 } from "../../src/worker/modules/mss32/playback-engine";
-import type { MSSStream, MSSStreamSource } from "../../src/worker/modules/mss32/types";
+import type { MSSSample, MSSStream, MSSStreamSource } from "../../src/worker/modules/mss32/types";
 import type { MSSContext } from "../../src/worker/modules/mss32/context";
 
 let Processor: any;
@@ -131,6 +131,44 @@ describe("Miles streaming ring consumption", () => {
 // loop-block cases live beside the import that captures it.
 const FRAMES = 100;
 const BLOCK = 128;
+
+test("Miles PCM stops preserve position on resume and restart a recycled voice from the beginning", () => {
+    const memory = new Uint8Array(4096);
+    const ctx = {
+        process: { getCurrentMemory: () => memory }, digitalDriverHandle: 0, samplesById: new Map(),
+    } as unknown as MSSContext;
+    const sample = {
+        id: 321, handle: 64, channels: 1, sampleRate: 48000, bitsPerSample: 16,
+        playbackRate: 1, volume: 127, pan: 64, loopCount: 1, isStopped: false,
+        decodedData: new Float32Array(512).fill(0.25, 0, 128).fill(0.5, 128),
+    } as MSSSample;
+    const processor = new Processor();
+    const previousPost = self.postMessage;
+    self.postMessage = (message: any) => {
+        if (message.type === "audio_register") {
+            processor.port.onmessage({ data: { type: "register", ...message.payload } });
+        }
+    };
+    try {
+        expect(restorePcmRing(ctx, sample, 0, true)).toBe(true);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.25);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+
+        stopRingBuffer(sample.id);
+        expect(quantum(processor)[0][0]).toBe(0);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+        resumeRingBuffer(sample.id);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.5);
+
+        // The guest reuses a playing handle before the worklet gets another block.
+        stopRingBuffer(sample.id);
+        playSample(ctx, sample);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.25);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+    } finally {
+        self.postMessage = previousPost;
+    }
+});
 
 function makeVoice(loopMode: number, loopStart: number, loopEnd: number) {
     const proc = new Processor();
