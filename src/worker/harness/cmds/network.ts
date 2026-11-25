@@ -4,10 +4,28 @@ import { getNetplayState } from "../../net/configure-netplay";
 import { lanNetwork } from "../../net/lan-network";
 import { processIpcState } from "../../core/process-ipc";
 import { describeDirectPlay } from "../../modules/dplayx/network-api";
+import { socketCallCensus, sendCallCensus } from "../../modules/wsa-network-api";
+import { sendBroadcastCensus } from "../../modules/wsa-network";
+import { getProcessNetworkNamespace } from "../../core/process-network";
+import type { RootNetworkNamespace } from "../../core/network-namespace";
 
 import { flushCensus } from "../../backends/webgpu/ddraw/geometry-upload-window";
 
 export function registerNetworkCommands(service: HarnessService): void {
+    /** Real calls into socket()/WSASocket*, since breakpoint tooling against these
+     *  call sites has been unreliable — answers "does guest code reach this at all". */
+    service.register("socketCallCensus", () => ({ ...socketCallCensus }));
+    service.register("sendCallCensus", () => ({ ...sendCallCensus }));
+    service.register("sendBroadcastCensus", () => ({ ...sendBroadcastCensus }));
+    /** The socket actor worker owns its OWN LanNetwork instance, invisible to `networkState`'s
+     *  `lanNetwork.stats` (a different realm entirely — see wsa-actor-worker.ts). This asks
+     *  that worker directly instead of reading stats from the wrong object. */
+    service.register("actorNetworkStats", async () => {
+        const ns = getProcessNetworkNamespace() as RootNetworkNamespace & { queryActorStats?: () => Promise<{ sent: number; received: number; dropped: number }> };
+        if (typeof ns.queryActorStats !== "function") return { available: false, reason: "not a RootNetworkNamespace or no actor worker started" };
+        try { return { available: true, stats: await ns.queryActorStats() }; }
+        catch (error) { return { available: false, reason: error instanceof Error ? error.message : String(error) }; }
+    });
     /** GeometryUploadWindow.flush() census — real queue.writeBuffer calls across every
      *  ring, since the dynamic-import path evalWorker scripts use resolves to a SEPARATE
      *  module instance than the one the real render path holds (confirmed live: a wrapped
