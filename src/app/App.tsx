@@ -1319,9 +1319,9 @@ export default function App() {
         }
       }
     };
-    audioEngine.onPosition = (id: number, positionFrames: number) => {
+    audioEngine.onPosition = (id: number, positionFrames: number, loopsRemaining?: number) => {
       if (globalWorker) {
-        globalWorker.postMessage({ type: "audio_position", id, positionFrames });
+        globalWorker.postMessage({ type: "audio_position", id, positionFrames, loopsRemaining });
       }
     };
 

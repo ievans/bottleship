@@ -149,7 +149,15 @@ export function createMSSContext(process: Process): MSSContext {
         driverNoopStub: 0,
         driverNoopTable: 0,
         driverSampleArray: 0,
-        driverMaxSamples: 16,
+        // Default big enough for what titles actually request: Generals/ZH's own
+        // AudioSettings.ini/GameLOD.ini ask for SampleCount2D + SampleCount3D up to
+        // 4+25 / 6+24 = 29-30 total at MilesAudioManager::initialize3DEaxListener,
+        // ALL allocated up front via AIL_allocate_sample_handle/_3D_ in a loop with
+        // no retry — a pool smaller than the total silently starves roughly half the
+        // 3D voices for the rest of the process (DEBUG_ASSERTCRASH is debug-only;
+        // release just runs with a smaller m_available3DSamples than intended),
+        // which is exactly "some sound effects don't play" under any real load.
+        driverMaxSamples: 48,
         driverOutputRate: 44100,
         driverTypeTag: 0,
         sampleTypeTag: 0,
@@ -166,7 +174,9 @@ export function createMSSContext(process: Process): MSSContext {
         preferences: (() => {
             const p = new Array(32).fill(0);
             p[0] = 0;     // DIG_RESAMPLING_TOLERANCE (default 0)
-            p[1] = 16;    // DIG_MIXER_CHANNELS (max simultaneous samples; MSS32 default=16)
+            p[1] = 48;    // DIG_MIXER_CHANNELS — kept equal to driverMaxSamples above so
+                          // waveOutOpen's "preference changed" check doesn't force a
+                          // reallocation before any sample has been handed out.
             p[2] = 500;   // DIG_LATENCY
             p[3] = 120;   // DIG_MIXER_GRANULARITY
             p[4] = 8;     // DIG_USE_WAVEOUT

@@ -233,7 +233,7 @@ describe("mss32 participant", () => {
         const streamValues: Partial<MSSStream> = {
             id: 0x10009, handle: 0x6a00, filename: "intro.wav", fileFormat: "wav", sampleRate: 44100, channels: 1, bitsPerSample: 8,
             formatTag: 2, blockAlign: 2, streamMemory: 0x5000, volume: 50, pan: 10, playbackRate: 0.5, playbackRateHz: 11025, loopCount: 0,
-            pcmBytes: 8000, streamDummyBuffer: 0x5200, isPlaying: true, isPaused: true, position: 512, pendingStart: true, encodedDurationMs: 900,
+            loopsRemaining: 3, pcmBytes: 8000, streamDummyBuffer: 0x5200, isPlaying: true, isPaused: true, position: 512, pendingStart: true, encodedDurationMs: 900,
         };
         expect(Object.keys(streamValues).sort()).toEqual(saved(MSS_STREAM_FIELDS));
         for (const [field, value] of Object.entries(streamValues)) {
@@ -475,7 +475,7 @@ describe("mss32 participant", () => {
             const p = savestateParticipants.all().find(x => x.id === "mss32")!;
             expect(p.covers).toEqual(["mss32"]);
             expect(savestateParticipants.coveredModules().has("mss32")).toBe(true);
-            expect(savestateParticipants.schemas().mss32).toEqual({ version: 1, schemaHash: "567f198e080fc09e" });
+            expect(savestateParticipants.schemas().mss32).toEqual({ version: 1, schemaHash: "3841a76e0edae062" });
             ctx.insideAilServe = true;
             expect(() => p.capture({} as never)).toThrow(CaptureRefusal);
         } finally {

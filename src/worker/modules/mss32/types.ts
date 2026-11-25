@@ -150,6 +150,11 @@ export interface MSSStream {
     playbackRate: number;
     playbackRateHz?: number;
     loopCount: number;
+    /** AIL_stream_loop_count's answer: loops left on a finite-loop encoded stream, as last
+     *  reported by the host HTMLAudioElement (audio-engine.ts's own decrementing counter —
+     *  Miles' real semantics, which a map script's hasMusicTrackCompleted polls). Undefined
+     *  until the first position report arrives, or for an infinitely-looping stream. */
+    loopsRemaining?: number;
     pcmBytes?: number;
     streamDummyBuffer?: number; // Allocated dummy buffer for stream struct
     isPlaying: boolean;

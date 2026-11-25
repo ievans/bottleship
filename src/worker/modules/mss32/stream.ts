@@ -480,8 +480,24 @@ export function createStreamExports(ctx: MSSContext): Record<string, ThunkImplem
         if (!stream) return 0;
 
         stream.loopCount = loopCount;
+        stream.loopsRemaining = loopCount;
         if (stream.isPlaying) updateStreamPlayback(ctx, stream);
         return 0;
+    };
+
+    // _AIL_stream_loop_count@4 — the GETTER real Miles games poll (e.g.
+    // MilesAudioManager::hasMusicTrackCompleted: INFINITE_LOOP_COUNT - this >= N) to detect a
+    // stream has looped at least N times. Was entirely unimplemented: a map script's "has the
+    // ambient/quiet music track completed" condition could never become true, leaving a title
+    // stuck on whatever track last set a finite loop count (observed: GeneralsMD's
+    // AIL_set_stream_loop_count(stream, INFINITE_LOOP_COUNT=1000000) idiom for a long-but-finite
+    // loop). Answers from loopsRemaining, kept in step with the host HTMLAudioElement's own
+    // decrementing loop counter (audio-engine.ts) via position reports; falls back to the last
+    // SET value before the first report arrives, matching "no loops completed yet".
+    exports["_AIL_stream_loop_count@4"] = (ctxThunk, mem, args) => {
+        const stream = ctx.streams.get(args[0]);
+        if (!stream) return 0;
+        return stream.loopsRemaining ?? stream.loopCount;
     };
 
     // _AIL_set_stream_playback_rate@8
