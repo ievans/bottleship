@@ -18,7 +18,7 @@ import {
 import { resetRawSampleCache } from "../../src/worker/modules/mss32/raw-sample-cache";
 import {
     getCtrl, setCtrl, CTRL_PLAY_CURSOR, CTRL_WRITE_CURSOR, CTRL_BLOCK_ALIGN, CTRL_STATE, CTRL_DATA_LENGTH, CTRL_BLOCK_BYTES,
-    CTRL_FREQUENCY, CTRL_RESERVED, STATE_PLAYING, STATE_STOPPED,
+    CTRL_CHANNELS, CTRL_FREQUENCY, CTRL_RESERVED, CTRL_SAMPLE_RATE, STATE_PLAYING, STATE_STOPPED,
 } from "../../src/audio/audio-ring-buffer";
 
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
@@ -282,6 +282,25 @@ describe("mss32 participant", () => {
         await restoreMssSavestate(fresh, throughCodec(state));
         expect([...fresh.samplesById.get(1)!.decodedData!]).toEqual([...viaInfo.decodedData!]);
         expect([...fresh.samplesById.get(2)!.decodedData!]).toEqual([...odd.decodedData!]);
+    });
+
+    test("a reused voice gets a new ring when its PCM layout changes", () => {
+        const ctx = context();
+        const voice = sample(ctx, 1, { decodedData: new Float32Array(256), channels: 2, sampleRate: 44100 });
+        playSample(ctx, voice);
+        const stereo = rings.get(voice.id)!;
+
+        voice.channels = 1;
+        voice.sampleRate = 22050;
+        voice.decodedData = new Float32Array(128);
+        playSample(ctx, voice);
+
+        const mono = rings.get(voice.id)!;
+        expect(mono).not.toBe(stereo);
+        expect(getCtrl(stereo, CTRL_STATE)).toBe(STATE_STOPPED);
+        expect(getCtrl(mono, CTRL_CHANNELS)).toBe(1);
+        expect(getCtrl(mono, CTRL_SAMPLE_RATE)).toBe(22050);
+        expect(getCtrl(mono, CTRL_BLOCK_ALIGN)).toBe(4);
     });
 
     test("a playing sample gets its ring back at the saved frame; a stopped one gets it stopped at the start", async () => {
