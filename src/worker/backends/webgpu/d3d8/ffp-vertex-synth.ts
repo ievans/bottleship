@@ -1,8 +1,8 @@
 /**
  * Fixed-function vertex processing expressed as vs_1_1 bytecode.
  *
- * D3D8 lets a draw pair a declaration-only vertex shader (fixed-function vertex
- * processing) with a programmable pixel shader. The programmable link needs a vertex
+ * D3D8 lets a draw pair an FVF or a declaration-only vertex shader (fixed-function
+ * vertex processing) with a programmable pixel shader. The programmable link needs a vertex
  * stage, so this module writes the one the fixed-function pipeline would run for the
  * current state — transform, vertex colours, vertex fog, and per-stage texture coordinate
  * processing (D3DTSS_TEXCOORDINDEX passthrough / D3DTSS_TCI_CAMERASPACE* generation,
