@@ -23,12 +23,13 @@ import {
     CTRL_PAN,
     CTRL_FREQUENCY,
     CTRL_DATA_LENGTH,
+    CTRL_CHANNELS,
+    CTRL_SAMPLE_RATE,
     CTRL_BITS_PER_SAMPLE,
     CTRL_BLOCK_ALIGN,
     STATE_PLAYING,
     STATE_STOPPED,
     CTRL_BLOCK_BYTES,
-    CTRL_STOP_REQUESTED,
     CTRL_RESERVED,
     CTRL_WRITE_CURSOR,
     CTRL_FLAGS,
@@ -61,8 +62,11 @@ const RING_CURSOR_STALE_MS = 250;
 function ensureRingBuffer(id: number, channels: number, sampleRate: number, bitsPerSample: number, dataBytes: number): SharedArrayBuffer {
     const entry = ringBuffers.get(id);
     if (entry) {
-        // Reuse if big enough, otherwise release and reallocate
-        if (entry.sab.byteLength >= CTRL_BLOCK_BYTES + dataBytes) {
+        const sab = entry.sab;
+        if (sab.byteLength >= CTRL_BLOCK_BYTES + dataBytes
+            && getCtrl(sab, CTRL_CHANNELS) === channels
+            && getCtrl(sab, CTRL_SAMPLE_RATE) === sampleRate
+            && getCtrl(sab, CTRL_BITS_PER_SAMPLE) === bitsPerSample) {
             return entry.sab;
         }
         releaseRingBuffer(id);
@@ -80,14 +84,15 @@ function ensureRingBuffer(id: number, channels: number, sampleRate: number, bits
     return sab;
 }
 
-function releaseRingBuffer(id: number): void {
+function releaseRingBuffer(id: number): boolean {
     const entry = ringBuffers.get(id);
-    if (entry) {
-        if (entry.registered) {
-            self.postMessage({ type: "audio_unregister", payload: { id } });
-        }
-        ringBuffers.delete(id);
+    if (!entry) return false;
+    setCtrl(entry.sab, CTRL_STATE, STATE_STOPPED);
+    if (entry.registered) {
+        self.postMessage({ type: "audio_unregister", payload: { id } });
     }
+    ringBuffers.delete(id);
+    return true;
 }
 
 // ==================== Streaming ring (incremental AIL_open_stream) ====================
@@ -385,8 +390,13 @@ export function applySample3D(sample: MSSSample): void {
     setCtrlFloat(sab, CTRL_3D_VEL_X, v.x);
     setCtrlFloat(sab, CTRL_3D_VEL_Y, v.y);
     setCtrlFloat(sab, CTRL_3D_VEL_Z, v.z);
-    setCtrlFloat(sab, CTRL_3D_MIN_DIST, sample.minDist3D ?? 1);
-    setCtrlFloat(sab, CTRL_3D_MAX_DIST, sample.maxDist3D ?? 1e9);
+    // Some callers (including GeneralsGameCode) pass near/far to Miles'
+    // far/near API. Keep the original values for the getters, but give the
+    // mixer ordered bounds so its inverse distance curve cannot amplify them.
+    const near = sample.minDist3D ?? 1;
+    const far = sample.maxDist3D ?? 1e9;
+    setCtrlFloat(sab, CTRL_3D_MIN_DIST, Math.min(near, far));
+    setCtrlFloat(sab, CTRL_3D_MAX_DIST, Math.max(near, far));
     setCtrl(sab, CTRL_3D_MODE, sample.mode3D ?? 0);
     const cone = sample.cone3D;
     setCtrl(sab, CTRL_3D_CONE_INNER, cone ? cone.inner : 360);
@@ -406,6 +416,7 @@ export function playSample(ctx: MSSContext, sample: MSSSample): void {
 
     if (!sample.decodedData || sample.decodedData.length === 0) {
         if (sample.fileData && isEncodedFormat(sample.fileFormat)) {
+            releaseRingBuffer(sample.id);
             const volume = mixedVolume127(ctx, sample.volume) / 127.0;
             const pan = (sample.pan - 64) / 63;
             const payloadData = sample.fileData.slice();
@@ -473,6 +484,7 @@ export function playSample(ctx: MSSContext, sample: MSSSample): void {
     setCtrl(sab, CTRL_FREQUENCY, freqHz);
     setCtrl(sab, CTRL_LOOP_MODE, loopCountToMode(sample.loopCount));
     writeLoopBlock(sab, sample);
+    setCtrl(sab, CTRL_PLAY_CURSOR, 0);
     setCtrl(sab, CTRL_RESERVED, 1); // signal worklet to reset position & loopsCompleted
     if (sample.is3D) applySample3D(sample); // write CTRL_3D_* before the worklet starts mixing
     setCtrl(sab, CTRL_STATE, STATE_PLAYING);
@@ -559,12 +571,20 @@ export function appendDecodedChunk(ctx: MSSContext, sample: MSSSample, chunk: Fl
 
 // ==================== Stop / Resume (shared by samples and streams) ====================
 
-/** Stop playback via ring buffer Atomics. Returns true if handled. */
+/** Stop playback immediately, retaining the cursor for Miles' resume APIs. */
 export function stopRingBuffer(id: number): boolean {
     const entry = ringBuffers.get(id);
     if (!entry) return false;
-    setCtrl(entry.sab, CTRL_STOP_REQUESTED, 1);
+    // A deferred stop can land after a new start on the same handle and mute it.
+    setCtrl(entry.sab, CTRL_STATE, STATE_STOPPED);
     return true;
+}
+
+/** Drop a released Miles sample from the output graph, including idle PCM rings. */
+export function releaseSamplePlayback(sample: MSSSample): void {
+    if (!releaseRingBuffer(sample.id) && (sample.isPlaying || sample.isStopped)) {
+        self.postMessage({ type: "audio_stop", payload: { id: sample.id } });
+    }
 }
 
 /**

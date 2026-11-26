@@ -3,7 +3,7 @@ import { Logger, LogCategory } from "../../core/logger";
 import { MemoryGuard } from "../../core/memory/mem-guard";
 import { MSSContext } from "./context";
 import { ensureDriverHandle, stopHeartbeat, freeDriverResources, readFilenameArg } from "./helpers";
-import { stopRingBuffer } from "./playback-engine";
+import { releaseSamplePlayback } from "./playback-engine";
 
 export function createDigitalDriverExports(ctx: MSSContext): Record<string, ThunkImplementation> {
     const exports: Record<string, ThunkImplementation> = {};
@@ -57,13 +57,8 @@ export function createDigitalDriverExports(ctx: MSSContext): Record<string, Thun
         const dig = args[0];
         Logger.log(LogCategory.SYSTEM, `MSS32: _AIL_close_digital_driver@4 called: dig=0x${dig.toString(16)}`);
         stopHeartbeat(ctx);
-        for (const sample of ctx.samples.values()) {
-            if (sample.isPlaying) {
-                if (!stopRingBuffer(sample.id)) {
-                    self.postMessage({ type: "audio_stop", payload: { id: sample.id } });
-                }
-            }
-        }
+        for (const sample of ctx.samples.values()) releaseSamplePlayback(sample);
+        ctx.pendingEOSCallbacks.length = 0;
         ctx.samples.clear();
         ctx.samplesById.clear();
         if (dig === ctx.digitalDriverHandle) {

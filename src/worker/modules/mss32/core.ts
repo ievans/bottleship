@@ -5,7 +5,7 @@ import { MemoryGuard } from "../../core/memory/mem-guard";
 import { isValidAddress } from "../../core/memory/address-guard";
 import { MSSContext, SMP_PLAYING } from "./context";
 import { ensureDriverHandle, startHeartbeat, stopHeartbeat, freeDriverResources, getBytesPerSecond, getPlaybackLengthBytes, getDigitalMasterVolume, setDigitalMasterVolume } from "./helpers";
-import { updateEmulatorState, stopRingBuffer, updateSamplePlayback, updateStreamPlayback } from "./playback-engine";
+import { updateEmulatorState, releaseSamplePlayback, updateSamplePlayback, updateStreamPlayback } from "./playback-engine";
 import { clampLevel, f32Arg } from "./volume-levels";
 import { fpuPush } from "../../core/fpu-helper";
 import { processPendingTimerCallbacks, processPendingEOSCallbacks, processPendingStreamCallbacks } from "./callbacks";
@@ -58,13 +58,8 @@ export function createCoreExports(ctx: MSSContext): Record<string, ThunkImplemen
         stopHeartbeat(ctx);
         freeDriverResources(ctx);
         ctx.initialized = false;
-        for (const sample of ctx.samples.values()) {
-            if (sample.isPlaying) {
-                if (!stopRingBuffer(sample.id)) {
-                    self.postMessage({ type: "audio_stop", payload: { id: sample.id } });
-                }
-            }
-        }
+        for (const sample of ctx.samples.values()) releaseSamplePlayback(sample);
+        ctx.pendingEOSCallbacks.length = 0;
         ctx.samples.clear();
         ctx.samplesById.clear();
         ctx.waveOuts.clear();

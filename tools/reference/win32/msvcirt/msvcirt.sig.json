@@ -1,0 +1,18 @@
+{
+  "source": "hand-curated from documented MSVC iostream (msvcirt.dll) __thiscall signatures; _mtlock/_mtunlock deliberately omitted so the msvcirt entry in CRT_DLL (pe-import-binding.ts) resolves them as cdecl instead",
+  "generated": "2026-11-23T00:00:00.000Z",
+  "module": "msvcirt",
+  "functions": [
+    { "name": "??0ifstream@@QAE@PBDHH@Z", "argCount": 3 },
+    { "name": "??0exception@@QAE@XZ", "argCount": 0 },
+    { "name": "??0exception@@QAE@ABV0@@Z", "argCount": 1 },
+    { "name": "??1ifstream@@UAE@XZ", "argCount": 0 },
+    { "name": "??1ios@@UAE@XZ", "argCount": 0 },
+    { "name": "??1exception@@UAE@XZ", "argCount": 0 },
+    { "name": "??_Difstream@@QAEXXZ", "argCount": 0 },
+    { "name": "?seekg@istream@@QAEAAV1@JW4seek_dir@ios@@@Z", "argCount": 2 },
+    { "name": "?tellg@istream@@QAEJXZ", "argCount": 0 },
+    { "name": "?sbumpc@streambuf@@QAEHXZ", "argCount": 0 },
+    { "name": "?openprot@filebuf@@2HB", "argCount": 0 }
+  ]
+}

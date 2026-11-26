@@ -12,9 +12,9 @@ import {
 } from "./helpers";
 import {
     AILSOUNDINFO_SIZE, DIG_F_16BITS_MASK, DIG_F_ADPCM_MASK, DIG_F_STEREO_MASK,
-    convertToFloat, decodeAudioFile, readAilSoundInfo,
+    ailSoundInfoAdpcmTag, convertToFloat, decodeAudioFile, readAilSoundInfo,
 } from "./audio-decode";
-import { playSample, updateSamplePlayback, stopRingBuffer, resumeRingBuffer, seekRingBuffer, applySample3D } from "./playback-engine";
+import { playSample, releaseSamplePlayback, updateSamplePlayback, stopRingBuffer, resumeRingBuffer, seekRingBuffer, applySample3D } from "./playback-engine";
 import { System } from "../../core/system";
 import { i32ToFloat } from "../../../audio/audio-ring-buffer";
 import { ensureListener3D, writeListener3D } from "./spatial";
@@ -158,12 +158,8 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
         const handle = args[0];
         const sample = ctx.samples.get(handle);
         if (sample) {
-            // Stop playback
-            if (sample.isPlaying || sample.isStopped) {
-                if (!stopRingBuffer(sample.id)) {
-                    self.postMessage({ type: "audio_stop", payload: { id: sample.id } });
-                }
-            }
+            releaseSamplePlayback(sample);
+            ctx.pendingEOSCallbacks = ctx.pendingEOSCallbacks.filter(pending => pending.handle !== handle);
             ctx.samplesById.delete(sample.id);
 
             // Mark slot as free — real MSS32 just sets SMP_FREE, doesn't full-zero
@@ -578,6 +574,11 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
                     `MSS32: _AIL_set_sample_file@12: unsupported image at 0x${filePtr.toString(16)} → 0`);
                 return 0;
             }
+            // Miles applies the WAV's rate when configuring the sample. A rate set
+            // before loading the image belongs to the previous/default format.
+            if (sampleObj.fileFormat === "wav") {
+                exports["_AIL_set_sample_playback_rate@8"]!(ctxThunk, mem, [sample, sampleObj.sampleRate]);
+            }
         }
         return 1;
     };
@@ -633,12 +634,6 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     // slices out of it never calls set_sample_file at all, so a missing set_sample_info
     // leaves the voice allocated, "configured" into nothing, and silent while every status
     // the guest can read says PLAYING.
-    //
-    // `format` is the DIG_F_* bitmask AIL_WAV_info emits (this module's own convention,
-    // and what _AIL_decompress_ADPCM@12 already reads); WAVE_FORMAT_IMA_ADPCM (17) is
-    // accepted too since it cannot collide with a DIG_F value (0..7). DIG_F says only
-    // "ADPCM or not" — which ADPCM flavour comes from the AIL_WAV_info that described
-    // this same buffer, exactly as decompress_ADPCM resolves it.
     const setSampleInfo: ThunkImplementation = (ctxThunk, mem, args) => {
         const handle = args[0];
         const infoPtr = args[1];
@@ -666,12 +661,11 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
             return 0;
         }
 
-        const isAdpcm = (info.format & DIG_F_ADPCM_MASK) !== 0 || info.format === 17;
+        const adpcmTag = ailSoundInfoAdpcmTag(info.format, info.bits, ctx.wavFormatByDataPtr.get(info.dataPtr));
+        const isAdpcm = adpcmTag !== undefined;
         const channels = info.channels > 0 ? info.channels : ((info.format & DIG_F_STEREO_MASK) ? 2 : 1);
         const bits = info.bits > 0 ? info.bits : (isAdpcm ? 4 : ((info.format & DIG_F_16BITS_MASK) ? 16 : 8));
-        const formatTag = isAdpcm
-            ? (ctx.wavFormatByDataPtr.get(info.dataPtr) ?? 17)
-            : (bits === 32 ? 3 : 1);
+        const formatTag = adpcmTag ?? (bits === 32 ? 3 : 1);
         // block_size describes an ADPCM block and is meaningless for PCM, where the frame
         // size is fixed by channels x bits. Apps leave it uninitialized on the PCM path —
         // GTA III's carries a leftover stack address — so reading it there turns a good
@@ -983,6 +977,10 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     exports["_AIL_release_3D_sample_handle@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_release_sample_handle@4"]!(ctxThunk, mem, args);
 
+    // Both callback types take the sample handle. Positional voices share the same
+    // sample struct and completion path, including the callback slot.
+    exports["_AIL_register_3D_EOS_callback@8"] = exports["_AIL_register_EOS_callback@8"];
+
     // _AIL_set_3D_sample_file@8(S3D, file_image) — WAV in guest memory, parses RIFF size itself
     exports["_AIL_set_3D_sample_file@8"] = (ctxThunk, mem, args) =>
         exports["_AIL_set_sample_file@12"]!(ctxThunk, mem, [args[0], args[1], 0]);
@@ -1011,9 +1009,26 @@ export function createSampleExports(ctx: MSSContext): Record<string, ThunkImplem
     exports["_AIL_3D_sample_status@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_sample_status@4"]!(ctxThunk, mem, args);
 
-    exports["_AIL_set_3D_sample_volume@8"] = (ctxThunk, mem, args) =>
-        exports["_AIL_set_sample_volume@8"]!(ctxThunk, mem, args);
+    // AIL_set_3D_sample_volume(H3DSAMPLE, F32 volume) — mss.h declares this F32 0.0..1.0,
+    // NOT the 2D API's S32 0-127 (AIL_set_sample_volume_pan is the other F32 one; see
+    // volume-levels.ts). Every other 3D_sample_* export here can delegate straight to its
+    // 2D counterpart because both sides agree on the type (playback_rate/loop_count/offset
+    // are all plain ints in mss.h) — this is the one where they don't. Delegating directly
+    // reinterpreted the raw float bits as an integer: a 0.0-1.0 float's bit pattern is
+    // essentially always > 127, so Math.min(127, ...) in the 2D setter clamped EVERY 3D
+    // sample to max volume regardless of what the game actually asked for. With several
+    // positional sounds at once (ambient fire, explosions) all pinned to max, the mix
+    // clips — audible as short bursts of garbled/distorted sound rather than silence.
+    exports["_AIL_set_3D_sample_volume@8"] = (ctxThunk, mem, args) => {
+        const volume127 = Math.round(clampLevel(f32Arg(args[1])) * 127);
+        return exports["_AIL_set_sample_volume@8"]!(ctxThunk, mem, [args[0], volume127]);
+    };
 
+    // AIL_3D_sample_volume(H3DSAMPLE) also returns F32 (mss.h), via ST(0) under __stdcall —
+    // a register this thunk layer has no mechanism to populate (see sample 2's setter
+    // comment above for why that return convention matters). Returning the raw 0-127 int
+    // through EAX, as before, is at least no worse than the 2D getter it now matches —
+    // flagged here because a caller that actually reads ST(0) still gets nothing for it.
     exports["_AIL_3D_sample_volume@4"] = (ctxThunk, mem, args) =>
         exports["_AIL_sample_volume@4"]!(ctxThunk, mem, args);
 

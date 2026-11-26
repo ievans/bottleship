@@ -1,15 +1,18 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
     createAudioRingBuffer, setCtrl, getCtrl, writeRingData,
-    CTRL_STATE, CTRL_LOOP_MODE, CTRL_PLAY_CURSOR, CTRL_WRITE_CURSOR, CTRL_DATA_LENGTH, STATE_PLAYING,
+    CTRL_STATE, CTRL_LOOP_MODE, CTRL_PLAY_CURSOR, CTRL_WRITE_CURSOR, CTRL_DATA_LENGTH, STATE_PLAYING, STATE_STOPPED,
     CTRL_BLOCK_BYTES, CTRL_LOOP_START_FRAME, CTRL_LOOP_END_FRAME, CTRL_SLOTS,
+    CTRL_3D_MIN_DIST, CTRL_3D_MAX_DIST, createListenerSab,
 } from "../../src/audio/audio-ring-buffer";
 import {
     ensureStreamingRing, appendStreamingRing, startStreamingRing,
     incrementalStreamFinished, incrementalStreamPosition, finishIncrementalStream, resetMssRingBuffers,
-    playStream,
+    playStream, restorePcmRing, playSample, stopRingBuffer, resumeRingBuffer, pcmRingPlayFrame, describeRing,
 } from "../../src/worker/modules/mss32/playback-engine";
-import type { MSSStream, MSSStreamSource } from "../../src/worker/modules/mss32/types";
+import { MSS32 } from "../../src/worker/modules/mss32";
+import { createSampleExports } from "../../src/worker/modules/mss32/sample";
+import type { MSSSample, MSSStream, MSSStreamSource } from "../../src/worker/modules/mss32/types";
 import type { MSSContext } from "../../src/worker/modules/mss32/context";
 
 let Processor: any;
@@ -131,6 +134,110 @@ describe("Miles streaming ring consumption", () => {
 // loop-block cases live beside the import that captures it.
 const FRAMES = 100;
 const BLOCK = 128;
+
+test("Miles ignores stale completion while a recycled sample is playing and unregisters it on release", () => {
+    const memory = new Uint8Array(4096);
+    const sample = {
+        id: 322, handle: 64, channels: 1, sampleRate: 48000, bitsPerSample: 16,
+        playbackRate: 1, volume: 127, pan: 64, loopCount: 1, isStopped: false, isPlaying: true,
+        decodedData: new Float32Array(128).fill(0.3), pcmBytes: 256,
+    } as MSSSample;
+    const ctx = {
+        process: { getCurrentMemory: () => memory }, digitalDriverHandle: 0,
+        samples: new Map([[sample.handle, sample]]), samplesById: new Map([[sample.id, sample]]),
+        pendingEOSCallbacks: [], streamsById: new Map(),
+    } as unknown as MSSContext;
+    new DataView(memory.buffer).setUint32(sample.handle + 0x4c, 0x800, true);
+    const mss = Object.assign(new MSS32(), { ctx });
+    const messages: string[] = [];
+    const previousPost = self.postMessage;
+    self.postMessage = (message: any) => { messages.push(message.type); };
+    try {
+        expect(restorePcmRing(ctx, sample, 0, true)).toBe(true);
+        mss.handleAudioEnded(sample.id);
+        expect(sample.isPlaying).toBe(true);
+        expect(ctx.pendingEOSCallbacks).toHaveLength(0);
+
+        stopRingBuffer(sample.id);
+        expect(describeRing(sample.id)?.state).toBe(STATE_STOPPED);
+        mss.handleAudioEnded(sample.id);
+        expect(sample.isPlaying).toBe(false);
+        expect(ctx.pendingEOSCallbacks).toHaveLength(1);
+
+        createSampleExports(ctx)["_AIL_release_sample_handle@4"]!({} as never, memory, [sample.handle]);
+        expect(messages).toContain("audio_unregister");
+        expect(describeRing(sample.id)).toBeNull();
+        expect(ctx.pendingEOSCallbacks).toHaveLength(0);
+    } finally {
+        self.postMessage = previousPost;
+    }
+});
+
+test("reversed Miles distance limits do not amplify a positional sample", () => {
+    const memory = new Uint8Array(4096);
+    const ctx = { process: { getCurrentMemory: () => memory }, digitalDriverHandle: 0 } as unknown as MSSContext;
+    const sample = {
+        id: 323, handle: 64, channels: 1, sampleRate: 48000, bitsPerSample: 16,
+        playbackRate: 1, volume: 32, pan: 64, loopCount: 1, isStopped: false,
+        decodedData: new Float32Array(128).fill(0.5),
+        is3D: true, pos3D: { x: 0, y: 0, z: 350 }, minDist3D: 800, maxDist3D: 175,
+    } as MSSSample;
+    const processor = new Processor();
+    processor.port.onmessage({ data: { type: "register_listener", sab: createListenerSab() } });
+    const previousPost = self.postMessage;
+    self.postMessage = (message: any) => {
+        if (message.type !== "audio_register") return;
+        processor.port.onmessage({ data: { type: "register", ...message.payload } });
+    };
+    try {
+        expect(restorePcmRing(ctx, sample, 0, true)).toBe(true);
+        const ctrl = processor.ringBuffers.get(sample.id).ctrl;
+        const spatial = new Float32Array(ctrl.buffer, ctrl.byteOffset, ctrl.length);
+        expect(spatial[CTRL_3D_MIN_DIST]).toBe(175);
+        expect(spatial[CTRL_3D_MAX_DIST]).toBe(800);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.5 * (32 / 127) * (175 / 350) * Math.SQRT1_2, 3);
+    } finally {
+        self.postMessage = previousPost;
+    }
+});
+
+test("Miles PCM stops preserve position on resume and restart a recycled voice from the beginning", () => {
+    const memory = new Uint8Array(4096);
+    const ctx = {
+        process: { getCurrentMemory: () => memory }, digitalDriverHandle: 0, samplesById: new Map(),
+    } as unknown as MSSContext;
+    const sample = {
+        id: 321, handle: 64, channels: 1, sampleRate: 48000, bitsPerSample: 16,
+        playbackRate: 1, volume: 127, pan: 64, loopCount: 1, isStopped: false,
+        decodedData: new Float32Array(512).fill(0.25, 0, 128).fill(0.5, 128),
+    } as MSSSample;
+    const processor = new Processor();
+    const previousPost = self.postMessage;
+    self.postMessage = (message: any) => {
+        if (message.type === "audio_register") {
+            processor.port.onmessage({ data: { type: "register", ...message.payload } });
+        }
+    };
+    try {
+        expect(restorePcmRing(ctx, sample, 0, true)).toBe(true);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.25);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+
+        stopRingBuffer(sample.id);
+        expect(quantum(processor)[0][0]).toBe(0);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+        resumeRingBuffer(sample.id);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.5);
+
+        // The guest reuses a playing handle before the worklet gets another block.
+        stopRingBuffer(sample.id);
+        playSample(ctx, sample);
+        expect(quantum(processor)[0][0]).toBeCloseTo(0.25);
+        expect(pcmRingPlayFrame(sample.id)).toBe(128);
+    } finally {
+        self.postMessage = previousPost;
+    }
+});
 
 function makeVoice(loopMode: number, loopStart: number, loopEnd: number) {
     const proc = new Processor();

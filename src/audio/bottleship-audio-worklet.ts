@@ -35,6 +35,8 @@ import {
     LCTRL_GAIN, LCTRL_DISTANCE_MODEL, LCTRL_SPEED_OF_SOUND, LCTRL_FLAGS,
     LFLAG_LEFT_HANDED, LISTENER_SLOTS,
     i32ToFloat,
+    CAPTURE_CTRL_CAPTURING, CAPTURE_CTRL_WRITTEN, CAPTURE_CTRL_CAPACITY, CAPTURE_CTRL_SLOTS,
+    CAPTURE_CHANNELS,
 } from "./audio-ring-buffer";
 import { spatialize, makeSpatialResult, type SpatialParams } from "./spatializer";
 
@@ -82,7 +84,7 @@ const LIMIT_K = 1 - LIMIT_T;
 // audio-engine.ts verifies the echo and logs loudly on a mismatch or timeout,
 // because a cache hit that silently skips this whole file is worse than a version
 // bump you forgot: the failure otherwise looks identical to "nothing is wrong".
-const WORKLET_MODULE_VERSION = 13;
+const WORKLET_MODULE_VERSION = 14;
 
 // Discontinuity detector threshold: |s[n]−s[n−1]| above this between adjacent
 // output samples counts as a click/splice candidate.
@@ -1100,6 +1102,10 @@ class BottleShipAudioProcessor extends AudioWorkletProcessor {
 class BottleShipMasterProcessor extends AudioWorkletProcessor {
   private statsCtrl: Int32Array | null = null;
   private lastOut: number[] = [0, 0];
+  // Raw post-limiter PCM capture — lets a harness verb hand a human an actual WAV
+  // of what this processor decided the user hears, instead of only telemetry.
+  private captureCtrl: Int32Array | null = null;
+  private captureData: Float32Array | null = null;
 
   constructor() {
     super();
@@ -1108,6 +1114,11 @@ class BottleShipMasterProcessor extends AudioWorkletProcessor {
       const msg = event.data;
       if (msg?.type === "register_master_stats") {
         this.statsCtrl = new Int32Array(msg.sab, 0, 16);
+      }
+      if (msg?.type === "register_capture") {
+        this.captureCtrl = new Int32Array(msg.sab, 0, CAPTURE_CTRL_SLOTS);
+        this.captureData = new Float32Array(msg.sab, CAPTURE_CTRL_SLOTS * 4);
+        this.port.postMessage({ type: "capture_registered" });
       }
     };
   }
@@ -1177,6 +1188,25 @@ class BottleShipMasterProcessor extends AudioWorkletProcessor {
       if (jumpMilli > Atomics.load(stats, STATS_MAX_JUMP_MILLI)) {
         Atomics.store(stats, STATS_MAX_JUMP_MILLI, jumpMilli);
       }
+    }
+
+    // ─── Raw PCM capture: interleaved, POST-limiter — exactly what left this
+    // processor for destination. Armed/drained by a harness verb; a no-op (one
+    // Atomics.load) whenever nothing is capturing. ───
+    const cc = this.captureCtrl;
+    if (cc && this.captureData && Atomics.load(cc, CAPTURE_CTRL_CAPTURING) === 1) {
+      const data = this.captureData;
+      const capacity = Atomics.load(cc, CAPTURE_CTRL_CAPACITY);
+      let written = Atomics.load(cc, CAPTURE_CTRL_WRITTEN);
+      const left = output[0]!;
+      const right = output[Math.min(1, output.length - 1)] ?? left;
+      for (let i = 0; i < frames && written < capacity; i++, written++) {
+        const o = written * CAPTURE_CHANNELS;
+        data[o] = left[i] ?? 0;
+        data[o + 1] = right[i] ?? 0;
+      }
+      Atomics.store(cc, CAPTURE_CTRL_WRITTEN, written);
+      if (written >= capacity) Atomics.store(cc, CAPTURE_CTRL_CAPTURING, 0);
     }
     return true;
   }

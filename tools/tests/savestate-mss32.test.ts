@@ -18,7 +18,7 @@ import {
 import { resetRawSampleCache } from "../../src/worker/modules/mss32/raw-sample-cache";
 import {
     getCtrl, setCtrl, CTRL_PLAY_CURSOR, CTRL_WRITE_CURSOR, CTRL_BLOCK_ALIGN, CTRL_STATE, CTRL_DATA_LENGTH, CTRL_BLOCK_BYTES,
-    CTRL_FREQUENCY, CTRL_RESERVED, STATE_PLAYING, STATE_STOPPED,
+    CTRL_CHANNELS, CTRL_FREQUENCY, CTRL_RESERVED, CTRL_SAMPLE_RATE, STATE_PLAYING, STATE_STOPPED,
 } from "../../src/audio/audio-ring-buffer";
 
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
@@ -233,7 +233,7 @@ describe("mss32 participant", () => {
         const streamValues: Partial<MSSStream> = {
             id: 0x10009, handle: 0x6a00, filename: "intro.wav", fileFormat: "wav", sampleRate: 44100, channels: 1, bitsPerSample: 8,
             formatTag: 2, blockAlign: 2, streamMemory: 0x5000, volume: 50, pan: 10, playbackRate: 0.5, playbackRateHz: 11025, loopCount: 0,
-            pcmBytes: 8000, streamDummyBuffer: 0x5200, isPlaying: true, isPaused: true, position: 512, pendingStart: true, encodedDurationMs: 900,
+            loopsRemaining: 3, pcmBytes: 8000, streamDummyBuffer: 0x5200, isPlaying: true, isPaused: true, position: 512, pendingStart: true, encodedDurationMs: 900,
         };
         expect(Object.keys(streamValues).sort()).toEqual(saved(MSS_STREAM_FIELDS));
         for (const [field, value] of Object.entries(streamValues)) {
@@ -282,6 +282,25 @@ describe("mss32 participant", () => {
         await restoreMssSavestate(fresh, throughCodec(state));
         expect([...fresh.samplesById.get(1)!.decodedData!]).toEqual([...viaInfo.decodedData!]);
         expect([...fresh.samplesById.get(2)!.decodedData!]).toEqual([...odd.decodedData!]);
+    });
+
+    test("a reused voice gets a new ring when its PCM layout changes", () => {
+        const ctx = context();
+        const voice = sample(ctx, 1, { decodedData: new Float32Array(256), channels: 2, sampleRate: 44100 });
+        playSample(ctx, voice);
+        const stereo = rings.get(voice.id)!;
+
+        voice.channels = 1;
+        voice.sampleRate = 22050;
+        voice.decodedData = new Float32Array(128);
+        playSample(ctx, voice);
+
+        const mono = rings.get(voice.id)!;
+        expect(mono).not.toBe(stereo);
+        expect(getCtrl(stereo, CTRL_STATE)).toBe(STATE_STOPPED);
+        expect(getCtrl(mono, CTRL_CHANNELS)).toBe(1);
+        expect(getCtrl(mono, CTRL_SAMPLE_RATE)).toBe(22050);
+        expect(getCtrl(mono, CTRL_BLOCK_ALIGN)).toBe(4);
     });
 
     test("a playing sample gets its ring back at the saved frame; a stopped one gets it stopped at the start", async () => {
@@ -475,7 +494,7 @@ describe("mss32 participant", () => {
             const p = savestateParticipants.all().find(x => x.id === "mss32")!;
             expect(p.covers).toEqual(["mss32"]);
             expect(savestateParticipants.coveredModules().has("mss32")).toBe(true);
-            expect(savestateParticipants.schemas().mss32).toEqual({ version: 1, schemaHash: "567f198e080fc09e" });
+            expect(savestateParticipants.schemas().mss32).toEqual({ version: 1, schemaHash: "3841a76e0edae062" });
             ctx.insideAilServe = true;
             expect(() => p.capture({} as never)).toThrow(CaptureRefusal);
         } finally {

@@ -6101,6 +6101,19 @@ export const REFERENCE_ARG_COUNTS: ReferenceArgCountMap = {
     "ail_waveoutunprepareheader": 3,
     "ail_waveoutwrite": 3
   },
+  "msvcirt": {
+    "??0exception@@qae@abv0@@z": 1,
+    "??0exception@@qae@xz": 0,
+    "??0ifstream@@qae@pbdhh@z": 3,
+    "??1exception@@uae@xz": 0,
+    "??1ifstream@@uae@xz": 0,
+    "??1ios@@uae@xz": 0,
+    "??_difstream@@qaexxz": 0,
+    "?openprot@filebuf@@2hb": 0,
+    "?sbumpc@streambuf@@qaehxz": 0,
+    "?seekg@istream@@qaeaav1@jw4seek_dir@ios@@@z": 2,
+    "?tellg@istream@@qaejxz": 0
+  },
   "msvcr90": {
     "adj_fdiv_m16i": 1,
     "adj_fdiv_m32": 1,

@@ -8,8 +8,8 @@ import { setTimerHandler } from "../../core/scheduler/timer-wheel";
 import { TimeService } from "../../runtime/time";
 import { MSSContext, createMSSContext, SMP_DONE, SMP_PLAYING } from "./context";
 import { finishSamplePlayback, getBytesPerSecond, getPlaybackLengthBytes, setSampleStatus, setStreamStatus, writeSamplePosition, writeStreamPosition, startHeartbeat, stopHeartbeat } from "./helpers";
-import { updateEmulatorState, playSample, appendDecodedChunk, resetMssRingBuffers } from "./playback-engine";
-import { invokeEOSCallback } from "./callbacks";
+import { updateEmulatorState, playSample, appendDecodedChunk, resetMssRingBuffers, pcmRingDataBytes, pcmRingEnded } from "./playback-engine";
+import { invokeEOSCallback, serviceAudioCallbacks } from "./callbacks";
 import { pumpVfsStreams, serveIncrementalStreams } from "./stream-engine";
 import { mss32Module } from "../../api/mss32.api";
 import { convertToFloat } from "./audio-decode";
@@ -66,6 +66,14 @@ export class MSS32 implements IModule {
         // busy-spinning guest thread starves host macrotasks, freezing sample completion
         // → MSS32 voice-pool saturation hang (mac). startHeartbeat re-arms it whenever a
         // digital driver is (re)opened; closing one stops it.
+        //
+        // This fires from the raw scheduler timer wheel, NOT from inside a guest thunk call,
+        // so it must never invoke a callback directly (confirmed by crashing one: a guest
+        // corrupted to EIP≈0 — "Scheduler fatal guard" — the first time this tried it).
+        // updateEmulatorState() only QUEUES a finished sample's EOS callback; the actual
+        // invocation is drained opportunistically from inside real mss32 thunk calls (see
+        // serviceAudioCallbacks, wired into every export below by installStreamServicePoints),
+        // which is a genuine thunk-dispatch safe point the same way _AIL_serve@0's handler is.
         this.ctx.heartbeatTick = () => { pumpVfsStreams(this.ctx); updateEmulatorState(this.ctx); };
         const ctx = this.ctx;
         setTimerHandler(TimerKind.MSS_HEARTBEAT, () => ctx.heartbeatTick?.());
@@ -123,8 +131,11 @@ export class MSS32 implements IModule {
             const serviced: ThunkImplementation = (thunkCtx, mem, args) => {
                 const result = impl(thunkCtx, mem, args);
                 if (typeof result !== "number") return result;
-                return serveIncrementalStreams(
-                    this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result) ?? result;
+                // One thunk to park, one service action per call: a queued EOS/stream/timer
+                // callback (see serviceAudioCallbacks) takes priority over a stream refill.
+                return serviceAudioCallbacks(this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result)
+                    ?? serveIncrementalStreams(this.ctx, thunkCtx, stackCleanup, `mss32:${name}`, result)
+                    ?? result;
             };
             this.exports[name] = serviced;
         }
@@ -139,6 +150,9 @@ export class MSS32 implements IModule {
         const sample = ctx.samplesById.get(id);
         if (sample) {
             if (!sample.isPlaying) return; // already handled by heartbeat
+            // The message may describe the previous play on a recycled handle.
+            // The current PCM ring is authoritative about its state.
+            if (pcmRingDataBytes(id) !== null && !pcmRingEnded(id)) return;
             finishSamplePlayback(ctx, sample, getPlaybackLengthBytes(sample));
             invokeEOSCallback(ctx, sample);
             return;
@@ -147,7 +161,8 @@ export class MSS32 implements IModule {
         // Check if it's a stream
         const stream = ctx.streamsById.get(id);
         if (stream) {
-            if (!stream.isPlaying) return; // already handled by heartbeat
+            if (!stream.isPlaying || stream.isPaused || stream.source) return;
+            if (pcmRingDataBytes(id) !== null && !pcmRingEnded(id)) return;
             stream.isPlaying = false;
             stream.isPaused = false;
             stream.startTime = undefined;
@@ -206,7 +221,7 @@ export class MSS32 implements IModule {
         }
     }
 
-    handleAudioPosition(id: number, positionFrames: number): void {
+    handleAudioPosition(id: number, positionFrames: number, loopsRemaining?: number): void {
         if (!Number.isFinite(positionFrames) || positionFrames < 0) return;
         const ctx = this.ctx;
 
@@ -242,6 +257,7 @@ export class MSS32 implements IModule {
         // must not stamp SMP_PLAYING back over the SMP_STOPPED pause published for it)
         const stream = ctx.streamsById.get(id);
         if (stream && stream.isPlaying && !stream.isPaused) {
+            if (loopsRemaining !== undefined) stream.loopsRemaining = loopsRemaining;
             const channels = Math.max(1, stream.channels || 1);
             const bytesPerSample = Math.max(1, (stream.bitsPerSample || 16) >> 3);
             const blockAlign = stream.blockAlign || channels * bytesPerSample;
