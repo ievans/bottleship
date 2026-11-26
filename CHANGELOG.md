@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.9.0](https://github.com/ievans/bottleship/compare/v0.8.5...v0.9.0) (2026-11-26)
+
+
+### Features
+
+* **harness:** capture the game’s master audio output ([7e3b0a1](https://github.com/ievans/bottleship/commit/7e3b0a1de5868549ae2171b653195c2628469c44))
+* **harness:** capture the game’s master audio output ([1a794b7](https://github.com/ievans/bottleship/commit/1a794b72d5f8211931d764042e9435bcf50d0cb9))
+* **harness:** expose socket worker and broadcast diagnostics ([9ddca38](https://github.com/ievans/bottleship/commit/9ddca384f6ee070bcfe727ebf81ce5b2d68eb599))
+* **harness:** expose socket worker and broadcast diagnostics ([41a89b1](https://github.com/ievans/bottleship/commit/41a89b1a8660f4e5c277b120a5598eae387283d1))
+* **harness:** expose WebGPU geometry upload and flush counts ([5a8f0b3](https://github.com/ievans/bottleship/commit/5a8f0b3e54b243558b2ef040951a300b63a524df))
+* **harness:** expose WebGPU geometry upload and flush counts ([fcd9a6b](https://github.com/ievans/bottleship/commit/fcd9a6bf6f3d3ecac579830f29b1ea0a9fc2eb94))
+* **steam:** document native gbe_fork bundle support ([#115](https://github.com/ievans/bottleship/issues/115)) ([1baa71f](https://github.com/ievans/bottleship/commit/1baa71f5541e39383c28ec943d4fb88912f963d0))
+
+
+### Bug Fixes
+
+* **audio:** fix MSS sample-pool exhaustion and stuck stream loop count ([231e549](https://github.com/ievans/bottleship/commit/231e5499113f0413efdbe888da838e61e1ffd1a1))
+* **audio:** fix MSS sample-pool exhaustion and stuck stream loop count ([3a715d6](https://github.com/ievans/bottleship/commit/3a715d6866c64c5fb286b81c2fd53c3843b606e8))
+* **audio:** preserve WAV format metadata in decode cache, recover paused media elements on gesture ([b73adc8](https://github.com/ievans/bottleship/commit/b73adc86422a1aa2bcb2ab5e31a5cd205b408f0e))
+* **audio:** preserve WAV format metadata in decode cache, recover paused media elements on gesture ([32dde31](https://github.com/ievans/bottleship/commit/32dde31ce0b02da06122ec27ca972b51956db9f3))
+* **d3d11:** resize client window on DXGI target changes ([#124](https://github.com/ievans/bottleship/issues/124)) ([2e8e83a](https://github.com/ievans/bottleship/commit/2e8e83aa0ad0bb9604f9412324d9b4e2e9990140))
+* **d3dx9:** implement missing vector/matrix math functions ([#121](https://github.com/ievans/bottleship/issues/121)) ([ba95556](https://github.com/ievans/bottleship/commit/ba95556d168647d4be4e463e31d228a01a7b9dac))
+* **dmusic:** deliver wave timing to audio-path tools ([#117](https://github.com/ievans/bottleship/issues/117)) ([410b669](https://github.com/ievans/bottleship/commit/410b66983ee523895c67a15e22fbbe485657628a))
+* **dsound:** preserve the refill cursor on DirectMusic gain changes ([#118](https://github.com/ievans/bottleship/issues/118)) ([aad78c4](https://github.com/ievans/bottleship/commit/aad78c40bfd9087acd4657c5c3419bae53bcd910))
+* **galaxy:** implement the free-function generation's Friends/Networking/Matchmaking/ListenerRegistrar/GetError ([#122](https://github.com/ievans/bottleship/issues/122)) ([adf2d41](https://github.com/ievans/bottleship/commit/adf2d416723c7b233899ffba33622c1ac300ec10))
+* **gdi32:** preserve antialias coverage in RoN text atlases ([#123](https://github.com/ievans/bottleship/issues/123)) ([b4f70ae](https://github.com/ievans/bottleship/commit/b4f70ae508fddbb3277d5118a368bac478e46085))
+* **harness:** scope cdp-pausestack to the caller's BS_TAB session ([#127](https://github.com/ievans/bottleship/issues/127)) ([37ce41f](https://github.com/ievans/bottleship/commit/37ce41f2f86990b5127fe095050b0331c873190a))
+* **iso-to-wgb:** support dictionary-chained MSZIP cabinet folders ([#126](https://github.com/ievans/bottleship/issues/126)) ([e6f64a2](https://github.com/ievans/bottleship/commit/e6f64a25dec6c02c3f1638115910d3e22ee6465a))
+* **kernel32,user32:** IsBadReadPtr null-guard awareness, wsprintfA tiny-pointer guard ([d9fc82e](https://github.com/ievans/bottleship/commit/d9fc82e873ff1091c0d2a2ec573921f6d63a6cce))
+* **kernel32,user32:** IsBadReadPtr null-guard awareness, wsprintfA tiny-pointer guard ([35239c1](https://github.com/ievans/bottleship/commit/35239c144694961a0eeff23112a75bebca4b8fe6))
+* **kernel32:** Generals/Zero Hour bring-up — ntdll loading, bundle env vars, SafeDisc anti-debug fidelity ([#128](https://github.com/ievans/bottleship/issues/128)) ([e0cf717](https://github.com/ievans/bottleship/commit/e0cf717512b696b08c0dbbd3e27a462a5039e583))
+* **kernel32:** neutralize SafeDisc's unreachable anti-debug suppression ([43be442](https://github.com/ievans/bottleship/commit/43be442020f693b2a2a0541e2b29c88b787d92eb))
+* **kernel32:** neutralize SafeDisc's unreachable anti-debug suppression path ([a4811d6](https://github.com/ievans/bottleship/commit/a4811d69da67501f3b5a4737122af5ee0fa4b843))
+* **kernel32:** recognize msvcirt as a CRT-family cdecl DLL ([ea8fe1d](https://github.com/ievans/bottleship/commit/ea8fe1d7aa05ada2c039a920d70110c31dc72438))
+* **kernel32:** recognize msvcirt as a CRT-family cdecl DLL, add its argCounts ([dccc84d](https://github.com/ievans/bottleship/commit/dccc84da6a20be707b863501975d778b94b33688))
+* **net:** don't fail or leak-retry a game load on a dead multiplayer relay ([e0e8d36](https://github.com/ievans/bottleship/commit/e0e8d36c73f8036a5eb237d591eeafbabc0864d3))
+* **net:** don't fail or leak-retry a game load on a dead multiplayer relay ([ecedb5f](https://github.com/ievans/bottleship/commit/ecedb5f9beeb45269b9a73ee91150eab2e016a45))
+* **sensapi:** add reference argcounts for IsNetworkAlive/IsDestinationReachable ([#120](https://github.com/ievans/bottleship/issues/120)) ([9d78ad6](https://github.com/ievans/bottleship/commit/9d78ad6eb11835f06d8e84b860871e8a3e0f5c5e))
+* **thunking:** generalize the failure-sentinel data-fault recovery to any GP register ([e7b4dce](https://github.com/ievans/bottleship/commit/e7b4dce7d2e218b10fd8ec77594a7d565ffbe6cb))
+* **thunking:** generalize the failure-sentinel data-fault recovery to any GP register ([fd0dfbc](https://github.com/ievans/bottleship/commit/fd0dfbc2f4da386fed013a17941af6dbdaf727e6))
+* **thunking:** recover from wild calls and failure-sentinel dereferences instead of raising a fatal AV ([0c66042](https://github.com/ievans/bottleship/commit/0c66042387f0633839c98c5173a24a669547d3cb))
+* **thunking:** recover from wild calls and failure-sentinel dereferences instead of raising a fatal AV ([4cd7111](https://github.com/ievans/bottleship/commit/4cd71119472b564449cab97445cc4f7b611194bd))
+* **thunking:** unimplemented MSVC constructors return `this`, not 0 ([8622c50](https://github.com/ievans/bottleship/commit/8622c5039ec705d4154ef8428777dbdf4559309a))
+* **thunking:** unimplemented MSVC constructors return `this`, not 0 ([82920c3](https://github.com/ievans/bottleship/commit/82920c394cb95fd93d766e684e50d0bba78b80df))
+
 ## [0.8.5](https://github.com/ievans/bottleship/compare/v0.8.4...v0.8.5) (2026-11-20)
 
 
