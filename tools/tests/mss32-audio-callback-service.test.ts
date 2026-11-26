@@ -16,6 +16,8 @@ import { serviceAudioCallbacks, audioCallbackChainRunning, invokeEOSCallback } f
 import type { MSSContext } from "../../src/worker/modules/mss32/context";
 import { Mem } from "../../src/worker/core/memory/mem-accessor";
 import { createSampleExports } from "../../src/worker/modules/mss32/sample";
+import { createFileIOExports } from "../../src/worker/modules/mss32/file-io";
+import { MSS32 } from "../../src/worker/modules/mss32";
 import { mss32Module } from "../../src/worker/api/mss32.api";
 
 const SAMPLE = 0x900;
@@ -67,6 +69,48 @@ describe("serviceAudioCallbacks (mss32)", () => {
         Mem.bind(() => memory);
         const ctx = context(memory, stuckCallbackManager());
         expect(serviceAudioCallbacks(ctx, {}, 0, "mss32:test", 0)).toBeNull();
+    });
+
+    test("freeing locked memory leaves audio callbacks queued for another Miles call", () => {
+        const memory = new Uint8Array(0x2000);
+        Mem.bind(() => memory);
+        const delivered: Array<{ address: number; args: number[] }> = [];
+        let finish: ((eax: number) => number | null) | undefined;
+        const ctx = context(memory, {
+            ...stuckCallbackManager(),
+            invokeCallback: (address: number, args: number[], _cleanup: number, complete: typeof finish) => {
+                delivered.push({ address, args });
+                finish = complete;
+                return { callbackId: 1 };
+            },
+        });
+        const ptr = 0x1000;
+        const freed: number[] = [];
+        Object.assign(ctx.process, { memory: { free: (address: number) => freed.push(address) } });
+        ctx.memAllocatedByMss = new Set([ptr]);
+        ctx.pendingEOSCallbacks.push({ callback: EOS_CALLBACK, handle: SAMPLE });
+        const module = new MSS32();
+        const free = "_AIL_mem_free_lock@4";
+        const status = "_AIL_sample_status@4";
+        Object.assign(module, { ctx });
+        module.exports[free] = createFileIOExports(ctx)[free]!;
+        module.exports[status] = () => 42;
+        Reflect.get(module, "installStreamServicePoints").call(module);
+
+        let statusResult: number | null | undefined;
+        try {
+            expect(module.exports[free]!({} as never, memory, [ptr])).toBe(0);
+            expect(freed).toEqual([ptr]);
+            expect(delivered).toEqual([]);
+            expect(ctx.pendingEOSCallbacks).toEqual([{ callback: EOS_CALLBACK, handle: SAMPLE }]);
+
+            expect(module.exports[status]!({} as never, memory, [SAMPLE])).toMatchObject({ suspendedForCallback: true });
+            expect(delivered).toEqual([{ address: EOS_CALLBACK, args: [SAMPLE] }]);
+            expect(ctx.pendingEOSCallbacks).toEqual([]);
+        } finally {
+            statusResult = finish?.(0);
+        }
+        expect(statusResult).toBe(42);
     });
 
     test("parks the thunk for a queued EOS callback, then declines again while that chain is in flight", () => {

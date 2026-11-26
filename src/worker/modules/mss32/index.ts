@@ -72,7 +72,7 @@ export class MSS32 implements IModule {
         // corrupted to EIP≈0 — "Scheduler fatal guard" — the first time this tried it).
         // updateEmulatorState() only QUEUES a finished sample's EOS callback; the actual
         // invocation is drained opportunistically from inside real mss32 thunk calls (see
-        // serviceAudioCallbacks, wired into every export below by installStreamServicePoints),
+        // serviceAudioCallbacks, wired into exports below by installStreamServicePoints),
         // which is a genuine thunk-dispatch safe point the same way _AIL_serve@0's handler is.
         this.ctx.heartbeatTick = () => { pumpVfsStreams(this.ctx); updateEmulatorState(this.ctx); };
         const ctx = this.ctx;
@@ -101,17 +101,15 @@ export class MSS32 implements IModule {
     }
 
     /**
-     * Every export doubles as a tick of Miles' stream timer.
+     * Miles exports can also service the stream timer.
      *
      * Real MSS services its streams from a background thread it starts itself, so a
      * title need never call AIL_serve — GTA Vice City registers file callbacks and
      * then only ever queries and steers, which left an app-backed stream to drain its
      * ring mid-file and stop for good. We cannot run that thread: topping such a
      * stream up means calling the app's own file callbacks, which is guest code, and
-     * guest code needs a thunk to park — something the playback heartbeat does not
-     * have. Every entry into mss32 does, so every entry is where the timer's work
-     * lands. Servicing on the API surface as a whole, rather than on the calls one
-     * title happens to make, is what keeps this generic.
+     * guest code needs a thunk to park, which the playback heartbeat does not have.
+     * The wrappers below reuse existing Miles calls to service that work.
      *
      * The export's own work runs FIRST and its answer is carried through the refill
      * chain, so a service point is invisible to the caller except in timing. A
@@ -121,6 +119,11 @@ export class MSS32 implements IModule {
      */
     private installStreamServicePoints(): void {
         for (const name of Object.keys(this.exports)) {
+            // The caller can be freeing an audio cache buffer before unlinking its entry.
+            // Calling guest code here can reenter the cache and evict the same entry.
+            // Keep completion callbacks and refills queued for the next service point.
+            if (name === "_AIL_mem_free_lock@4" || name === "AIL_mem_free_lock") continue;
+
             // Parking a thunk whose stack cleanup we cannot read from the descriptor
             // would corrupt the guest stack. An export we decline to service still
             // works; there are ~300 others to carry the timer's work.
