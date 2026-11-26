@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.1](https://github.com/ievans/bottleship/compare/v0.9.0...v0.9.1) (2026-11-26)
+
+
+### Bug Fixes
+
+* **d3d8:** execute pixel shaders with fixed-function FVF vertices ([97b2781](https://github.com/ievans/bottleship/commit/97b278123e4aa5e14c7a92e2ac42da22799b5a17))
+* **d3d8:** execute pixel shaders with fixed-function FVF vertices ([f3b6efa](https://github.com/ievans/bottleship/commit/f3b6efa1059f09c855eeeabd6448f2706e0bc052))
+* **mss32:** defer callbacks during locked memory release ([4d1f79a](https://github.com/ievans/bottleship/commit/4d1f79ad9dd6ff014f86f1482bd1884816b83524))
+* **mss32:** defer callbacks during locked memory release ([21c2a91](https://github.com/ievans/bottleship/commit/21c2a91537cd2b6b08fa39b39944fe72c3d2aea7))
+
 ## [0.9.0](https://github.com/ievans/bottleship/compare/v0.8.5...v0.9.0) (2026-11-26)
 
 
