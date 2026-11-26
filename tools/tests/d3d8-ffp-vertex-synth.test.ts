@@ -1,5 +1,5 @@
 /**
- * A declaration-only D3D8 vertex shader paired with a pixel shader runs fixed-function
+ * An FVF or a declaration-only D3D8 vertex shader paired with a pixel shader runs fixed-function
  * vertex processing into the programmable pixel stage (Unreal Engine 2's terrain:
  * camera-space texgen + texture matrices feeding a ps_1_1 layer blend). The synthesized
  * vs_1_1 must reproduce that processing; it is executed here by a small reference
@@ -498,6 +498,35 @@ describe("D3D8 decl-only draws with a pixel shader bound", () => {
         expect(p.resolveFfpVertexStage(adapter, (adapter as any).shaders)).toBeNull();
         expect([...p.ffpVertexRefusals]).toEqual(["vertex blending with a programmable pixel shader"]);
     });
+});
+
+test("D3D8 indexed FVF draws run the bound pixel shader with D3D8 vertex input registers", () => {
+    const { adapter, calls } = terrainAdapter(0);
+    const device = adapter as any;
+    const shaders = device.shaders as D3D8ShaderRegistry;
+    shaders.activeVsHandle = 0;
+    device.fvf = 0x142; // XYZ | DIFFUSE | TEX1, packed into a 24-byte stream.
+    device.baseVertexIndex = 0;
+    device.indexIB = 4;
+    device.ibData = new Map([[4, { guestPtr: 2048, size: 12, format: 101 }]]);
+    device.uploadIb = () => ({});
+    delete device.collectExtraStreamBindings; // Exercise the adapter's FVF stream handling.
+
+    expect(adapter.drawIndexedPrimitive(4, 0, 4, 0, 2)).toBe(0);
+    expect(calls).toEqual(["pipeline", "programmable"]);
+    const first = device.programmable.resolveFfpVertexStage(adapter, shaders);
+    expect(first.fvfDecl).toEqual([
+        { stream: 0, offset: 0, type: 2, usage: 0, usageIndex: 0, reg: 0 },
+        { stream: 0, offset: 12, type: 4, usage: 10, usageIndex: 0, reg: 5 },
+        { stream: 0, offset: 16, type: 1, usage: 5, usageIndex: 0, reg: 7 },
+    ]);
+
+    device.fvf = 0x182; // Same stride with SPECULAR in place of DIFFUSE.
+    const second = device.programmable.resolveFfpVertexStage(adapter, shaders);
+    expect(second.fvfDecl[1]).toMatchObject({ offset: 12, usageIndex: 1, reg: 6 });
+    expect(second.variantKey).not.toBe(first.variantKey);
+    shaders.activePsHandle = 0;
+    expect(device.programmable.resolveFfpVertexStage(adapter, shaders)).toBeNull();
 });
 
 test("lit terrain link reserves its lighting bank and uses the shared lighting equation", () => {

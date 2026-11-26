@@ -129,7 +129,7 @@ import { RGBA } from '../ddraw/types';
 import { computeFvfStride } from '../ddraw/compute/vertex-converter';
 import type { VertexBlendInput } from '../ddraw/compute/vertex-converter';
 import { MAX_FFP_SAMPLED_STAGES } from '../ddraw/ffp-stages';
-import { D3D8ShaderRegistry, D3D8VsObject } from './d3d8-shader-registry';
+import { D3D8ShaderRegistry } from './d3d8-shader-registry';
 import { D3D8ProgrammableRenderer } from './d3d8-programmable-draw';
 import { retainBuffer, releaseBuffer } from "../../../modules/d3d8/buffer-lifetime";
 import { KeyedStateBlockRecorder } from '../shared/state-block-recorder';
@@ -555,9 +555,8 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
         return this.shaders.isProgrammable();
     }
 
-    /** Whether a draw runs through the programmable link: a compiled vertex shader, or a
-     *  declaration-only one paired with a pixel shader, whose fixed-function vertex stage
-     *  the link receives synthesized (D3D8ProgrammableRenderer.resolveFfpVertexStage). */
+    /** A compiled vertex shader or a pixel shader paired with supported fixed-function
+     *  vertex processing runs through the programmable link. */
     private usesProgrammableLink(): boolean {
         if (!this.programmable) return false;
         return this.shaders.isProgrammable()
@@ -1659,12 +1658,13 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
      *  runs from that offset — the same origin the executor's vertex-range guard compares
      *  against, which is why a stream too SHORT for the draw is not rejected here: the guard
      *  owns that rule for every backend and substitutes zeros the way hardware does. Returns
-     *  [] for single-stream decls, null when a referenced stream is unbound/unsized. */
+     *  undefined when only stream 0 is needed, null when a referenced stream is unbound/unsized. */
     private collectExtraStreamBindings(
-        vsObj: D3D8VsObject,
         firstVertex: number,
         mem: Uint8Array,
-    ): StreamVertexBinding[] | null {
+    ): StreamVertexBinding[] | null | undefined {
+        const vsObj = this.shaders.getActiveVs();
+        if (!vsObj) return undefined; // FVF data occupies stream 0 only.
         const { bindings, missing } = collectExtraStreamBindings(vsObj.decl, (s) => {
             const src = this.streamSources[s];
             const vb = this.vbData.get(src.vb);
@@ -1684,7 +1684,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             Logger.warn(LogCategory.SYSTEM, `D3D8 draw: decl references unbound/unsized stream(s) ${missing.join(",")}`);
             return null;
         }
-        return bindings;
+        return bindings.length > 0 ? bindings : undefined;
     }
 
     /** Interleave vertices [firstVertex, firstVertex+vertexCount) of every stream the
@@ -1907,9 +1907,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             if (this.renderer.scrubDraw()) return 0;
             const gpuBuffer = this.uploadVb(this.streamSources[0].vb, vb.guestPtr, vb.size, mem);
             if (!gpuBuffer) return 0x8876086c;
-            const extraStreams = this.collectExtraStreamBindings(
-                this.shaders.getActiveVs()!, startVertex, mem,
-            );
+            const extraStreams = this.collectExtraStreamBindings(startVertex, mem);
             if (extraStreams === null) return 0x8876086c;
             const { topology, needsFanExpansion, isLineOrPoint } = resolveD3D8Topology(primitiveType);
             const pipelineId = this.programmable.resolveProgrammablePipeline(
@@ -1933,7 +1931,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex: 0,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
                 this.programmable.getCommandRecorder().registerPooledBuffer(ibGpu);
@@ -1946,7 +1944,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     vertexCount,
                     startVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
             }
@@ -2017,9 +2015,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                 usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
             });
             device.queue.writeBuffer(gpuBuffer, 0, mem.buffer, mem.byteOffset + dataPtr, byteSize);
-            const extraStreams = this.collectExtraStreamBindings(
-                this.shaders.getActiveVs()!, 0, mem,
-            );
+            const extraStreams = this.collectExtraStreamBindings(0, mem);
             if (extraStreams === null) { gpuBuffer.destroy(); return 0x8876086c; }
             const { topology, needsFanExpansion } = resolveD3D8Topology(primitiveType);
             // UP draws force cull-none regardless of topology (pre-existing behavior).
@@ -2045,7 +2041,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex: 0,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
                 this.programmable.getCommandRecorder().registerPooledBuffer(ibGpu);
@@ -2058,7 +2054,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     vertexCount,
                     startVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
             }
@@ -2148,9 +2144,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
             const vbGpu = this.uploadVb(this.streamSources[0].vb, vb.guestPtr, vb.size, mem);
             const ibGpu = this.uploadIb(this.indexIB, ib.guestPtr, ib.size, mem);
             if (!vbGpu || !ibGpu) return 0x8876086c;
-            const extraStreams = this.collectExtraStreamBindings(
-                this.shaders.getActiveVs()!, this.baseVertexIndex, mem,
-            );
+            const extraStreams = this.collectExtraStreamBindings(this.baseVertexIndex, mem);
             if (extraStreams === null) return 0x8876086c;
             const { topology, needsFanExpansion, isLineOrPoint } = resolveD3D8Topology(primitiveType);
             const pipelineId = this.programmable.resolveProgrammablePipeline(
@@ -2183,7 +2177,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex: 0,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
                 this.programmable.getCommandRecorder().registerPooledBuffer(fanIbGpu);
@@ -2199,7 +2193,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
             }
@@ -2297,9 +2291,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                 usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
             });
             device.queue.writeBuffer(ibGpu, 0, mem.buffer, mem.byteOffset + indexPtr, indexBytes);
-            const extraStreams = this.collectExtraStreamBindings(
-                this.shaders.getActiveVs()!, 0, mem,
-            );
+            const extraStreams = this.collectExtraStreamBindings(0, mem);
             if (extraStreams === null) { vbGpu.destroy(); ibGpu.destroy(); return 0x8876086c; }
             const { topology, needsFanExpansion } = resolveD3D8Topology(primitiveType);
             // UP draws force cull-none regardless of topology (pre-existing behavior).
@@ -2333,7 +2325,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex: 0,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
                 this.programmable.getCommandRecorder().registerPooledBuffer(fanIbGpu);
@@ -2349,7 +2341,7 @@ export class D3D8DeviceAdapter implements RenderActive, FFPLightingSource {
                     startIndex: 0,
                     baseVertex: 0,
                     bindStateIndex,
-                    extraStreams: extraStreams.length > 0 ? extraStreams : undefined,
+                    extraStreams,
                     viewport: this.programmable.drawViewport(this),
                 });
             }

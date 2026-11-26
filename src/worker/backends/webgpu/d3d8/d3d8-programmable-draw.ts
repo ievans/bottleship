@@ -52,7 +52,9 @@ import {
     PROG_BIND,
     type CompiledPs,
     type CompiledVs,
+    type RawVertexElement,
 } from "../d3d9/shader";
+import { D3DFVF_POSITION_MASK, D3DFVF_XYZRHW, makeFvfDeclaration } from "../d3d9/shader/fvf-layout";
 import { PS_FLOAT_REGISTER_COUNT } from "../d3d9/shader/emit/ps";
 import { SHADER_BOOLEAN_BANK_BYTES, SHADER_INTEGER_REGISTER_COUNT } from "../d3d9/shader/link/uniforms";
 import { resolveProgrammablePixelFogMode } from "../d3d9/ffp-fog";
@@ -79,6 +81,7 @@ import { sanitizeViewportInto, type SanitizedViewport } from "../ddraw/types";
 import { dwordToFloat } from "../ddraw/dword-float";
 import { pixelCenterClipDx, pixelCenterClipDy, withPixelCenterVersion } from "../pixel-center";
 import { buildD3D8PipelineKey, D3D8ShaderRegistry, type D3D8VsObject } from "./d3d8-shader-registry";
+import { D3DVSDE_DIFFUSE, D3DVSDE_SPECULAR, D3DVSDE_TEXCOORD0 } from "./vsd-constants";
 import {
     describeDeclInputs,
     ffpProjectedMask,
@@ -125,10 +128,31 @@ export interface FfpVertexStage {
     hasDiffuse: boolean;
     hasSpecular: boolean;
     compiled: CompiledVs;
+    /** FVF layout when the guest supplied a token instead of a vertex declaration. */
+    fvfDecl?: RawVertexElement[];
     /** buildD3D8FfpVariantKey for this stage's link (a pixel shader is always bound). */
     variantKey: string;
     /** Stages whose `tex` fetch divides by .w (ps_1_1-1_3 + D3DTTFF_PROJECTED). */
     projectedMask: number;
+}
+
+/** FVF's packed GPU locations differ from the D3D8 FFP vertex input registers. */
+function fvfToFfpDecl(fvf: number): RawVertexElement[] | null {
+    const position = fvf & D3DFVF_POSITION_MASK;
+    // The synthesized stage transforms object-space positions. XYZRHW already holds screen coordinates.
+    if (position === 0 || position === D3DFVF_XYZRHW) return null;
+    const decl = makeFvfDeclaration(fvf);
+    if (!decl) return null;
+    for (const element of decl) {
+        if (element.usage === 10 /* COLOR */) {
+            element.reg = element.usageIndex === 0 ? D3DVSDE_DIFFUSE : D3DVSDE_SPECULAR;
+        } else if (element.usage === 5 /* TEXCOORD */) {
+            element.reg = D3DVSDE_TEXCOORD0 + element.usageIndex;
+        } else {
+            element.reg = element.usage; // POSITION, BLENDWEIGHT, BLENDINDICES, NORMAL, PSIZE
+        }
+    }
+    return decl;
 }
 
 /**
@@ -196,7 +220,7 @@ export class D3D8ProgrammableRenderer {
     }
 
     /**
-     * The vertex stage for a declaration-only vertex shader paired with a pixel shader:
+     * An FVF token or declaration-only vertex shader can be paired with a pixel shader.
      * D3D runs fixed-function vertex processing into the programmable pixel stage, so the
      * link gets that processing as synthesized vs_1_1 (ffp-vertex-synth.ts). Null when the
      * draw is not that pairing or needs fixed-function work the synthesis does not cover
@@ -207,14 +231,15 @@ export class D3D8ProgrammableRenderer {
      */
     resolveFfpVertexStage(adapter: D3D8DeviceAdapter, shaders: D3D8ShaderRegistry): FfpVertexStage | null {
         const vsObj = shaders.getActiveVs();
-        if (!vsObj || vsObj.compiled) return null;
+        if (vsObj?.compiled) return null;
         const ps = shaders.getActivePs()?.compiled;
         if (!ps) return null;
+        const vertexToken = adapter.getActiveVertexToken();
 
         const memo = this.ffpMemoState;
         const rs = adapter.renderStates;
         const ts = adapter.textureStates;
-        let hit = this.ffpMemoVs === shaders.activeVsHandle && this.ffpMemoPs === shaders.activePsHandle;
+        let hit = this.ffpMemoVs === vertexToken && this.ffpMemoPs === shaders.activePsHandle;
         let w = 0;
         for (let i = 0; i < FFP_VERTEX_RENDER_STATES.length; i++, w++) {
             const v = rs[FFP_VERTEX_RENDER_STATES[i]!]! | 0;
@@ -229,21 +254,25 @@ export class D3D8ProgrammableRenderer {
             w++;
         }
         if (hit) return this.ffpMemoResult;
-        this.ffpMemoVs = shaders.activeVsHandle;
+        this.ffpMemoVs = vertexToken;
         this.ffpMemoPs = shaders.activePsHandle;
-        this.ffpMemoResult = this.buildFfpVertexStage(adapter, vsObj, ps);
+        this.ffpMemoResult = this.buildFfpVertexStage(adapter, vsObj, ps, vertexToken);
         return this.ffpMemoResult;
     }
 
     private buildFfpVertexStage(
         adapter: D3D8DeviceAdapter,
-        vsObj: D3D8VsObject,
+        vsObj: D3D8VsObject | null,
         ps: CompiledPs,
+        vertexToken: number,
     ): FfpVertexStage | null {
         if (this.getRS(adapter, D3DRENDERSTATE_VERTEXBLEND) !== 0) {
             return this.unsupportedFfpVertex("vertex blending with a programmable pixel shader");
         }
-        const inputs = describeDeclInputs(vsObj.decl);
+        const fvfDecl = vsObj ? undefined : fvfToFfpDecl(vertexToken);
+        const decl = vsObj?.decl ?? fvfDecl;
+        if (!decl) return this.unsupportedFfpVertex(`vertex layout for FVF 0x${vertexToken.toString(16)}`);
+        const inputs = describeDeclInputs(decl);
         if (!inputs.hasPosition) return this.unsupportedFfpVertex("declaration has no position input");
 
         // D3DTTFF_PROJECTED is honoured by ps_1_1-1_3 `tex` alone; ps_1_4 and later project
@@ -278,7 +307,7 @@ export class D3D8ProgrammableRenderer {
         };
         if (!isFfpVertexSpecSupported(spec)) return this.unsupportedFfpVertex(
             `texture-coordinate generation/transform unsupported: ${JSON.stringify(spec.texcoords)}`);
-        const key = ffpVertexSpecKey(spec);
+        const key = (fvfDecl ? `fvf${vertexToken}:` : "") + ffpVertexSpecKey(spec);
         let stage = this.ffpVertexStages.get(key);
         if (!stage) {
             const projectedMask = ffpProjectedMask(spec);
@@ -287,6 +316,7 @@ export class D3D8ProgrammableRenderer {
                 hasDiffuse: inputs.hasDiffuse,
                 hasSpecular: inputs.hasSpecular,
                 compiled: compileVertexShader(synthesizeFfpVertexShader(spec)),
+                fvfDecl: fvfDecl ?? undefined,
                 variantKey: `${buildD3D8FfpVariantKey(0, projectedMask, null)}:fv${key}`,
                 projectedMask,
             };
@@ -527,15 +557,15 @@ export class D3D8ProgrammableRenderer {
         indexFormat?: GPUIndexFormat,
     ): number {
         const vsObj = shaders.getActiveVs();
-        if (!vsObj) return -1;
-        const ffpVertex = vsObj.compiled ? null : this.resolveFfpVertexStage(adapter, shaders);
-        const vs = vsObj.compiled ?? ffpVertex?.compiled;
-        if (!vs) return -1;
+        const ffpVertex = vsObj?.compiled ? null : this.resolveFfpVertexStage(adapter, shaders);
+        const vs = vsObj?.compiled ?? ffpVertex?.compiled;
+        const decl = vsObj?.decl ?? ffpVertex?.fvfDecl;
+        if (!vs || !decl) return -1;
         const psObj = shaders.getActivePs();
         const ps = psObj?.compiled ?? null;
         const stream0 = adapter.streamSources[0];
         const stride = strideOverride ?? (stream0.stride > 0 ? stream0.stride : null);
-        const streamStrides = this.effectiveStreamStrides(adapter, vsObj.decl, stride);
+        const streamStrides = this.effectiveStreamStrides(adapter, decl, stride);
         // Single-stream keys stay identical to the pre-multi-stream format.
         const strideKey = streamStrides.length <= 1
             ? String(stride)
@@ -551,9 +581,9 @@ export class D3D8ProgrammableRenderer {
         const isStrip = topology === "triangle-strip" || topology === "line-strip";
         const cacheKey = buildD3D8PipelineKey(
             adapter.renderStates,
-            shaders.activeVsHandle,
+            adapter.getActiveVertexToken(),
             shaders.activePsHandle,
-            vsObj.declStride,
+            vsObj?.declStride ?? 0,
             strideKey,
             isStrip ? `${topology}:${indexFormat ?? "uint16"}` : topology,
             forceCullNone,
@@ -570,7 +600,7 @@ export class D3D8ProgrammableRenderer {
             const link = linkProgram({
                 vs,
                 ps,
-                declElements: vsObj.decl,
+                declElements: decl,
                 streamStride: stride,
                 streamStrides,
                 alphaTest: this.getAlphaTest(adapter),
@@ -658,7 +688,7 @@ export class D3D8ProgrammableRenderer {
     ): number {
         const vsObj = shaders.getActiveVs();
         const psObj = shaders.getActivePs();
-        const ffpVertex = vsObj && !vsObj.compiled ? this.resolveFfpVertexStage(adapter, shaders) : null;
+        const ffpVertex = vsObj?.compiled ? null : this.resolveFfpVertexStage(adapter, shaders);
         const vs = vsObj?.compiled ?? ffpVertex?.compiled ?? null;
         const ps = psObj?.compiled ?? null;
         // The linker places the hidden pixel-centre vec4 right after the program's own
