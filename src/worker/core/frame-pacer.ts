@@ -15,8 +15,8 @@
  * - waitForPresentInterval(n) is the PRESENT-side entry point: the swap interval the app
  *   asked for, expressed as refreshes to hold (see PRESENT_INTERVAL_* below).
  *
- * Enabled by default. Adapts to any display refresh rate (60 Hz, 144 Hz, etc.)
- * with sub-millisecond precision (no setTimeout jitter).
+ * Enabled by default. Uses display refreshes while available and a timer at the
+ * last known cadence when the compositor stops delivering frames.
  */
 
 import { Logger, LogCategory } from "./logger";
@@ -59,19 +59,12 @@ export function decodeD3DPresentInterval(raw: number): number {
 const IMMEDIATE_PRESENTS_PER_REFRESH = 8;
 
 /**
- * How long a frame-slot wait may hold when no rAF arrives. Far above any real refresh
- * interval (so a foreground tab never reaches it and pacing is unchanged), far below the
- * point where a stalled guest reads as a hang. See parkForPermit.
+ * Time to wait for the first frame when the display cadence is still unknown.
  */
-const STALL_RELEASE_MS = 250;
+const FIRST_FRAME_TIMEOUT_MS = 250;
 
 /**
- * Short watchdog, used ONLY for the first stall after frames were flowing (a live display
- * whose rAF is merely late: main thread busy, compositor hiccup). Two measured refresh
- * periods, clamped. It is never used on consecutive stalls: once a release happens with no
- * rAF in between, the display has stopped (hidden tab, occlusion) and the full
- * STALL_RELEASE_MS applies again, so a dead display costs one short release, not a ~30 Hz
- * busy loop. Unknown period (no measured rAF interval yet) also uses STALL_RELEASE_MS.
+ * Wait two measured refresh periods before treating an established display as stalled.
  */
 const STALL_RELEASE_MIN_MS = 33;
 const STALL_RELEASE_MAX_MS = 100;
@@ -106,9 +99,9 @@ class FramePacerImpl {
     private waiterWatchdog: ReturnType<typeof setTimeout> | null = null;
     /** Permits released by the watchdog because no frame arrived (reported in stats). */
     private stalledReleases = 0;
-    /** True once a rAF interval was measured and no watchdog release has happened since the
-     *  last rAF: the display is demonstrably alive, so the short watchdog is safe. */
-    private rafAliveSinceStall = false;
+    private hasMeasuredRefresh = false;
+    private displayStalled = false;
+    private lastPacingTickMs = 0;
 
     // Per-frame callbacks: fired once per rAF, synchronized with display refresh.
     // Used by THRASH auto-presenter and other subsystems that need frame-boundary events.
@@ -139,7 +132,7 @@ class FramePacerImpl {
     private immediatePresents = 0;
     private heldRefreshes = 0;
 
-    // IMMEDIATE backstop bookkeeping: presents released inside the current vsync (rafTick).
+    // IMMEDIATE backstop bookkeeping: presents released in the current pacing interval.
     private immediateTick = -1;
     private immediateCount = 0;
 
@@ -152,12 +145,12 @@ class FramePacerImpl {
     private lastSlotReturnMs = 0;
     private guestIntervalEma = 42; // ms, EMA of the guest's INTRINSIC frame interval (excl. our hold)
     // Grid-locked smooth pacing: hold each present a STEADY integer number of vsyncs, anchored
-    // to the actual vsync grid (rafTick) rather than a free-running wall-clock accumulator.
+    // to the pacing grid rather than a free-running wall-clock accumulator.
     // The old accumulator only re-anchored when it fell BEHIND, so on frames that snapped to a
     // shorter hold it drifted AHEAD ~1 vsync/frame and compounded into 6–7-vsync (100ms+) holds
-    // = the "14-FPS collapse". Anchoring to rafTick bounds every hold to exactly smoothVsyncs.
-    private rafTick = 0;            // monotonic vsync counter, incremented once per rAF (onFrame)
-    private smoothReleaseTick = -1; // rafTick at the last present (the cadence anchor)
+    // = the "14-FPS collapse". Anchoring to pacingTick bounds each hold to smoothVsyncs.
+    private pacingTick = 0;         // display refreshes plus timer permits during a stall
+    private smoothReleaseTick = -1; // pacingTick at the last present (the cadence anchor)
     private smoothVsyncs = 0;       // current steady hold count (0 = uninitialised), hysteresis below
 
     /** Start the rAF loop. Call once after v86 initialization. */
@@ -318,8 +311,8 @@ class FramePacerImpl {
         this.immediatePresents++;
         if (this.pacingMode !== 'off') return this.waitForFrameSlot();
 
-        if (this.immediateTick !== this.rafTick) {
-            this.immediateTick = this.rafTick;
+        if (this.immediateTick !== this.pacingTick) {
+            this.immediateTick = this.pacingTick;
             this.immediateCount = 0;
         }
         if (++this.immediateCount <= IMMEDIATE_PRESENTS_PER_REFRESH ||
@@ -370,16 +363,14 @@ class FramePacerImpl {
     }
 
     /**
-     * Park until the next frame — but never longer than STALL_RELEASE_MS.
+     * Park until the next frame or timer permit.
      *
      * The permit comes from requestAnimationFrame, and rAF is DELIVERY-CONDITIONAL: a hidden
      * tab, a window another window covers (Chrome's native occlusion), a compositor that
-     * stops for any other reason — and callbacks simply stop arriving, with
-     * `document.visibilityState` still reporting "visible". A pacer that only ever wakes on
-     * rAF then holds its waiter forever, and because a Blt/Flip to the primary is an ASYNC
-     * THUNK, the guest thread that issued it stays parked with it: the emulator does not slow
-     * down, it stops, and only starts again when someone looks at the tab. Pacing to a display
-     * that is not producing frames is meaningless anyway — releasing is the honest answer.
+     * stops for any other reason. A blocking Present parks the guest thread. Waiting out
+     * the full display watchdog on each Present limits a hidden guest to a few frames per
+     * second and can slow all peers in a lockstep match. After the first missed deadline,
+     * release at the expected refresh cadence until regular rAF delivery resumes.
      *
      * Everyone parked here is waiting for the SAME thing — the next frame — so a frame
      * releases all of them, and a late arrival joins the queue instead of displacing whoever
@@ -389,19 +380,26 @@ class FramePacerImpl {
         return new Promise<void>((resolve) => {
             this.waiters.push(resolve);
             if (this.waiterWatchdog === null) {
-                const timeoutMs = this.rafAliveSinceStall
-                    ? Math.min(STALL_RELEASE_MAX_MS,
-                        Math.max(STALL_RELEASE_MIN_MS, this.rAfInterval * STALL_RELEASE_PERIODS))
-                    : STALL_RELEASE_MS;
                 this.waiterWatchdog = setTimeout(() => {
                     this.waiterWatchdog = null;
                     if (!this.waiters.length) return;
                     this.stalledReleases++;
-                    this.rafAliveSinceStall = false;
+                    this.displayStalled = true;
+                    this.pacingTick++;
+                    this.lastPacingTickMs = performance.now();
                     this.releaseWaiters();
-                }, timeoutMs);
+                }, this.permitTimeoutMs());
             }
         });
+    }
+
+    private permitTimeoutMs(): number {
+        if (this.displayStalled) {
+            return Math.max(0, this.lastPacingTickMs + this.rAfInterval - performance.now());
+        }
+        if (!this.hasMeasuredRefresh) return FIRST_FRAME_TIMEOUT_MS;
+        return Math.min(STALL_RELEASE_MAX_MS,
+            Math.max(STALL_RELEASE_MIN_MS, this.rAfInterval * STALL_RELEASE_PERIODS));
     }
 
     /** Hand the permit to everyone parked (from rAF, the watchdog, or teardown). */
@@ -423,7 +421,7 @@ class FramePacerImpl {
      * (ceil, clamped 2..4) with hysteresis to avoid flip-flopping at a boundary; HP (~44ms)
      * → a steady 3 vsyncs = 50ms = 20 FPS, stddev ≈ 0.
      *
-     * Crucially the cadence is anchored to the actual vsync grid via rafTick, NOT a wall-clock
+     * Crucially the cadence is anchored to the pacing grid via pacingTick, NOT a wall-clock
      * accumulator: each present is released exactly `smoothVsyncs` vsyncs after the previous
      * one. A guest that overran its budget (stall) is already past the target tick → it passes
      * straight through; we never lengthen a stall, and the hold can never drift/compound.
@@ -446,7 +444,7 @@ class FramePacerImpl {
             this.smoothVsyncs = 0;
             await this.awaitRafPermit();
             this.lastSlotReturnMs = performance.now();
-            this.smoothReleaseTick = this.rafTick;
+            this.smoothReleaseTick = this.pacingTick;
             return;
         }
 
@@ -464,13 +462,13 @@ class FramePacerImpl {
         this.smoothVsyncs = v;
 
         // Hold until `v` vsyncs have elapsed since the last present (grid-locked, bounded).
-        if (this.smoothReleaseTick < 0) this.smoothReleaseTick = this.rafTick;
+        if (this.smoothReleaseTick < 0) this.smoothReleaseTick = this.pacingTick;
         let guard = 0;
-        while (this.rafTick - this.smoothReleaseTick < v && guard++ < v + 3) {
+        while (this.pacingTick - this.smoothReleaseTick < v && guard++ < v + 3) {
             await this.awaitRafPermit();
         }
         this.lastSlotReturnMs = performance.now();
-        this.smoothReleaseTick = this.rafTick;
+        this.smoothReleaseTick = this.pacingTick;
         frameVarianceDiagnostics.recordIdleTime('raf_wait', 0);
     }
 
@@ -542,17 +540,18 @@ class FramePacerImpl {
     private onFrame(): void {
         if (!this.running) return;
 
-        // Monotonic vsync counter — the anchor for grid-locked smooth pacing (waitSmooth).
-        this.rafTick++;
+        this.pacingTick++;
 
         // Measure actual rAF interval (EMA smoothing)
         const now = performance.now();
+        this.lastPacingTickMs = now;
         if (this.lastRafTime > 0) {
             const measured = now - this.lastRafTime;
             // Only incorporate reasonable intervals (3ms-50ms) to filter outliers
             if (measured > 3 && measured < 50) {
                 this.rAfInterval = this.rAfInterval * 0.9 + measured * 0.1;
-                this.rafAliveSinceStall = true;
+                this.hasMeasuredRefresh = true;
+                this.displayStalled = false;
 
                 // Record rAF interval for diagnostics
                 if (frameVarianceDiagnostics.isEnabled()) {
