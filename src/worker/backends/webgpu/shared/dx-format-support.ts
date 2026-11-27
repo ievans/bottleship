@@ -58,6 +58,7 @@ const D3DFMT_INDEX16 = 101;
 const D3DFMT_INDEX32 = 102;
 
 // Color formats valid in both versions and referenced by name below.
+const D3DFMT_R8G8B8 = 20;
 const D3DFMT_A8R8G8B8 = 21;
 const D3DFMT_X8R8G8B8 = 22;
 const D3DFMT_A8B8G8R8 = 32;
@@ -599,6 +600,9 @@ function computeDxDeviceFormat(
     if (isDxExclusiveFormat(fmt, version)) return refuseFormat();
     if (!isDxSupportedFourCC(fmt)) return refuseFormat();
     if (isDxUnsupportedFormat(fmt, version)) return refuseFormat();
+    // Packed RGB24 is a valid CPU surface format, but this Direct3D 8 adapter
+    // exposes RGB textures through the 32-bit format, like DXVK's adapter.
+    if (version === 8 && rType === D3DRTYPE_TEXTURE && fmt === D3DFMT_R8G8B8) return refuseFormat();
     if (version === 9 && d3dFloatFormatInfo(fmt) !== null) {
         // Sampled storage is an IDirect3DTexture9-only seam; cubes still take the RGBA8
         // conversion path and must not inherit it.  Attachment use is the separate probed

@@ -19,6 +19,7 @@ import {
 } from "../../src/worker/backends/webgpu/d3d9/multisample";
 
 const D3DDEVTYPE_HAL = 1;
+const D3DFMT_R8G8B8 = 20;
 const D3DFMT_A8R8G8B8 = 21;
 const D3DFMT_X8R8G8B8 = 22;
 const D3DFMT_R5G6B5 = 23;
@@ -56,6 +57,15 @@ afterEach(() => {
 });
 
 describe("D3D capability memo", () => {
+    test("D3D8 exposes RGB24 as a plain surface and XRGB32 as a texture", () => {
+        expect(checkDxDeviceFormat(8, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, D3DFMT_R8G8B8))
+            .toBe(D3DERR_NOTAVAILABLE);
+        expect(checkDxDeviceFormat(8, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_SURFACE, D3DFMT_R8G8B8))
+            .toBe(D3D_OK);
+        expect(checkDxDeviceFormat(8, 0, D3DDEVTYPE_HAL, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, D3DFMT_X8R8G8B8))
+            .toBe(D3D_OK);
+    });
+
     test("memoized answers match the uncached computation across the format matrix", () => {
         for (const version of VERSIONS) {
             for (const usage of USAGES) {
