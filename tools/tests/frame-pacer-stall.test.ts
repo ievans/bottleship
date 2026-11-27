@@ -39,6 +39,8 @@ async function freshPacer() {
         start(): void;
         stop(): void;
         waitForFrameSlot(o?: { nonBlocking?: boolean }): Promise<void>;
+        waitForPresentInterval(refreshes: number): Promise<void>;
+        registerOnFrame(callback: () => void): () => void;
         getStats(): { stalledReleases: number };
     };
     pacer.start();
@@ -102,15 +104,30 @@ describe("FramePacer watchdog length", () => {
         pacer.stop();
     });
 
-    test("consecutive stalls with no frame in between fall back to the full 250 ms guard", async () => {
+    test("consecutive stalls use refresh-sized permits and honor multi-refresh presents", async () => {
         const pacer = await freshPacer();
         await primeWithFrames(pacer);
         await pacer.waitForFrameSlot();
         await pacer.waitForFrameSlot();           // short stall; display now presumed dead
+        let displayFrames = 0;
+        pacer.registerOnFrame(() => displayFrames++);
         const t0 = performance.now();
-        await pacer.waitForFrameSlot();           // no rAF since: hidden-tab case
+        await pacer.waitForPresentInterval(2);
         const elapsed = performance.now() - t0;
-        expect(elapsed).toBeGreaterThan(200);
+        expect(elapsed).toBeLessThan(180);
+        expect(pacer.getStats().stalledReleases).toBe(3);
+        expect(displayFrames).toBe(0);
+        pacer.stop();
+    });
+
+    test("regular rAF delivery restores display pacing", async () => {
+        const pacer = await freshPacer();
+        await pacer.waitForFrameSlot();           // no display initially
+        await primeWithFrames(pacer);
+        await pacer.waitForFrameSlot();           // consume the latest display permit
+        const t0 = performance.now();
+        await pacer.waitForFrameSlot();           // waits for the longer display watchdog again
+        expect(performance.now() - t0).toBeGreaterThan(25);
         expect(pacer.getStats().stalledReleases).toBe(2);
         pacer.stop();
     });
