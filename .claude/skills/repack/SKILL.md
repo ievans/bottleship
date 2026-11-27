@@ -105,6 +105,12 @@ bun tools/wgb.ts set-manifest <a.wgb> <manifest.json>         # whole manifest
 ```
 `patch-wgb-vram` overrides VRAM for an existing bundle. Aliases: `ls`, `x`, `pm`.
 
+Per-title binary patches (the shipped executable's OWN retail bug, not an emulator
+workaround) live as `tools/patch-wgb-<title>-<issue>.ts`, each self-documenting its exact
+file offset, the original vs. patched bytes, and how the fix was verified — see
+`patch-wgb-battlefront-attract-crash.ts` for the pattern. Run one after packing/repacking
+that title's bundle.
+
 Note: the dev server may hold the file handle (EPERM on rename during set-manifest). Stop
 Vite (PowerShell kill of the `vite` process), patch, restart.
 
