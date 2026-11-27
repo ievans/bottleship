@@ -55,6 +55,7 @@ export const binkw32Module: ModuleDescriptor = {
         makeFunc("_BinkBufferLock@4", 1),         // buffer
         makeFunc("_BinkBufferUnlock@4", 1),       // buffer
         makeFunc("_BinkDDSurfaceType@4", 1),      // lpDirectDrawSurface
+        makeFunc("_BinkDX9SurfaceType@4", 1),     // lpDirect3DSurface9
 
         // Sound control
         makeFunc("_BinkOpenMiles@4", 1),          // HDIGDRIVER
@@ -74,6 +75,7 @@ export const binkw32Module: ModuleDescriptor = {
 
         // I/O
         makeFunc("_BinkSetIOSize@4", 1),          // iosize (global read-ahead buffer hint)
+        makeFunc("_BinkSetIO@4", 1),               // BINKIOOPEN callback, consumed by the next BinkOpen
 
         // Misc
         makeFunc("_BinkGetError@0", 0),           // no args

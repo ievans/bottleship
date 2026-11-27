@@ -27,9 +27,22 @@ export type GuestRoutine = Generator<GuestCall, number, number>;
  * Run `routine` and answer the current thunk with its return value. `stackCleanup` is
  * the number of argument bytes the thunk's `RET N` pops. A call the callback manager
  * refuses, or to a null function, yields E_FAIL to the routine instead of running.
+ *
+ * `knownReturnAddr`, when given, is used INSTEAD OF reading `[ctx.esp]` for the return
+ * address. A fresh synchronous entry still has the real return address sitting there —
+ * that is the default path, and every existing caller relies on it. A routine started
+ * from a `ThunkResult.startCallbackChain` (an async thunk that parked, then wants a
+ * guest callback once it wakes) does NOT: parking overwrites that stack slot with the
+ * async spin-loop sentinel address (see thunk-dispatcher.ts's parking invariant), so
+ * reading it back here would recover the sentinel, not the caller's real return site —
+ * and the sentinel is deliberately non-executable, so the rx check below would always
+ * reject it. `startCallbackChain`'s own `frame.returnAddr` is the genuine value (saved
+ * before parking overwrote it); pass it through as `knownReturnAddr` rather than asking
+ * this function to re-derive what parking already destroyed.
  */
 export function runGuestRoutine(
     ctx: X86Context, mem: Uint8Array, routine: GuestRoutine, stackCleanup: number, tag: string,
+    knownReturnAddr?: number,
 ): number | ThunkResult {
     const E_FAIL = 0x80004005;
     const system = System.getInstance();
@@ -45,7 +58,7 @@ export function runGuestRoutine(
         return E_FAIL;
     }
     const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-    const returnAddr = view.getUint32(entryEsp, true) >>> 0;
+    const returnAddr = (knownReturnAddr !== undefined ? knownReturnAddr : view.getUint32(entryEsp, true)) >>> 0;
     const postEsp = entryEsp + extent;
     if (!returnAddr || returnAddr >= mem.length || !isValidAddress(mem, returnAddr, 1, "rx")) {
         routine.return(E_FAIL);
