@@ -35,7 +35,9 @@ describe("binkw32 participant", () => {
     test("every instance field has a policy; every saved field reaches the capture and survives a restore", () => {
         expect(Object.keys(new BinkW32()).sort()).toEqual(Object.keys(BINKW32_FIELDS).sort());
         const base = bink().captureSavestate();
-        const values: BinkW32State = { lastSurfaceBpp: 4, ddPrimary: 0x5fb00500, pendingIoSize: 0x8000 };
+        const values: BinkW32State = {
+            lastSurfaceBpp: 4, ddPrimary: 0x5fb00500, pendingIoSize: 0x8000, pendingIoOpen: 0x417765,
+        };
         expect(Object.keys(values).sort()).toEqual(Object.keys(base).sort());
         for (const [field, value] of Object.entries(values) as Array<[keyof BinkW32State, number]>) {
             expect({ field, same: value === base[field] }).toEqual({ field, same: false });
@@ -61,7 +63,7 @@ describe("binkw32 participant", () => {
         const undo = b.registerSavestate();
         try {
             expect(savestateParticipants.coveredModules().has("binkw32")).toBe(true);
-            expect(savestateParticipants.schemas().binkw32).toEqual({ version: 1, schemaHash: "c59f0330c1e29a8c" });
+            expect(savestateParticipants.schemas().binkw32).toEqual({ version: 1, schemaHash: "ea368355caf4b14b" });
             (b.sessions as Map<number, unknown>).set(0x7000, {});
             expect(() => savestateParticipants.all().find(p => p.id === "binkw32")!.capture({} as never)).toThrow(CaptureRefusal);
         } finally {

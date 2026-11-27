@@ -17,7 +17,8 @@
 
 import { IModule } from "../core/module";
 import { Process } from "../core/process";
-import { ThunkImplementation } from "../core/thunking/thunk-dispatcher";
+import { ThunkImplementation, ThunkResult, X86Context } from "../core/thunking/thunk-dispatcher";
+import { runGuestRoutine, type GuestRoutine } from "../core/thunking/guest-routine";
 import { Logger, LogCategory } from "../core/logger";
 import { System } from "../core/system";
 import { EmulatorConfig } from "../core/emulator-config-manager";
@@ -472,18 +473,20 @@ interface BinkBufferSession {
 
 export const BINKW32_FIELDS = {
     name: 'transient', exports: 'host', process: 'host', sessions: 'transient', lastSurfaceBpp: 'save', layout: 'derive',
-    buildResolution: 'derive', binkBuffers: 'transient', ddPrimary: 'save', pendingIoSize: 'save', apiCallLog: 'transient',
+    buildResolution: 'derive', binkBuffers: 'transient', ddPrimary: 'save', pendingIoSize: 'save', pendingIoOpen: 'save',
+    apiCallLog: 'transient',
 } as const satisfies Record<string, FieldPolicy>;
 
 export interface BinkW32State {
     lastSurfaceBpp: number;
     ddPrimary: number;
     pendingIoSize: number;
+    pendingIoOpen: number;
 }
 
 export const BINKW32_SCHEMA = {
     module: BINKW32_FIELDS,
-    state: stateKeys<BinkW32State>({ lastSurfaceBpp: true, ddPrimary: true, pendingIoSize: true }),
+    state: stateKeys<BinkW32State>({ lastSurfaceBpp: true, ddPrimary: true, pendingIoSize: true, pendingIoOpen: true }),
 };
 
 export class BinkW32 implements IModule {
@@ -515,6 +518,15 @@ export class BinkW32 implements IModule {
      * for ABI faithfulness but don't use it to actually size any buffer.
      */
     private pendingIoSize: number = 0;
+
+    /**
+     * Guest address of the game's custom BinkIO open callback, set by BinkSetIO(io)
+     * before BinkOpen. Real Bink forwards straight to it when BinkOpen's flags carry
+     * BINKIOPROCESSOR (see openSkippedBinkViaCustomIo) — the callback decides what
+     * "name" means (often not a filesystem path at all) and fills in the rest of the
+     * BINKIO struct's callbacks itself.
+     */
+    private pendingIoOpen: number = 0;
 
     /** Diagnostic: log first N API calls per session to trace game's video loop pattern */
     private apiCallLog: Map<number, number> = new Map();
@@ -1033,8 +1045,18 @@ export class BinkW32 implements IModule {
      * Dimensions come from the 44-byte Bink header rather than being invented: a guest
      * sizes its video panel from HBINK before the first frame.
      */
-    private async openSkippedBink(mem: Uint8Array, namePtr: number, flags: number): Promise<number> {
+    private async openSkippedBink(
+        ctx: X86Context, mem: Uint8Array, namePtr: number, flags: number,
+    ): Promise<number | ThunkResult> {
         await this.ensureLayout();
+
+        // BINKIOPROCESSOR: the game registered its OWN open callback via BinkSetIO, and
+        // real Bink hands the whole open off to it — namePtr/flags may mean nothing
+        // file-shaped at all once this is set (see openSkippedBinkViaCustomIo).
+        if ((flags & 0x02000000) && this.pendingIoOpen) {
+            return this.openSkippedBinkViaCustomIo(ctx, namePtr, flags);
+        }
+
         const isFileHandle = !!(flags & 0x00800000);
 
         let header: Uint8Array | null = null;
@@ -1065,6 +1087,16 @@ export class BinkW32 implements IModule {
             return 0;
         }
 
+        return this.buildSkippedSession(header, label);
+    }
+
+    /**
+     * Shared tail of openSkippedBink: given a verified 44-byte Bink header (read however
+     * the caller got it — a VFS file or the guest's own custom-IO ReadHeader callback),
+     * synthesize a session whose FrameNum already equals Frames — a COMPLETION, not a
+     * failure, so the guest's own poll loop sees end-of-stream and moves on normally.
+     */
+    private buildSkippedSession(header: Uint8Array, label: string): number {
         const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
         const frames = view.getUint32(8, true);
         const width = view.getUint32(20, true);
@@ -1111,6 +1143,93 @@ export class BinkW32 implements IModule {
             `BinkOpen(${label}) → 0x${guestPtr.toString(16)} SKIPPED as a finished stream ` +
             `(${width}×${height} ${frames}f)`);
         return guestPtr;
+    }
+
+    /**
+     * A 44-byte Bink main header for when the custom-IO chain can't produce a genuine one
+     * (see openSkippedBinkViaCustomIo's `fallback`) — zero frames, so buildSkippedSession's
+     * usual "already at the end" completion applies; width/height default to the current
+     * display mode (a full-screen video's panel is normally sized to it), 640×480 before one
+     * is set up. videoFlags and every other header field are 0 (no special flags/planes).
+     */
+    private buildSyntheticSkippedSession(label: string): number {
+        const display = System.getInstance().ddrawContext?.display;
+        const header = new Uint8Array(BINK_HEADER_BYTES);
+        const view = new DataView(header.buffer);
+        header[0] = 0x42; header[1] = 0x49; header[2] = 0x4B; header[3] = 0x62; // 'BIKb'
+        view.setUint32(8, 0, true);                              // frames
+        view.setUint32(20, display?.width ?? 640, true);          // width
+        view.setUint32(24, display?.height ?? 480, true);         // height
+        view.setUint32(28, 30, true);                              // fps dividend
+        view.setUint32(32, 1, true);                               // fps divisor
+        return this.buildSkippedSession(header, label);
+    }
+
+    /**
+     * BINKIOPROCESSOR path: real Bink calls the game's registered open callback as
+     * `__stdcall(BINKIO* Bnkio, const char* name, u32 flags)` and expects it to fill in
+     * six more callbacks on Bnkio — ReadHeader/ReadFrame/GetBufferSize/SetInfo/Idle/Close,
+     * in that field order (the public Bink 1.0 SDK's BINKIO layout). The callback decides
+     * what `name` means; it is NOT necessarily a path we could read ourselves, so getting
+     * the header means actually calling back into the guest's own (already-correct) code —
+     * via runGuestRoutine, since both Open and ReadHeader may themselves make further
+     * WinAPI calls (file I/O) that a narrower sync-only guest call couldn't survive.
+     *
+     * Bnkio is a scratch buffer we own for exactly this call; real Bink embeds it in the
+     * HBINK it allocates, but nothing here depends on matching that placement, only on
+     * being large enough for whatever the callback writes (generous margin over the public
+     * struct's ~0xCC bytes — confirmed by RE against this title's own callback, which
+     * memsets 0x144 bytes of its own larger wrapper).
+     */
+    private openSkippedBinkViaCustomIo(ctx: X86Context, namePtr: number, flags: number): ThunkResult {
+        const BINKIO_SCRATCH_BYTES = 0x400;
+        const openFn = this.pendingIoOpen;
+        const label = `customIO(open=0x${openFn.toString(16)}, name=0x${namePtr.toString(16)})`;
+        return {
+            value: 0,
+            stackCleanup: 8,
+            startCallbackChain: ({ esp, returnAddr, mem }) => {
+                const callbackCtx = { ...ctx, esp, returnAddr };
+                const bnkioPtr = this.process.memory.alloc(BINKIO_SCRATCH_BYTES) >>> 0;
+                const headerPtr = this.process.memory.alloc(BINK_HEADER_BYTES) >>> 0;
+                if (!bnkioPtr || !headerPtr) return false;
+                mem.fill(0, bnkioPtr, bnkioPtr + BINKIO_SCRATCH_BYTES);
+
+                const buildSession = (header: Uint8Array, lbl: string): number => this.buildSkippedSession(header, lbl);
+                const fallback = (reason: string): number => {
+                    // BINKIOPROCESSOR hands the open off to the game's own callback chain, over
+                    // struct state (the reader object behind bnkio+0x54) that WE do not own and
+                    // cannot validate the way the direct VFS path validates a file read — a title
+                    // whose custom reader we cannot drive byte-for-faithfully must still get a
+                    // live HBINK: skipVideo already means the real frames are never decoded, so
+                    // an immediately-complete synthetic stream is a safe, bounded substitute. The
+                    // direct (non-custom-IO) path keeps failing honestly — there a missing/corrupt
+                    // file is unambiguous and worth surfacing.
+                    Logger.warn(LogCategory.SYSTEM,
+                        `BinkOpen(${label}): skipVideo, custom IO ${reason} — synthesizing a completed stream`);
+                    return this.buildSyntheticSkippedSession(label);
+                };
+                const result = runGuestRoutine(callbackCtx, mem, (function* (): GuestRoutine {
+                    const opened = yield { fn: openFn, args: [bnkioPtr, namePtr, flags], tag: 'BinkIO.Open' };
+                    if (!opened) return fallback("open callback declined");
+                    // BINKIOREADHEADER is the struct's first field (offset 0).
+                    const readHeaderFn = Mem.readUint32(bnkioPtr) ?? 0;
+                    if (!readHeaderFn) return fallback("open left ReadHeader unset");
+                    const bytesRead: number = yield {
+                        fn: readHeaderFn, args: [bnkioPtr, 0, headerPtr, BINK_HEADER_BYTES], tag: 'BinkIO.ReadHeader',
+                    };
+                    if (bytesRead < BINK_HEADER_BYTES) {
+                        return fallback(`ReadHeader returned ${bytesRead} of ${BINK_HEADER_BYTES} bytes`);
+                    }
+                    const header = Mem.readBytes(headerPtr, BINK_HEADER_BYTES);
+                    if (!header || header[0] !== 0x42 || header[1] !== 0x49 || header[2] !== 0x4B) {
+                        return fallback("header is not Bink");
+                    }
+                    return buildSession(header, label);
+                })(), 8, 'BinkOpen:CustomIO', returnAddr);
+                return typeof result === 'object' && result !== null && !!result.suspendedForCallback;
+            },
+        };
     }
 
     /**
@@ -1219,7 +1338,10 @@ export class BinkW32 implements IModule {
     captureSavestate(): BinkW32State {
         if (this.sessions.size > 0) throw new Error(`binkw32: ${this.sessions.size} open Bink file(s) are not part of a v1 savestate`);
         if (this.binkBuffers.size > 0) throw new Error(`binkw32: ${this.binkBuffers.size} open BinkBuffer(s) are not part of a v1 savestate`);
-        return { lastSurfaceBpp: this.lastSurfaceBpp, ddPrimary: this.ddPrimary, pendingIoSize: this.pendingIoSize };
+        return {
+            lastSurfaceBpp: this.lastSurfaceBpp, ddPrimary: this.ddPrimary,
+            pendingIoSize: this.pendingIoSize, pendingIoOpen: this.pendingIoOpen,
+        };
     }
 
     restoreSavestate(s: BinkW32State): void {
@@ -1231,6 +1353,7 @@ export class BinkW32 implements IModule {
         this.lastSurfaceBpp = s.lastSurfaceBpp;
         this.ddPrimary = s.ddPrimary;
         this.pendingIoSize = s.pendingIoSize;
+        this.pendingIoOpen = s.pendingIoOpen;
     }
 
     registerSavestate(): () => void {
@@ -1391,6 +1514,15 @@ export class BinkW32 implements IModule {
             return 0;
         };
 
+        // BinkSetIO(BINKIOOPEN io) — registers the game's own open callback, consumed by
+        // the NEXT BinkOpen whose flags carry BINKIOPROCESSOR (0x02000000). See
+        // openSkippedBinkViaCustomIo for what happens with it.
+        this.exports["_BinkSetIO@4"] = (_ctx, _mem, args) => {
+            this.pendingIoOpen = args[0] >>> 0;
+            Logger.log(LogCategory.SYSTEM, `[BinkW32] BinkSetIO(open=0x${this.pendingIoOpen.toString(16)})`);
+            return 0;
+        };
+
         // BinkSetMemory — no-op (we use our own allocator)
         this.exports["_BinkSetMemory@8"] = (_ctx, _mem, args) => {
             console.log(`[BINK] BinkSetMemory(alloc=0x${args[0].toString(16)}, free=0x${args[1].toString(16)})`);
@@ -1398,7 +1530,7 @@ export class BinkW32 implements IModule {
         };
 
         // в”Ђв”Ђ BinkOpen(const char* name, DWORD flags) → HBINK в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
-        this.exports["_BinkOpen@8"] = async (_ctx, mem, args) => {
+        this.exports["_BinkOpen@8"] = (async (ctx, mem, args) => {
             const namePtr = args[0];
             const flags   = args[1];
 
@@ -1406,7 +1538,7 @@ export class BinkW32 implements IModule {
             // the guest through an error path, while an already-complete stream lets normal
             // completion handling run without exposing a decodable video frame.
             if (EmulatorConfig.getInstance().skipVideo) {
-                return await this.openSkippedBink(mem, namePtr, flags);
+                return await this.openSkippedBink(ctx, mem, namePtr, flags);
             }
 
             await this.ensureLayout();
@@ -1585,7 +1717,7 @@ export class BinkW32 implements IModule {
                 Logger.error(LogCategory.SYSTEM, `BinkOpen(${label}) error: ${e}`);
                 return 0;
             }
-        };
+        }) as ThunkImplementation;
 
         // в”Ђв”Ђ BinkDoFrame(HBINK) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
         // Always SYNC — pacing is handled by BinkWait (above).  DoFrame only
@@ -2206,6 +2338,38 @@ export class BinkW32 implements IModule {
             this.lastSurfaceBpp = 4;
             return 0;
         };
+
+        // в”Ђв”Ђ BinkDX9SurfaceType(IDirect3DSurface9*) в”Ђв”Ђ same contract as BinkDDSurfaceType
+        // above (opaque return value, version-dependent constants we don't know) — the
+        // real work is the same: record the surface's bpp so BinkCopyToBuffer picks the
+        // right conversion, independent of what this returns.
+        this.exports["_BinkDX9SurfaceType@4"] = (_ctx, _mem, args) => {
+            const surfAddr = args[0];
+            const sys = System.getInstance();
+
+            const comObj = sys.resourceProvider.getComObjectByAddressFast(surfAddr);
+            if (comObj && 'getState' in comObj) {
+                const state = (comObj as any).getState();
+                if (state?.format) {
+                    this.lastSurfaceBpp = Math.ceil(state.format.bpp / 8);
+                    console.log(`[BINK] BinkDX9SurfaceType(0x${surfAddr.toString(16)}): ` +
+                        `bpp=${state.format.bpp} → stored destBpp=${this.lastSurfaceBpp}`);
+                    return 0;
+                }
+            }
+
+            const ctx = sys.ddrawContext;
+            if (ctx) {
+                this.lastSurfaceBpp = Math.ceil(ctx.display.bpp / 8);
+                console.log(`[BINK] BinkDX9SurfaceType(0x${surfAddr.toString(16)}): ` +
+                    `fallback display.bpp=${ctx.display.bpp} → stored destBpp=${this.lastSurfaceBpp}`);
+                return 0;
+            }
+
+            console.log(`[BINK] BinkDX9SurfaceType(0x${surfAddr.toString(16)}): no D3D9/DDraw context, assuming 32bpp`);
+            this.lastSurfaceBpp = 4;
+            return 0;
+        };
         this.exports["_BinkGetError@0"]      = (_ctx, _mem, _args) => { console.log(`[BINK] BinkGetError() → null`); return 0; };
         this.exports["_BinkLogoAddress@0"]   = (_ctx, _mem, _args) => 0;
     }
@@ -2220,5 +2384,6 @@ export class BinkW32 implements IModule {
         this.layout = BINK_LAYOUT_DEFAULT;
         this.buildResolution = null;
         this.pendingIoSize = 0;
+        this.pendingIoOpen = 0;
     }
 }
