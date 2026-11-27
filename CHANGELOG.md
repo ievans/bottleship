@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.2](https://github.com/ievans/bottleship/compare/v0.9.1...v0.9.2) (2026-11-27)
+
+
+### Bug Fixes
+
+* **binkw32:** drive the BINKIOPROCESSOR custom-IO open through the game's callback chain ([97b99e7](https://github.com/ievans/bottleship/commit/97b99e750fbb1fd3165c45c48046e6243f1e1487))
+* **binkw32:** drive the BINKIOPROCESSOR custom-IO open through the game's callback chain ([ad4fd07](https://github.com/ievans/bottleship/commit/ad4fd0738b36eb29b1a168c6cccc1e1bb2f5c862))
+* keep guest simulation running when display refresh stops ([01187c2](https://github.com/ievans/bottleship/commit/01187c2b39885d965e216f4178e2c2c4ea041cf1))
+* sustain guest pacing when display refresh stops ([df9c3ae](https://github.com/ievans/bottleship/commit/df9c3ae9048efd7dd4e492a450b962d921f9ddcb))
+
 ## [0.9.1](https://github.com/ievans/bottleship/compare/v0.9.0...v0.9.1) (2026-11-26)
 
 
