@@ -4,6 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import { parseVsdDeclaration } from "../../src/worker/backends/webgpu/d3d8/vsd-parser";
 import { declToSyntheticFvf } from "../../src/worker/backends/webgpu/d3d8/decl-to-ffp";
+import { D3D8ShaderRegistry } from "../../src/worker/backends/webgpu/d3d8/d3d8-shader-registry";
 import { compileVertexShader, compilePixelShader, linkProgram } from "../../src/worker/backends/webgpu/d3d9/shader/index";
 import { Op, RegType } from "../../src/worker/backends/webgpu/d3d9/shader/sm-enums";
 import {
@@ -136,6 +137,21 @@ describe("d3d8-shader-compile", () => {
     const ins = (op: number) => op >>> 0;
     const dst = (t: number, n: number, mask = 0xf) => (reg(t, n) | (mask << 16)) >>> 0;
     const src = (t: number, n: number) => reg(t, n);
+
+    test("reads a vertex shader with a comment extending past 256 DWORDs", () => {
+        const comment = new Uint32Array(260);
+        comment[30] = 0x0000ffff;
+        const tokens = new Uint32Array([
+            ver(false, 1, 1),
+            (comment.length << 16) | Op.COMMENT, ...comment,
+            ins(Op.MOV), dst(RegType.RASTOUT, 0), src(RegType.INPUT, 0),
+            0x0000ffff,
+        ]);
+        const mem = new Uint8Array(4 + tokens.byteLength);
+        new Uint32Array(mem.buffer, 4).set(tokens);
+        const shaderRegistry = new D3D8ShaderRegistry();
+        expect(shaderRegistry.readShaderTokens(4, mem)).toEqual(tokens);
+    });
 
     test("linkProgram accepts VSD-derived decl with SM1 bytecode", () => {
         const vsTokens = new Uint32Array([
