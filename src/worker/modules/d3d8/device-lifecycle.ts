@@ -40,7 +40,8 @@ export function ensureBackBufferSurface(devicePtr: number, device: D3D8DeviceAda
     if (!vtableAddr) return 0;
 
     const rt = device.renderTarget;
-    const surfPtr = createComObject(vtableAddr);
+    // The device owns the back buffer. Only GetBackBuffer/GetRenderTarget add guest refs.
+    const surfPtr = createComObject(vtableAddr, 0);
     deviceBackBufferSurfaces.set(devicePtr >>> 0, surfPtr);
     resourceToDevice.set(surfPtr, device);
     surfaceInfo.set(surfPtr, {
@@ -152,7 +153,7 @@ export function bindAutoDepthStencil(devicePtr: number, mem: Uint8Array, pPresen
     const surface = createTextureSurface(w, h, format);
     surface.surfacePtr = process.memory.alloc(getD3DTextureLayout(format, w, h).bytes);
 
-    const surfPtr = createComObject(vtableAddr);
+    const surfPtr = createComObject(vtableAddr, 0);
     resourceToDevice.set(surfPtr, device);
     const info: D3D8SurfaceInfo = {
         texturePtr: 0,

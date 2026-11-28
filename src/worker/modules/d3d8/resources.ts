@@ -23,6 +23,7 @@ import {
     textureLevelSurfaces,
     textureMeta,
     deviceBoundDepthStencil,
+    implicitDepthStencils,
 } from './shared-state';
 import { D3D8DeviceAdapter } from '../../backends/webgpu/d3d8/d3d8-device-adapter';
 import { createRenderTarget, createTextureSurface } from '../../backends/webgpu/shared/surface-factory';
@@ -1065,9 +1066,10 @@ export function createResourcesExports(): Record<string, ThunkImplementation> {
             return refCount;
         }
 
-        const refCount = releaseComRef(pSurf);
+        const deviceOwned = info?.role === 'backbuffer' || implicitDepthStencils.has(pSurf);
+        const refCount = releaseComRef(pSurf, deviceOwned);
         if (refCount === undefined) return 0;
-        if (refCount > 0) return refCount;
+        if (refCount > 0 || deviceOwned) return refCount;
 
         const adapter = resourceToDevice.get(pSurf);
         if (adapter && (adapter.depthStencilSurfacePtr >>> 0) === (pSurf >>> 0)) {

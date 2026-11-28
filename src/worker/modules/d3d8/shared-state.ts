@@ -132,14 +132,14 @@ export const deviceBoundDepthStencil: Map<number, number> = new Map();
 /** Surface ptrs of device-owned implicit depth-stencils we created (for teardown). */
 export const implicitDepthStencils: Set<number> = new Set();
 
-export function createComObject(vtableAddress: number): number {
+export function createComObject(vtableAddress: number, initialRefCount = 1): number {
     const system = System.getInstance();
     const process = system.process;
     if (!process) throw new Error('Process not initialized');
 
     const mem = process.getCurrentMemory();
     const objPtr = allocateGuardedComObject(process.memory, mem, vtableAddress);
-    comRefCounts.set(objPtr, 1);
+    comRefCounts.set(objPtr, initialRefCount);
     return objPtr;
 }
 
