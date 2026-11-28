@@ -10,6 +10,7 @@ import {
     CompiledPs,
     RawVertexElement,
 } from "../d3d9/shader";
+import { d3dShaderTokenCount } from "../d3d9/shader/bytecode-extent";
 import { parseVsdDeclaration } from "./vsd-parser";
 import {
     D3D8_MAX_PS_CONST,
@@ -66,16 +67,13 @@ export class D3D8ShaderRegistry {
     readShaderTokens(bytecodePtr: number, mem: Uint8Array): Uint32Array {
         if (!bytecodePtr) return new Uint32Array(0);
         const view = new DataView(mem.buffer, mem.byteOffset, mem.byteLength);
-        const tokens = new Uint32Array(256);
-        let count = 0;
-        for (let i = 0; i < 256; i++) {
-            const addr = bytecodePtr + i * 4;
-            if (addr + 4 > mem.byteLength) break;
-            const token = view.getUint32(addr, true);
-            tokens[count++] = token;
-            if ((token & 0xffff) === 0xffff) break;
-        }
-        return tokens.subarray(0, count);
+        const limit = Math.max(0, Math.floor((mem.byteLength - bytecodePtr) / 4));
+        const at = (index: number) => view.getUint32(bytecodePtr + index * 4, true);
+        const count = d3dShaderTokenCount(at, limit);
+        if (count === null) throw new Error("shader bytecode has no END token");
+        const tokens = new Uint32Array(count);
+        for (let i = 0; i < count; i++) tokens[i] = at(i);
+        return tokens;
     }
 
     private validateVsVersion(tokens: Uint32Array): boolean {
